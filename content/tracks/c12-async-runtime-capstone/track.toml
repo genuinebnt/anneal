@@ -1,0 +1,16 @@
+code = "C12"
+name = "Async runtime capstone"
+section = "C"
+tier = "sde3"
+order = 12
+summary = "Build a small async runtime in seven steps: tasks, join handles, one thread, timers, finding work, worker threads and a reactor. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "one-thread"
+name = "On one thread"
+band = "hard"
+
+[[stages]]
+slug = "many-threads"
+name = "On many threads"
+band = "hard"

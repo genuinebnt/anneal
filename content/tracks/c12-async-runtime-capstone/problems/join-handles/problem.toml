@@ -1,0 +1,32 @@
+slug = "join-handles"
+title = "Capstone 2: join handles and abort"
+mode = "write"
+level = "hard"
+stage = "one-thread"
+order = 2
+status = "ready"
+tags = ["JoinHandle", "abort", "Weak", "cancellation"]
+teaches = [
+  "A completion cell shared by the task and its handle: result, finished flag and the joiner's waker.",
+  "Abort is a request: the task drops its own future at its next run, so nobody touches a future another thread may be polling.",
+  "A strong reference from the handle would keep an unwakeable task alive for ever; a `Weak` lets it die and report.",
+]
+follow_up = "1) Why can't `abort` simply lock the future and drop it? Find the interleaving. 2) tokio's `JoinHandle` has `abort_handle()`. Why would you want one separate from the result? 3) What should happen to a panic payload that is not a string, if the joiner wants to re-raise it?"
+related = ["C11", "C4"]
+
+[[hints]]
+kind = "approach"
+text = "Wrap the user's future before it becomes a task, so that every way it can end fills one cell. For abort, think about who is allowed to touch the future."
+
+[[hints]]
+kind = "rust"
+text = "`watched` from the starter gives you the three endings after cleanup. `Arc::downgrade` makes a handle that does not keep the task alive. A flag the task reads at the start of `run` plus an ordinary wake is enough for abort."
+
+[[hints]]
+kind = "edge"
+text = "A handle that holds an `Arc<Task>` passes most tests. What happens to a task that no one can wake any more?"
+
+[solution]
+explanation = "The user's future is wrapped so that finishing, panicking and being destroyed all write the join cell, after cleanup, and wake the joiner. `abort` sets a flag and wakes the task; the next `run` sees the flag and destroys the future without polling. The handle holds only a weak reference, so a task that nothing can wake is freed and reports itself as cancelled."
+time = "O(1) per operation"
+space = "O(1) per task"

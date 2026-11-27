@@ -1,0 +1,33 @@
+slug = "permits-and-signals"
+title = "Permits and signals for async tasks"
+mode = "write"
+level = "hard"
+stage = "many-waits"
+order = 3
+status = "ready"
+tags = ["wakers", "semaphore", "notification", "cancel safety"]
+teaches = [
+  "Waiting lists of wakers, and what every change must wake.",
+  "A permit as a value whose `Drop` gives the resource back.",
+  "A stored signal closes the gap between checking a condition and starting to wait for it.",
+  "Cancellation is where async primitives break: a woken future may never run.",
+]
+follow_up = "1) `tokio::sync::Semaphore` is fair: waiters are served in order. What data structure and what drop logic would that need? 2) Waking everyone is a thundering herd. When is it still the right choice? 3) How does `tokio::sync::Notify` treat two `notify_one` calls with two waiters, and why is that different from this one?"
+related = ["C4", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "Both are a little state plus a list of waiting wakers. Ask of each operation: could this let someone who waits continue? If so, wake."
+
+[[hints]]
+kind = "rust"
+text = "`poll_fn` inside an `async fn` is enough. Check the state and store the waker under one lock, take the wakers out, and call `wake` after the guard is gone."
+
+[[hints]]
+kind = "edge"
+text = "Wake exactly one waiter, then drop that future without polling it. What state is everyone else in?"
+
+[solution]
+explanation = "Each primitive keeps its value (free permits, or one signal flag) and the waiting wakers under one mutex. A release or signal wakes every waiter; the first to be polled takes the value and the others register again. That costs extra wake-ups but makes cancellation harmless."
+time = "O(waiters) per release or signal"
+space = "O(waiters)"

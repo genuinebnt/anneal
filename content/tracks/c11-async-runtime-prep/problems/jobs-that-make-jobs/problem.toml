@@ -1,0 +1,34 @@
+slug = "jobs-that-make-jobs"
+title = "Run jobs that create more jobs"
+mode = "write"
+level = "hard"
+stage = "events-and-threads"
+order = 9
+status = "ready"
+crates = ["crossbeam"]
+tags = ["crossbeam::deque", "work stealing", "termination detection", "thread::scope"]
+teaches = [
+  "Knowing when parallel work is finished: count jobs that are unfinished, not jobs that are queued.",
+  "`crossbeam::deque`: each worker's own queue, a shared injector for outside work, and stealers.",
+  "`Steal::Retry` means \"ask again\", not \"empty\".",
+  "A guard keeps the count right when a handler panics.",
+]
+follow_up = "1) Why does a per-worker queue beat one `Mutex<VecDeque>` here, and when would the difference not matter? 2) Your own queue is first-in, first-out. Fork-join schedulers prefer last-in, first-out for their own work. Why? 3) What would you need so that idle workers sleep without ever missing a job?"
+related = ["C1", "C5"]
+
+[[hints]]
+kind = "approach"
+text = "An empty queue does not mean the work is done: a job that is running may still spawn. What single number is zero exactly when no new job can ever appear?"
+
+[[hints]]
+kind = "rust"
+text = "`Worker::new_fifo()`, its `stealer()`, and `Injector` come from `crossbeam::deque`. `Injector::steal` takes one; `steal_batch_and_pop` moves several into your own queue. `std::thread::scope` lets threads borrow the handler."
+
+[[hints]]
+kind = "edge"
+text = "Count a spawned job **before** other threads can see it. If a handler panics, who lowers the count, and how do the others learn to stop?"
+
+[solution]
+explanation = "Each worker has its own queue; given jobs wait in a shared injector and are taken one at a time, so a worker's spawns come first. A worker takes from its own queue, then the injector, then steals from the others. A counter of unfinished jobs tells idle workers when to leave. It is raised before a spawn is visible and lowered by a drop guard. A panic sets a flag that stops everyone."
+time = "O(jobs + failed steal attempts)"
+space = "O(queued jobs)"

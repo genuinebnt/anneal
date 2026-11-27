@@ -1,0 +1,34 @@
+slug = "worker-threads"
+title = "Capstone 6: worker threads, and a clean shutdown"
+mode = "write"
+level = "hard"
+stage = "many-threads"
+order = 6
+status = "ready"
+crates = ["crossbeam"]
+tags = ["multi-threaded runtime", "parking", "shutdown", "timer thread"]
+teaches = [
+  "A worker loop: run what you find, otherwise announce that you will sleep, look once more, and sleep.",
+  "One wake-up can stand for several tasks, and tasks being moved can look absent, so whoever takes one and still sees work wakes another.",
+  "Shutdown needs a list of every live task: queues and wakers don't know them all.",
+  "A reference cycle between queued tasks and the runtime that holds the queues must be broken on purpose.",
+]
+follow_up = "1) Your registry keeps weak references and prunes now and then. What would an intrusive list give, and what does tokio do? 2) Which of your wake-ups are unnecessary, and how does tokio limit how many workers search at once? 3) What happens if a task blocks a worker for a second? What is `spawn_blocking` for?"
+related = ["C11", "C12"]
+
+[[hints]]
+kind = "approach"
+text = "Decide the order of shutdown before you write it. What must be refused first? Who must stop before you touch a future? What still holds a reference at the end?"
+
+[[hints]]
+kind = "rust"
+text = "A task can be cancelled by setting its abort flag, making it queued, and running it on the thread that shuts down, once no worker is left. Keep `Weak<Task>` in a registry. `std::thread::park` with an `AtomicBool` does `block_on`."
+
+[[hints]]
+kind = "edge"
+text = "A worker takes several tasks from a queue and then blocks in the first. Who looks at the others, and could they have looked while the tasks were moving? What can another thread spawn or wake in the middle of your drop?"
+
+[solution]
+explanation = "Each worker enters its queue and loops: run the next task, or take a sleep ticket, check the queues again and sleep. Scheduling pushes and notifies; a worker that takes a task while others still wait notifies once more. Drop first closes the runtime for new work, then stops and joins the workers and the timer thread. Then it cancels every task in the registry on the dropping thread. Last, it empties the queues to break the cycle."
+time = "O(workers) per idle search"
+space = "O(tasks)"

@@ -1,0 +1,32 @@
+slug = "queue-a-job-once"
+title = "Queue a job once, and lose no request"
+mode = "write"
+level = "medium"
+stage = "tasks-that-survive"
+order = 4
+status = "ready"
+tags = ["atomics", "state machine", "memory ordering", "compare-and-swap"]
+teaches = [
+  "A few named states in one atomic can decide who is responsible for the next step.",
+  "A request that arrives during a run must be recorded in the state, because the run may not have seen it.",
+  "`fetch_update` is a compare-and-swap loop, and a successful one is a read-modify-write even if the value stays the same.",
+]
+follow_up = "1) If `request` only loaded the state and returned `false` when it saw `QUEUED`, which guarantee would break, and why can't a test on your laptop reliably show it? 2) Run this under Miri with a plain, non-atomic payload. What does Miri check that your tests don't? 3) Where do build systems, UI redraw loops and async executors use this same shape?"
+related = ["C3", "C5"]
+
+[[hints]]
+kind = "approach"
+text = "List the situations the job can be in. Is \"running\" one situation, or two?"
+
+[[hints]]
+kind = "rust"
+text = "`AtomicU8::fetch_update(success, failure, |old| Some(new))` retries until it wins and returns the old value; return `None` to leave the value alone."
+
+[[hints]]
+kind = "edge"
+text = "A request lands between your check of the state and your write of the next one. With separate load and store, who queues the job?"
+
+[solution]
+explanation = "Five states in one atomic byte: idle, queued, running, running-and-asked-again, and done. Every method is one compare-and-swap transition, so exactly one caller is told to queue the job. `request` always does an acquire-release read-modify-write, even when nothing changes, so that the following `begin` synchronizes with it and sees the requester's writes."
+time = "O(1) per call, with retries under contention"
+space = "O(1)"

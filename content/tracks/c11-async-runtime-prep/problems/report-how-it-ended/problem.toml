@@ -1,0 +1,32 @@
+slug = "report-how-it-ended"
+title = "Say how a future ended, after it has cleaned up"
+mode = "write"
+level = "medium"
+stage = "tasks-that-survive"
+order = 5
+status = "ready"
+tags = ["catch_unwind", "Drop", "cancellation", "Future"]
+teaches = [
+  "A future that wraps another sees all three ways out: ready, panic and drop.",
+  "The order between destroying a future and announcing its end is observable, so it is part of the contract.",
+  "`catch_unwind` around `poll` and around a destructor, and why `AssertUnwindSafe` is honest here.",
+]
+follow_up = "1) Why is it safe to write `AssertUnwindSafe` here, and when would it not be? 2) `catch_unwind` does nothing with `panic = \"abort\"`. What would a service do instead? 3) How does `tokio::task::JoinError` expose these endings?"
+related = ["C5", "L1"]
+
+[[hints]]
+kind = "approach"
+text = "There are two exits from your type: `poll` seeing an end, and `drop`. Make one value that is present until the ending is reported, so that only one exit can use it."
+
+[[hints]]
+kind = "rust"
+text = "Keep `Option<(Pin<Box<F>>, R)>`. Taking it gives you ownership of the future, which you can drop inside `catch_unwind`, and of the `FnOnce`, which you may then call. A panic payload is `Box<dyn Any + Send>`: pass the box itself to `downcast_ref` through auto-deref, not a reference to the box."
+
+[[hints]]
+kind = "edge"
+text = "Who is waiting for the report, and what may they assume the moment they get it? What if dropping the future panics?"
+
+[solution]
+explanation = "The future and the report function live together in an `Option`. `poll` catches a panic from the inner poll; either end path takes the pair, drops the future inside a second panic boundary, and only then calls the report. `Drop` does the same when the pair is still there, so every path reports exactly once."
+time = "O(1) per poll besides the inner future"
+space = "O(1)"

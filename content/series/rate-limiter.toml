@@ -6,6 +6,7 @@
 
 [series]
 id = "rate-limiter"
+rank = 5
 title = "From a clock to a rate limiter lab"
 summary = "Small parts teach you to work with time, shared counts and unknown limits. Then you build a laboratory that compares rate limiters, one step at a time."
 note = "All times are estimates; nobody has been timed. No part reads a real clock: every test passes the time in."

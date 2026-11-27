@@ -1,0 +1,33 @@
+slug = "async-channel"
+title = "A bounded channel for async tasks"
+mode = "write"
+level = "hard"
+stage = "many-waits"
+order = 2
+status = "ready"
+tags = ["wakers", "backpressure", "cancel safety", "poll_fn"]
+teaches = [
+  "A pending future leaves its waker where the event will happen: here, inside the channel.",
+  "`std::future::poll_fn` turns a poll function into a future, so `async fn` methods can hold your logic.",
+  "Cancel safety: change shared state only in the poll that also returns `Ready`.",
+  "A wake-up given to a future that is then dropped is wasted, so the design must not depend on one particular waiter.",
+]
+follow_up = "1) Waking every waiting sender is simple. What does it cost with 1,000 senders, and what would a fair first-in, first-out design need on drop? 2) `tokio::sync::mpsc` has `reserve()`. What problem with cancelling `send` does it solve? 3) Why is it wrong to call `wake` while holding the lock?"
+related = ["C4", "C2"]
+
+[[hints]]
+kind = "approach"
+text = "Everything can live behind one mutex: the queue, how many senders exist, whether the receiver is gone, and the wakers of whoever waits. Every change that could let a waiter continue must wake it."
+
+[[hints]]
+kind = "rust"
+text = "`poll_fn(|cx| ...).await` inside an `async fn` is enough. Keep the value in an `Option<T>` that the closure takes from only when it returns `Ready`. `Waker::will_wake` tells you whether a stored waker is the same as the current one."
+
+[[hints]]
+kind = "edge"
+text = "Two sends wait, one place frees up, and you wake the first. It is dropped before it runs. Who sends now?"
+
+[solution]
+explanation = "One mutex holds the queue, the sender count, the closed flag and the waiting wakers. Taking a value wakes every waiting send, so a cancelled one can never swallow the free place; `will_wake` keeps the list small. A value moves into the queue only in the poll that returns, which makes both futures safe to cancel."
+time = "O(waiting sends) per receive in the worst case"
+space = "O(capacity + waiting sends)"

@@ -279,7 +279,7 @@ test("a series in the address that is unknown or lacks the problem is passed ove
         await expect(page.locator(".pane.l .sx-meta")).toBeVisible();
     }
     // a problem in one series offers no switch, and one in none ignores the address
-    await page.goto("/p/c2-thread-pool?series=rate-limiter");
+    await page.goto("/p/b7-route-table?series=rate-limiter");
     await expect(crumbOf(page).getByRole("link", { name: "From threads to a web server" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Other series with this problem" })).toHaveCount(0);
     await page.goto("/p/l1-fix-use-after-move?series=web-server");

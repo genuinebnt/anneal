@@ -1,0 +1,32 @@
+slug = "tasks"
+title = "Capstone 1: a task that gets itself polled"
+mode = "write"
+level = "hard"
+stage = "one-thread"
+order = 1
+status = "ready"
+tags = ["Waker", "Wake for Arc", "task", "scheduling"]
+teaches = [
+  "A `Waker` made from `Arc<Task>`: waking a task means handing the task back to its scheduler.",
+  "A task is a pinned, boxed future in a `Mutex<Option<_>>`, plus the state that decides who queues it.",
+  "The order of unlock, state change and schedule decides whether a scheduler may run the task at once.",
+]
+follow_up = "1) A task waiting for an event that never comes is kept alive by its own waker stored inside its future. Why is that a cycle, and how do real runtimes break it? 2) Why does the `Mutex` around the future never block in a correct runtime, and could you remove it without `unsafe`? 3) Read `std::task::Wake`. What would you write by hand with `RawWakerVTable`?"
+related = ["C11", "C5"]
+
+[[hints]]
+kind = "approach"
+text = "Two separate questions: who may put the task in the queue (the given `QueueState` answers that), and who may touch the future (whoever is running it)."
+
+[[hints]]
+kind = "rust"
+text = "`impl Wake for Task` gives `Waker::from(arc_task)`. Keep the future as `Mutex<Option<BoxFuture>>`: `take()` lets you drop it at the exact moment you choose."
+
+[[hints]]
+kind = "edge"
+text = "What is still locked when you call `schedule`? And what is the task's state while the future's destructor runs?"
+
+[solution]
+explanation = "The task owns the future behind a mutex and a state cell. A wake asks the cell, and only the caller it answers `true` calls `schedule`. `run` begins, polls under the lock, and releases the lock before it ends the run, so a scheduler may run the task again at once. On `Ready` the future is taken out and dropped before the task is marked finished."
+time = "O(1) per wake and run besides the future"
+space = "O(1) per task"

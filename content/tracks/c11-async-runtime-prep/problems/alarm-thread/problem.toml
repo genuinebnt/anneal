@@ -1,0 +1,33 @@
+slug = "alarm-thread"
+title = "One thread that rings every alarm"
+mode = "write"
+level = "medium"
+stage = "events-and-threads"
+order = 7
+status = "ready"
+tags = ["BinaryHeap", "Reverse", "Condvar::wait_timeout", "timers", "shutdown"]
+teaches = [
+  "A `BinaryHeap` with `Reverse` as a queue ordered by time, with an id to keep ties in order.",
+  "A condition variable with a timeout: sleep until a deadline, but let news cut the sleep short.",
+  "Cancelling from the middle of a heap: remove the payload now and skip the stale entry later.",
+  "Never run or drop a caller's closure while holding your lock.",
+]
+follow_up = "1) With a million cancelled alarms still in the heap, what happens, and when should you rebuild it? 2) What is a hierarchical timing wheel, and why does tokio use one? 3) Your alarms run one at a time on one thread. What happens when one of them blocks, and how do runtimes avoid it?"
+related = ["C1", "C5"]
+
+[[hints]]
+kind = "approach"
+text = "The thread repeats one question: what is the next alarm, and is it due? If not, it sleeps until that time **or** until someone changes the answer."
+
+[[hints]]
+kind = "rust"
+text = "`BinaryHeap<Reverse<(Instant, u64)>>` pops the smallest first. Keep the closures in a `HashMap` by id; `Condvar::wait_timeout` returns the guard whether it timed out or was notified, so recompute everything after it."
+
+[[hints]]
+kind = "edge"
+text = "Where can a destructor of a captured value run in your code: in cancel, in drop, after a panic? Is your mutex locked at any of those points?"
+
+[solution]
+explanation = "A min-heap of `(time, id)` gives the next alarm, and a map from id to closure says which are still pending. The thread waits on a condition variable with a timeout until the head is due; setting an alarm or stopping notifies it. Cancel removes the closure from the map and drops it outside the lock, and the heap entry is skipped later. Closures run unlocked inside `catch_unwind`."
+time = "O(log n) to set, O(1) to cancel (amortised)"
+space = "O(pending)"

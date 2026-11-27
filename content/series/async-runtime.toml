@@ -1,0 +1,664 @@
+# The series "Build a small async runtime": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "async-runtime"
+rank = 7
+title = "Build a small async runtime"
+summary = "Small parts give you what the capstone needs. Then you build the machinery under async and await yourself."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build an async runtime"
+capstone_summary = "Tasks, join handles, a runtime on one thread, time, worker threads and a thread that watches for input and output."
+capstone_note = "Every step's starter contains reference code for earlier work. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and several preparation parts. Real sockets are not graded: the runner has no mio, so step 7 uses an in-memory stand-in."
+capstone_cookbook = "mini-async-runtime"
+
+[[stage]]
+id = "wake-and-poll"
+name = "Wake and poll"
+
+[[stage]]
+id = "many-waits"
+name = "Many waits in one task"
+
+[[stage]]
+id = "survive"
+name = "Tasks that survive anything"
+
+[[stage]]
+id = "events-and-threads"
+name = "Time, events and threads"
+
+[[part]]
+number = 1
+id = "c5-block-on"
+stage = "wake-and-poll"
+status = "existing"
+minutes = 60
+blurb = "Run one future to the end on one thread"
+new_idea = "A waker tells whoever polls that it is worth polling again"
+reuses = "nothing"
+know_first = "Traits, closures, threads and Arc"
+required = []
+helpful = [
+    { id = "c1-blocking-queue", why = "optional warm-up: sleeping until something changes", reveals_method = false, hidden = true },
+]
+used_again = ["c5-oneshot-channel", "c5-mini-executor", "c12-one-thread-runtime", "c12-worker-threads"]
+real_uses = "Every async runtime, and tests that drive a future by hand."
+cookbook = [
+    { level = "similar", page = "waker-executor", note = "A task executor with a channel as its queue; read.", hidden = true },
+    { level = "related", page = "futures-by-hand", note = "Polling by hand with a no-op waker; read.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "c5-oneshot-channel"
+stage = "wake-and-poll"
+status = "existing"
+minutes = 60
+blurb = "Hand one value to a waiting task"
+new_idea = "The side where the event happens keeps the waker and calls it"
+reuses = "wakers from part 1"
+required = ["c5-block-on"]
+helpful = []
+used_again = ["c11-async-channel", "c11-wait-without-missing-it", "c12-join-handles"]
+real_uses = "Request and reply between tasks; join handles."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "OsSender and OsReceiver, read.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "c5-mini-executor"
+stage = "wake-and-poll"
+status = "existing"
+minutes = 90
+blurb = "Run many futures on one thread"
+new_idea = "Tasks that put themselves back in a queue through their wakers"
+reuses = "wakers from parts 1 and 2"
+required = ["c5-block-on"]
+helpful = [
+    { id = "c5-oneshot-channel", why = "the same waker slot, in a channel", reveals_method = false, hidden = true },
+]
+used_again = ["c11-join-and-select", "c12-tasks", "c12-one-thread-runtime"]
+real_uses = "Embedded executors, test harnesses, the core of tokio's current-thread runtime."
+cookbook = [
+    { level = "similar", page = "waker-executor", note = "The Async Book executor with a thread-backed timer; read.", hidden = true },
+    { level = "similar", page = "mini-async-runtime", note = "LocalQueue and LocalRuntime, read.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "c11-join-and-select"
+stage = "many-waits"
+status = "new"
+minutes = 60
+blurb = "Wait for several things at once, without spawning"
+new_idea = "One future drives several children, and decides when each is dropped"
+reuses = "polling by hand"
+required = ["c5-mini-executor"]
+helpful = []
+used_again = ["c4-fix-cancel-safe-reader", "c12-timers"]
+real_uses = "join!, select!, FuturesUnordered, request hedging, timeouts."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Join2, JoinAll and Select2, read. A second poll after the result panics.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+    { level = "related", page = "select-cancel", note = "Cancellation with tokio::select!; read.", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "c4-fix-cancel-safe-reader"
+stage = "many-waits"
+status = "existing"
+minutes = 60
+blurb = "Find out why bytes go missing when work is interrupted"
+new_idea = "Dropping a future throws away whatever it held"
+reuses = "select from the part before"
+know_first = "Tokio basics: tasks, channels and select!"
+required = ["c11-join-and-select"]
+helpful = []
+used_again = ["c12-timers"]
+real_uses = "Every select loop that reads from a network or a channel."
+cookbook = [
+    { level = "related", page = "async-cancel-safety", note = "Chosen by its title; not read.", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "c11-async-channel"
+stage = "many-waits"
+status = "new"
+minutes = 90
+blurb = "A bounded queue whose two ends are async"
+new_idea = "Waiting lists of wakers, and what cancellation may not lose"
+reuses = "wakers from part 2, dropping from parts 4 and 5"
+required = ["c5-oneshot-channel"]
+helpful = [
+    { id = "c2-bounded-channel", why = "the same queue for threads: the ends going away", reveals_method = false, hidden = true },
+]
+used_again = ["c11-permits-and-signals", "c12-reactor"]
+real_uses = "tokio::sync::mpsc, back-pressure between pipeline stages."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "The mpsc section, read. It wakes every waiting sender.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "c11-permits-and-signals"
+stage = "many-waits"
+status = "new"
+minutes = 90
+blurb = "Limit how many tasks go at once, and tell one to look again"
+new_idea = "Primitives whose woken waiter may be dropped before it runs"
+reuses = "waiting lists from part 6"
+required = ["c11-async-channel"]
+helpful = [
+    { id = "c1-fair-semaphore", why = "a fair semaphore for threads", reveals_method = false, hidden = true },
+]
+used_again = []
+real_uses = "tokio's Semaphore and Notify: connection limits and wake-up signals."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Semaphore and Notify, read. Its Notify merges notifications that arrive together.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "c3-once-cell"
+stage = "survive"
+status = "existing"
+minutes = 75
+blurb = "Run something exactly once however many threads ask"
+new_idea = "One atomic state that decides who goes, and who waits"
+reuses = "nothing from this series"
+know_first = "Atomics, UnsafeCell and memory orderings"
+required = []
+helpful = [
+    { id = "c3-spinlock", why = "acquire and release orderings, smaller", reveals_method = false, hidden = true },
+]
+used_again = ["c11-queue-a-job-once"]
+real_uses = "Lazy statics, one-time initialisation, state machines in atomics."
+cookbook = [
+    { level = "related", page = "std-atomics-ordering-use-cases", note = "Chosen by its title; not read.", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "c11-queue-a-job-once"
+stage = "survive"
+status = "new"
+minutes = 60
+blurb = "Never queue a job twice, and never lose a change"
+new_idea = "Deciding in one atomic who must queue a job, and what a run may miss"
+reuses = "compare-and-swap from part 8"
+required = ["c3-once-cell"]
+helpful = []
+used_again = ["c12-tasks"]
+real_uses = "Task wake-ups in tokio, redraw loops, incremental build queues."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Task::notify and Task::run, read. Every wake writes the state, also for a queued task, so the next run sees what the waker published.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 10
+id = "c2-thread-pool"
+stage = "survive"
+status = "existing"
+minutes = 75
+blurb = "Run jobs on a fixed set of threads that survives a bad job"
+new_idea = "A panic boundary around each job, and a shutdown that drains"
+reuses = "Condvar queues"
+know_first = "Threads, Mutex and Condvar"
+required = []
+helpful = [
+    { id = "c1-blocking-queue", why = "the queue under the pool", reveals_method = false, hidden = true },
+]
+used_again = ["c11-report-how-it-ended", "c11-jobs-that-make-jobs", "c12-worker-threads"]
+real_uses = "Worker pools in servers and job runners."
+cookbook = [
+    { level = "related", page = "thread-pool-work-stealing", note = "A pool with a shared queue as its baseline; read in part.", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "c11-report-how-it-ended"
+stage = "survive"
+status = "new"
+minutes = 60
+blurb = "Tell someone how a future ended, once it has cleaned up"
+new_idea = "A wrapper that sees every way out, and the order of cleanup and news"
+reuses = "catching panics from part 10"
+required = ["c2-thread-pool"]
+helpful = [
+    { id = "b7-shared-steps", why = "reading a panic payload", reveals_method = true, hidden = true },
+    { id = "l1-rollback-guard", why = "a guard that acts on drop during a panic", reveals_method = false, hidden = true },
+]
+used_again = ["c12-join-handles"]
+real_uses = "JoinHandle in tokio, supervisors, job runners."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Harness, read. It destroys the future, then tells the joiner, and catches panics from destructors.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 12
+id = "c11-the-current-one"
+stage = "survive"
+status = "new"
+minutes = 45
+blurb = "Let code ask for the current one without being handed it"
+new_idea = "A per-thread current value that survives any drop order and re-entry"
+reuses = "a guard that undoes itself on drop"
+required = []
+helpful = [
+    { id = "l1-raii-span-guard", why = "a guard that records its own end", reveals_method = false, hidden = true },
+]
+used_again = ["c12-one-thread-runtime", "c12-finding-work"]
+real_uses = "Handle::current in tokio, tracing spans, request context."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "CURRENT, EnterGuard and enter, read. Dropping guards out of order leaves the wrong one current.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "c1-blocking-queue"
+stage = "events-and-threads"
+status = "existing"
+minutes = 60
+blurb = "Let threads hand work to each other, and finish cleanly"
+new_idea = "Waiting for a condition without missing the change"
+reuses = "nothing from this series"
+know_first = "Threads and Mutex"
+required = []
+helpful = []
+used_again = ["c11-alarm-thread", "c11-sleep-without-missing-work", "c12-one-thread-runtime"]
+real_uses = "Job queues, bounded buffers, every blocking wait."
+cookbook = [
+    { level = "related", page = "mutex-condvar-channel", note = "Chosen by its summary; code not read.", hidden = true },
+]
+
+[[part]]
+number = 14
+id = "c11-alarm-thread"
+stage = "events-and-threads"
+status = "new"
+minutes = 90
+blurb = "One thread that does things at the right time"
+new_idea = "Sleeping until the next deadline while staying ready for an earlier one"
+reuses = "condition waiting from part 13"
+required = ["c1-blocking-queue"]
+helpful = [
+    { id = "s5-binary-heap", why = "how the priority queue works inside", reveals_method = false, hidden = true },
+]
+used_again = ["c12-timers", "c12-worker-threads"]
+real_uses = "Timer drivers, session expiry, retry schedulers."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Timer and run_driver, read. Its deadlines are in a BTreeMap, so a dropped sleep leaves at once.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+    { level = "related", page = "tokio-runtime-tasks-channels-timers", note = "Chosen by its title; not read.", hidden = true },
+]
+
+[[part]]
+number = 15
+id = "c11-wait-without-missing-it"
+stage = "events-and-threads"
+status = "new"
+minutes = 75
+blurb = "Wait for news that is announced only once"
+new_idea = "Closing the gap between finding nothing and arranging to be woken"
+reuses = "wakers from part 2"
+required = ["c5-oneshot-channel"]
+helpful = [
+    { id = "c11-queue-a-job-once", why = "another place where news can slip through a gap", reveals_method = true, hidden = true },
+]
+used_again = ["c11-sleep-without-missing-work", "c12-reactor"]
+real_uses = "mio, tokio's I/O driver, hardware queues."
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "poll_io, read.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[part]]
+number = 16
+id = "c11-jobs-that-make-jobs"
+stage = "events-and-threads"
+status = "new"
+minutes = 90
+blurb = "Work through jobs that create more jobs, on several threads"
+new_idea = "Knowing when parallel work is finished, with a queue per worker"
+reuses = "the shutdown care of part 10"
+required = ["c2-thread-pool"]
+helpful = []
+used_again = ["c12-finding-work"]
+real_uses = "Parallel crawlers, build systems, rayon."
+cookbook = [
+    { level = "similar", page = "thread-pool-work-stealing", note = "find_task and the worker loop, read.", hidden = true },
+]
+
+[[part]]
+number = 17
+id = "c11-sleep-without-missing-work"
+stage = "events-and-threads"
+status = "new"
+minutes = 75
+blurb = "Let an idle worker sleep without missing new work"
+new_idea = "A ticket that makes \"was I told meanwhile?\" a comparison"
+reuses = "condition waiting from part 13, the gap from part 15"
+required = ["c1-blocking-queue", "c11-wait-without-missing-it"]
+helpful = []
+used_again = ["c12-worker-threads"]
+real_uses = "Parking in thread pools; eventcounts under lock-free queues."
+cookbook = [
+    { level = "similar", page = "thread-pool-work-stealing", note = "Its sleep protocol, read. It signals after unlocking, which is safe there: any woken worker searches again (a model of up to 4 workers and 3 jobs found no lost wake-up). The model leaves out batch moves. From the code, an idle worker can miss moved jobs and sleep until its 100 ms timeout.", hidden = true },
+    { level = "similar", page = "mini-async-runtime", note = "The sleeper handshake in worker_main, read. It has no timeout: a worker that takes a task and still sees queued work wakes another.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[revisit]]
+part = "c5-oneshot-channel"
+before = "c11-wait-without-missing-it"
+how = "Write the channel again from a blank starter."
+minutes = 20
+
+[[revisit]]
+part = "c11-queue-a-job-once"
+after = "c11-alarm-thread"
+how = "Write the five transitions again from memory, and say what each ordering is for."
+minutes = 15
+
+[[revisit]]
+part = "c11-wait-without-missing-it"
+before = "c12-reactor"
+how = "Solve it again from a blank starter before the last step."
+minutes = 25
+
+[[capstone]]
+step = 1
+id = "c12-tasks"
+title = "Tasks that get themselves polled"
+minutes = 90
+blurb = "Turn a future into something a queue can run"
+prepared_by = ["c11-queue-a-job-once", "c5-mini-executor"]
+required = []
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "The tasks section, read.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "c12-join-handles"
+title = "Join handles and abort"
+minutes = 75
+blurb = "Get results back, and stop work you no longer want"
+prepared_by = ["c11-report-how-it-ended", "c5-oneshot-channel"]
+required = ["c12-tasks"]
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Harness, JoinInner and JoinHandle, read. The joiner is woken after cleanup, and a handle holds only a weak reference to its task.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "c12-one-thread-runtime"
+title = "A runtime on one thread"
+minutes = 105
+blurb = "Run your tasks, fairly, and leave nothing behind"
+prepared_by = ["c5-mini-executor", "c11-the-current-one", "c1-blocking-queue", "c5-block-on"]
+required = ["c12-join-handles"]
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "Handle, LocalQueue and LocalRuntime, read.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "c12-timers"
+title = "Sleep, timeout and interval"
+minutes = 105
+blurb = "Let tasks wait for time, tested with a clock you move"
+prepared_by = ["c11-alarm-thread", "c11-join-and-select", "c4-fix-cancel-safe-reader"]
+required = ["c12-one-thread-runtime"]
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "The time section, read. Advancing the manual clock wakes what is due, and a dropped sleep leaves the timer.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "c12-finding-work"
+title = "Where a worker finds work"
+minutes = 75
+blurb = "Decide which task a worker takes next"
+prepared_by = ["c11-jobs-that-make-jobs", "c11-the-current-one"]
+required = ["c12-join-handles"]
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "MtShared, find_task and schedule, read.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+    { level = "similar", page = "thread-pool-work-stealing", note = "find_task, read.", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "c12-worker-threads"
+title = "Worker threads and shutdown"
+minutes = 120
+blurb = "Run on several threads, and shut everything down"
+prepared_by = ["c11-sleep-without-missing-work", "c11-alarm-thread", "c2-thread-pool", "c5-block-on"]
+required = ["c12-finding-work", "c12-timers"]
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "worker_main, Runtime and its Drop, read. Dropping the runtime destroys every task that has not finished.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "c12-reactor"
+title = "A reactor and async I/O"
+minutes = 105
+blurb = "Wake tasks when input or output is possible"
+prepared_by = ["c11-wait-without-missing-it", "c11-async-channel"]
+required = ["c12-worker-threads"]
+cookbook = [
+    { level = "similar", page = "mini-async-runtime", note = "The reactor and TCP sections, read. Each waiting operation has its own entry, so two may wait in one direction.", source = "examples/capstones/mini_async_runtime.rs", hidden = true },
+    { level = "related", page = "mio-event-loop", note = "A readiness loop with real mio; header read.", hidden = true },
+]
+
+[[readiness]]
+group = "Futures and wakers"
+concept = "Waker from an Arc with std::task::Wake; Context::from_waker; pin! and Box::pin"
+steps = [1, 3, 6]
+parts = ["c5-block-on", "c11-join-and-select"]
+
+[[readiness]]
+group = "Futures and wakers"
+concept = "thread::park and unpark with a flag against spurious wake-ups"
+steps = [3, 6]
+parts = ["c5-block-on"]
+
+[[readiness]]
+group = "Futures and wakers"
+concept = "Hand-written Future::poll; keeping the latest waker; will_wake"
+steps = [2, 4, 7]
+parts = ["c5-oneshot-channel", "c11-async-channel", "c11-permits-and-signals"]
+
+[[readiness]]
+group = "Futures and wakers"
+concept = "std::future::poll_fn"
+steps = [3, 4, 7]
+parts = ["c11-async-channel", "c11-permits-and-signals"]
+
+[[readiness]]
+group = "Futures and wakers"
+concept = "Boxed Send futures as tasks that re-queue themselves"
+steps = [1, 3]
+parts = ["c5-mini-executor"]
+
+[[readiness]]
+group = "Futures and wakers"
+concept = "Combinators: poll several children, drop the loser"
+steps = [4]
+parts = ["c11-join-and-select", "c4-fix-cancel-safe-reader"]
+note = "An async block destroys what it holds when it finishes; a bare poll_fn future does not. Step 4's tests need the former."
+
+[[readiness]]
+group = "Task state"
+concept = "compare_exchange and fetch_update; acquire and release"
+steps = [1, 2]
+parts = ["c3-once-cell", "c11-queue-a-job-once"]
+
+[[readiness]]
+group = "Task state"
+concept = "Schedule at most once; remember a wake that arrives during a poll"
+steps = [1]
+parts = ["c11-queue-a-job-once"]
+note = "Step 1's starter gives the state cell."
+
+[[readiness]]
+group = "Task state"
+concept = "catch_unwind, AssertUnwindSafe, panic payloads; destroying before reporting"
+steps = [2]
+parts = ["c2-thread-pool", "c11-report-how-it-ended"]
+note = "Step 2's starter gives the wrapper."
+
+[[readiness]]
+group = "Task state"
+concept = "A completion cell that keeps the joiner's waker"
+steps = [2]
+parts = ["c5-oneshot-channel", "c5-mini-executor"]
+
+[[readiness]]
+group = "Task state"
+concept = "Weak references, so a task nobody can wake is freed"
+steps = [2]
+parts = []
+note = "New in step 2; Arc::downgrade and upgrade are all it needs."
+
+[[readiness]]
+group = "The runtime"
+concept = "A thread-local current value with a guard"
+steps = [3, 5, 6]
+parts = ["c11-the-current-one"]
+
+[[readiness]]
+group = "The runtime"
+concept = "Condvar::wait_while; lock before notify"
+steps = [3, 6]
+parts = ["c1-blocking-queue"]
+
+[[readiness]]
+group = "The runtime"
+concept = "A queue closed at drop, drained outside the lock"
+steps = [3, 6]
+parts = ["c2-thread-pool"]
+
+[[readiness]]
+group = "Time"
+concept = "A queue ordered by deadline with ties in order; removing from the middle"
+steps = [4, 6]
+parts = ["c11-alarm-thread"]
+note = "The part uses a BinaryHeap with lazy removal; a BTreeMap also fits step 4."
+
+[[readiness]]
+group = "Time"
+concept = "A driver thread that sleeps to the next deadline and is re-armed"
+steps = [6]
+parts = ["c11-alarm-thread"]
+
+[[readiness]]
+group = "Time"
+concept = "A clock the test moves"
+steps = [4]
+parts = []
+note = "New in step 4: the starter gives the type's shape."
+
+[[readiness]]
+group = "Many threads"
+concept = "crossbeam::deque: Worker, Stealer, Injector, Steal::Retry, steal_batch_and_pop"
+steps = [5]
+parts = ["c11-jobs-that-make-jobs"]
+
+[[readiness]]
+group = "Many threads"
+concept = "Sleeping without missing work"
+steps = [6]
+parts = ["c11-sleep-without-missing-work"]
+note = "Step 6's starter gives the gate."
+
+[[readiness]]
+group = "Many threads"
+concept = "A list of live tasks for shutdown"
+steps = [6]
+parts = []
+note = "New in step 6; no earlier part is needed beyond Weak."
+
+[[readiness]]
+group = "Input and output"
+concept = "Edge-triggered readiness: try, register, check again"
+steps = [7]
+parts = ["c11-wait-without-missing-it"]
+
+[[readiness]]
+group = "Input and output"
+concept = "Non-blocking read and write, WouldBlock, short writes, end of stream"
+steps = [7]
+parts = ["c4-fix-cancel-safe-reader", "c11-wait-without-missing-it"]
+note = "Partial reads and writes are explained in step 7. Real mio and TCP are not graded."
+
+[[connection]]
+idea = "Leave your waker where the event happens"
+learn = ["c5-oneshot-channel"]
+again = ["c11-async-channel", "c11-permits-and-signals", "c11-wait-without-missing-it"]
+apply = ["c12-join-handles", "c12-timers", "c12-reactor"]
+
+[[connection]]
+idea = "Never lose a wake-up"
+learn = ["c5-block-on"]
+again = ["c11-queue-a-job-once", "c11-wait-without-missing-it", "c11-sleep-without-missing-work"]
+apply = ["c12-tasks", "c12-worker-threads", "c12-reactor"]
+
+[[connection]]
+idea = "Cancelling is dropping"
+learn = ["c11-join-and-select"]
+again = ["c4-fix-cancel-safe-reader", "c11-async-channel", "c11-permits-and-signals"]
+apply = ["c12-join-handles", "c12-timers"]
+
+[[connection]]
+idea = "Ending cleanly"
+learn = ["c2-thread-pool"]
+again = ["c11-report-how-it-ended", "c11-alarm-thread", "c11-jobs-that-make-jobs"]
+apply = ["c12-join-handles", "c12-one-thread-runtime", "c12-worker-threads"]
+
+[[connection]]
+idea = "Waiting for time"
+learn = ["c1-blocking-queue"]
+again = ["c11-alarm-thread"]
+apply = ["c12-timers", "c12-worker-threads"]
+
+[[connection]]
+idea = "The current one, per thread"
+learn = ["c11-the-current-one"]
+again = []
+apply = ["c12-one-thread-runtime", "c12-finding-work"]
+
+[[connection]]
+idea = "Sharing work between threads"
+learn = ["c11-jobs-that-make-jobs"]
+again = ["c11-sleep-without-missing-work"]
+apply = ["c12-finding-work", "c12-worker-threads"]
+
+[[side_path]]
+id = "c3-spinlock"
+why = "before part 8: acquire and release on the smallest lock"
+before = "c3-once-cell"
+
+[[side_path]]
+id = "s5-binary-heap"
+why = "before part 14: build the priority queue yourself"
+before = "c11-alarm-thread"
+
+[[side_path]]
+id = "c4-bounded-fan-out"
+why = "after part 7: the same limit with tokio's tools"
+after = "c11-permits-and-signals"
+
+[[side_path]]
+id = "c4-drain-with-deadline"
+why = "after capstone step 6: shutting down a worker with tokio"
+after = "c12-worker-threads"
+
+[[side_path]]
+id = "c3-spsc-ring"
+why = "after part 17: lock-free hand-over between two threads"
+after = "c11-sleep-without-missing-work"

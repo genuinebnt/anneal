@@ -8,58 +8,74 @@
 //!   user futures ──spawn──▶ Arc<Task>{state, Mutex<Option<BoxFuture>>} ──▶ JoinHandle<T> (slot + waker)
 //!                                   │ wake() = CAS state machine, schedules at most once
 //!                                   ▼
-//!   ┌──────────── Scheduler trait ───────────────┐      ┌───── Timer (BinaryHeap<deadline,seq>) ─────┐
+//!   ┌──────────── Scheduler trait ───────────────┐      ┌───── Timer (BTreeMap<(deadline,seq)>) ─────┐
 //!   │ LocalQueue (VecDeque, block_on drives it)  │      │ Clock: Real(Instant) | Manual(AtomicU64)   │
 //!   │ MtShared: Injector + N x (Worker, Stealer) │◀wake─│ driver thread sleeps until next deadline   │
 //!   │   idle workers park on Condvar             │      └────────────────────────────────────────────┘
 //!   └────────────────────────────────────────────┘      ┌───── Reactor (mio::Poll thread) ───────────┐
-//!         worker i: local.pop → injector → steal ◀──wake─│ token → IoState{epoch, waker} (read/write) │
+//!         worker i: local.pop → injector → steal ◀──wake─│ token → IoState{epoch, wakers} x2 (r/w)    │
 //!                                                        └────────────────────────────────────────────┘
 //! ```
-//! WHAT: ~1000 lines that reproduce the moving parts of an async runtime using only `Future`/`Waker`/`Wake`, crossbeam
+//! WHAT: one file (runtime first, its checks after it) that reproduces the moving parts of an async runtime using only `Future`/`Waker`/`Wake`, crossbeam
 //! deques, parking_lot and mio. No `unsafe` is needed at all: `Wake` for `Arc<Task>` replaces the raw-vtable waker and
 //! `Pin<Box<..>>` replaces pin projections.
 //! WHY: every `.await` bottoms out in "store my waker somewhere, return Pending, someone calls wake()". Building the
-//! somewhere (timer heap, reactor, channel slot, join slot) shows why wakeups get lost and why cancellation is "drop".
+//! somewhere (timer queue, reactor, channel slot, join slot) shows why wakeups get lost and why cancellation is "drop".
 //! HOW (the hazards the tests target):
 //!  * Task state machine IDLE -> SCHEDULED -> RUNNING -> (NOTIFIED) -> IDLE | COMPLETE. LOST WAKEUP: if `wake` ignored a
 //!    RUNNING task and the poll then returned Pending, the event that woke us would be forgotten forever; instead a wake
 //!    during RUNNING sets NOTIFIED and the poller re-schedules after Pending. DOUBLE SCHEDULE: two threads waking an IDLE
 //!    task must not both enqueue it (two workers would poll the same future concurrently: UB in real runtimes, a data
 //!    race here); only the CAS winner of IDLE->SCHEDULED enqueues. A `polling` flag asserts exclusivity at run time.
+//!  * MEMORY ORDER: every wake writes the state, also when the task is already queued. A wake that only read it would
+//!    publish nothing, and the run could miss data the waker had stored without a lock. Every later write of the state is
+//!    a read-modify-write, so no plain store cuts that chain. The root wakers of `block_on` do the same with a swap.
 //!  * Wakers are stored BEFORE re-checking the condition (timer fired? epoch changed? queue empty?), the standard
 //!    register-then-recheck pattern that closes the race between "check" and "park".
+//!  * SLEEPING WORKERS have no timeout. While a worker moves a batch from one queue to another, the tasks are in neither,
+//!    so another worker can look, see nothing and sleep after their wake-ups are used up. So a worker that takes a task
+//!    and still sees queued work wakes one more.
+//!  * ORDER OF AN ENDING: the future is destroyed first, then the `JoinHandle` hears of it. A panic in its destructor
+//!    (or in dropping an output nobody wants) is caught and does not reach the worker.
+//!  * SHUTDOWN: each executor keeps a list of its live tasks (weak references). Dropping it refuses new work, stops the
+//!    threads after the polls in progress, then destroys every remaining future. A waiting task is in no queue, and
+//!    task -> future -> waker -> task would keep it alive for ever. Spawning later destroys the future unpolled.
+//!    Limits: do not drop a runtime from one of its own tasks, and sockets used outside it afterwards get no more events.
 //!  * Edge-triggered IO: mio reports readiness once per transition, so the reactor bumps an epoch counter and wakes; the
-//!    consumer always TRIES the syscall first and only on WouldBlock registers a waker and re-checks the epoch.
+//!    consumer always TRIES the syscall first and only on WouldBlock registers a waker and re-checks the epoch. Several
+//!    tasks may wait for one direction (two `accept` calls): each has its own entry, removed when its future is dropped.
 //!  * Cancellation = dropping the future (destructors run); `abort()` just marks the task so its next run drops it.
 //!  * Cancellation safety: `select2`/`timeout` drop the loser. That is only safe for futures that lose no data when
 //!    dropped mid-await: `mpsc::recv`, `Notify::notified`, `Sleep` are safe; a half-finished `write_all` is NOT (a prefix
 //!    was already written), and `send` hands the value back inside the error only if it was never enqueued.
-//!  * Known simplification: tasks parked forever at shutdown form an Arc cycle (task -> future -> waker -> task); tokio
-//!    avoids it with an owned-task list. All tests here finish their tasks, and a live-task counter proves nothing leaks.
+//!  * Simpler than tokio: `Notify` keeps one flag, so two `notify_one` calls that arrive before either waiter runs release
+//!    only one waiter (tokio picks a waiter per call). `Semaphore` and `mpsc` wake every waiter and are not fair.
+//! TESTING: `cargo run --release --example mini_async_runtime` runs the checks. The memory-order checks can only fail on a
+//! model of weak memory: `MIRIFLAGS=-Zmiri-seed=0 cargo +nightly miri run --example mini_async_runtime` runs just those.
+//!    No check fails without the swap that re-queues a task after a wake during its poll.
 //! COMMON USES: tokio (multi-thread work-stealing scheduler, mio-backed IO driver, hierarchical timer wheel, `JoinHandle`,
 //! oneshot/mpsc/Notify/Semaphore), async-std and smol (global executor + `async-io` reactor, `smol::block_on`),
 //! embassy (no_std executor with static tasks and an interrupt-driven timer queue instead of threads).
 //! Read: https://tokio.rs/blog/2019-10-scheduler , https://github.com/smol-rs/smol , https://rust-lang.github.io/async-book/
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::{Future, poll_fn};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::{Pin, pin};
-use std::sync::Arc;
 use std::sync::atomic::{
     AtomicBool, AtomicIsize, AtomicU8, AtomicU64, AtomicUsize, Ordering::*, fence,
 };
+use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use mio::{Events, Interest, Token};
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, RwLock};
 
 static POLL_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_POLLS: AtomicU64 = AtomicU64::new(0);
@@ -96,9 +112,46 @@ type BoxFut = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 trait Scheduler: Send + Sync {
     fn schedule(&self, task: Arc<Task>);
+    fn owned(&self) -> &OwnedTasks;
+}
+
+/// Every task of one executor that may still hold a future. Shutdown needs it, because a waiting task is in no queue.
+#[derive(Default)]
+struct OwnedTasks {
+    closed: RwLock<bool>,
+    next_id: AtomicU64,
+    live: Mutex<HashMap<u64, Weak<Task>>>,
+}
+impl OwnedTasks {
+    /// Calls `push` unless the executor is closed, in which case the reference is just dropped. The read lock is held
+    /// across the push, so nothing can be queued after `close` has returned.
+    fn push_if_open(&self, task: Arc<Task>, push: impl FnOnce(Arc<Task>)) {
+        let closed = self.closed.read();
+        if *closed {
+            drop(closed);
+            drop(task); // outside the lock: this may run a destructor
+        } else {
+            push(task);
+        }
+    }
+    fn close(&self) {
+        *self.closed.write() = true;
+    }
+    /// Destroys every remaining future. Only call it after `close`, when no thread can run tasks any more.
+    fn cancel_all(&self) {
+        // collect first: no destructor may run while the list is locked
+        let tasks: Vec<Arc<Task>> = std::mem::take(&mut *self.live.lock())
+            .into_values()
+            .filter_map(|t| t.upgrade())
+            .collect();
+        for task in &tasks {
+            task.destroy();
+        }
+    }
 }
 
 struct Task {
+    id: u64,
     state: AtomicU8,
     aborted: AtomicBool,
     polling: AtomicBool, // debug assertion: set while some thread is inside poll()
@@ -108,6 +161,7 @@ struct Task {
 
 impl Drop for Task {
     fn drop(&mut self) {
+        self.sched.owned().live.lock().remove(&self.id);
         LIVE_TASKS.fetch_sub(1, SeqCst);
     }
 }
@@ -117,6 +171,7 @@ impl Task {
         LIVE_TASKS.fetch_add(1, SeqCst);
         // born SCHEDULED: the spawner enqueues it exactly once
         Arc::new(Task {
+            id: sched.owned().next_id.fetch_add(1, Relaxed),
             state: AtomicU8::new(SCHEDULED),
             aborted: AtomicBool::new(false),
             polling: AtomicBool::new(false),
@@ -126,14 +181,15 @@ impl Task {
     }
 
     /// The only way a task is ever enqueued after birth. IDLE -> SCHEDULED enqueues (CAS winner only); RUNNING ->
-    /// NOTIFIED records the wake so the running poller re-schedules; SCHEDULED/NOTIFIED/COMPLETE need nothing.
+    /// NOTIFIED records the wake so the running poller re-schedules; SCHEDULED/NOTIFIED stay as they are but are still
+    /// WRITTEN: the release makes what the waker did before visible to the run that follows. COMPLETE is final.
     fn notify(self: &Arc<Self>) {
         let mut cur = self.state.load(Acquire);
-        loop {
+        while cur != COMPLETE {
             let next = match cur {
                 IDLE => SCHEDULED,
                 RUNNING => NOTIFIED,
-                _ => return,
+                unchanged => unchanged,
             };
             match self.state.compare_exchange_weak(cur, next, AcqRel, Acquire) {
                 Ok(_) => {
@@ -147,13 +203,20 @@ impl Task {
         }
     }
 
-    /// Called by whichever worker dequeued the task (it owns the SCHEDULED token, so a plain store is race free).
+    /// Drops the future instead of polling it. The caller must be the only one who could poll: the run that dequeued
+    /// the task, or shutdown after the threads have stopped.
+    fn destroy(&self) {
+        let fut = self.future.lock().take();
+        drop(fut); // the harness contains panics and reports to the JoinHandle once the user's future is gone
+        self.state.swap(COMPLETE, AcqRel);
+    }
+
+    /// Called by whichever worker dequeued the task (it owns the SCHEDULED token). The swap reads the latest wake and
+    /// acquires what that waker published. A plain store would acquire nothing.
     fn run(self: Arc<Self>) {
-        self.state.store(RUNNING, Release);
+        self.state.swap(RUNNING, AcqRel);
         if self.aborted.load(Acquire) {
-            let fut = self.future.lock().take();
-            drop(fut); // runs destructors; the harness reports Cancelled to the JoinHandle
-            self.state.store(COMPLETE, Release);
+            self.destroy();
             return;
         }
         let waker = Waker::from(self.clone());
@@ -173,7 +236,7 @@ impl Task {
                 let dead = slot.take();
                 drop(slot);
                 drop(dead);
-                self.state.store(COMPLETE, Release);
+                self.state.swap(COMPLETE, AcqRel);
             }
             Poll::Pending => {
                 drop(slot);
@@ -183,7 +246,8 @@ impl Task {
                     .is_err()
                 {
                     // a wake arrived during the poll (state == NOTIFIED): poll again, exactly once
-                    self.state.store(SCHEDULED, Release);
+                    // a swap, not a store: it keeps the release of a wake that arrived since the failed exchange
+                    self.state.swap(SCHEDULED, AcqRel);
                     self.sched.schedule(self.clone());
                 }
             }
@@ -218,9 +282,6 @@ impl<T> JoinInner<T> {
     fn complete(&self, r: Result<T, JoinError>) {
         let waker = {
             let mut s = self.slot.lock();
-            if s.finished {
-                return;
-            }
             s.finished = true;
             s.result = Some(r);
             s.waker.take()
@@ -231,52 +292,82 @@ impl<T> JoinInner<T> {
     }
 }
 
-/// Wraps the user future: catches panics per poll and delivers the output (or Cancelled on drop) to the JoinHandle.
+/// Drops a value whose destructor may panic, and keeps that panic away from the worker.
+fn drop_quietly<T>(value: T) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
+        std::mem::forget(payload); // its destructor could panic again
+    }
+}
+
+/// Wraps the user future: catches panics from each poll and from its destructor, and tells the JoinHandle how it ended
+/// only after the future is destroyed.
 struct Harness<F: Future> {
-    fut: Pin<Box<F>>,
-    join: Arc<JoinInner<F::Output>>,
+    fut: Option<Pin<Box<F>>>,
+    join: Option<Arc<JoinInner<F::Output>>>,
+}
+impl<F: Future> Harness<F> {
+    fn finish(&mut self, ending: Result<F::Output, JoinError>) {
+        let fut = self.fut.take();
+        let destroyed = catch_unwind(AssertUnwindSafe(move || drop(fut))).map_err(panic_msg);
+        let result = match (ending, destroyed) {
+            (ending, Ok(())) => ending,
+            (Err(JoinError::Panic(first)), Err(_)) => Err(JoinError::Panic(first)),
+            (ending, Err(from_drop)) => {
+                drop_quietly(ending);
+                Err(JoinError::Panic(from_drop))
+            }
+        };
+        if let Some(join) = self.join.take() {
+            join.complete(result);
+            drop_quietly(join); // if the handle is gone, this drops the output nobody took
+        }
+    }
 }
 impl<F: Future> Future for Harness<F> {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
-        match catch_unwind(AssertUnwindSafe(|| this.fut.as_mut().poll(cx))) {
-            Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(v)) => {
-                this.join.complete(Ok(v));
-                Poll::Ready(())
-            }
-            Err(p) => {
-                this.join.complete(Err(JoinError::Panic(panic_msg(p))));
-                Poll::Ready(())
-            }
-        }
+        let fut = this.fut.as_mut().expect("polled after it finished");
+        let ending = match catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => return Poll::Pending,
+            Ok(Poll::Ready(v)) => Ok(v),
+            Err(p) => Err(JoinError::Panic(panic_msg(p))),
+        };
+        this.finish(ending);
+        Poll::Ready(())
     }
 }
 impl<F: Future> Drop for Harness<F> {
     fn drop(&mut self) {
-        self.join.complete(Err(JoinError::Cancelled)); // no-op if already finished
+        if self.join.is_some() {
+            self.finish(Err(JoinError::Cancelled));
+        }
     }
 }
 fn panic_msg(p: Box<dyn Any + Send>) -> String {
-    if let Some(s) = p.downcast_ref::<&str>() {
+    let msg = if let Some(s) = p.downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = p.downcast_ref::<String>() {
         s.clone()
     } else {
         "<non-string panic>".into()
-    }
+    };
+    drop_quietly(p);
+    msg
 }
 
 struct JoinHandle<T> {
     inner: Arc<JoinInner<T>>,
-    task: Arc<Task>,
+    /// Weak, so that a task nobody can wake any more is freed, and its handle learns of it.
+    task: Weak<Task>,
 }
 impl<T> JoinHandle<T> {
     /// Marks the task; its next run drops the future instead of polling. Awaiting afterwards yields Cancelled.
     fn abort(&self) {
-        self.task.aborted.store(true, Release);
-        self.task.notify();
+        if let Some(task) = self.task.upgrade() {
+            task.aborted.store(true, Release);
+            task.notify();
+        }
     }
     fn is_finished(&self) -> bool {
         self.inner.slot.lock().finished
@@ -286,10 +377,14 @@ impl<T> Future for JoinHandle<T> {
     type Output = Result<T, JoinError>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut s = self.inner.slot.lock();
-        if let Some(r) = s.result.take() {
-            return Poll::Ready(r);
+        if s.finished {
+            let r = s.result.take();
+            drop(s);
+            return Poll::Ready(r.expect("JoinHandle polled after it returned the result"));
         }
-        s.waker = Some(cx.waker().clone());
+        let old = s.waker.replace(cx.waker().clone());
+        drop(s);
+        drop(old); // dropping a waker can drop a whole task, so never under a lock
         Poll::Pending
     }
 }
@@ -307,12 +402,22 @@ where
         }),
     });
     let h = Harness {
-        fut: Box::pin(fut),
-        join: inner.clone(),
+        fut: Some(Box::pin(fut)),
+        join: Some(inner.clone()),
     };
     let task = Task::new(Box::pin(h), sched.clone());
-    sched.schedule(task.clone());
-    JoinHandle { inner, task }
+    let handle = JoinHandle {
+        inner,
+        task: Arc::downgrade(&task),
+    };
+    // On a closed executor `schedule` drops the only strong reference: never polled, and the handle says Cancelled.
+    sched
+        .owned()
+        .live
+        .lock()
+        .insert(task.id, handle.task.clone());
+    sched.schedule(task);
+    handle
 }
 
 // ---- runtime context (thread local, like tokio's `Handle::current`) ----
@@ -364,7 +469,8 @@ impl Wake for ParkWake {
         self.wake_by_ref();
     }
     fn wake_by_ref(self: &Arc<Self>) {
-        self.flag.store(true, Release);
+        // a swap: with two wakers, a second plain store would hide what the first one published
+        self.flag.swap(true, AcqRel);
         self.thread.unpark();
     }
 }
@@ -395,11 +501,16 @@ struct LocalQueue {
     q: Mutex<VecDeque<Arc<Task>>>,
     cv: Condvar,
     root: AtomicBool,
+    owned: OwnedTasks,
 }
 impl Scheduler for LocalQueue {
     fn schedule(&self, task: Arc<Task>) {
-        self.q.lock().push_back(task);
+        self.owned
+            .push_if_open(task, |t| self.q.lock().push_back(t));
         self.cv.notify_one();
+    }
+    fn owned(&self) -> &OwnedTasks {
+        &self.owned
     }
 }
 struct LocalRootWake(Arc<LocalQueue>);
@@ -408,7 +519,7 @@ impl Wake for LocalRootWake {
         self.wake_by_ref();
     }
     fn wake_by_ref(self: &Arc<Self>) {
-        self.0.root.store(true, SeqCst);
+        self.0.root.swap(true, SeqCst); // a swap for the same reason as in ParkWake
         let _g = self.0.q.lock(); // take the lock so the waiter cannot miss the notify between check and wait
         self.0.cv.notify_one();
     }
@@ -425,6 +536,7 @@ impl LocalRuntime {
             q: Mutex::new(VecDeque::new()),
             cv: Condvar::new(),
             root: AtomicBool::new(false),
+            owned: OwnedTasks::default(),
         });
         let timer = Timer::new(clock);
         let handle = Handle {
@@ -446,7 +558,18 @@ impl LocalRuntime {
         self.handle.spawn(f)
     }
     fn advance(&self, d: Duration) {
-        self.timer.clock.advance(d);
+        self.timer.advance(d);
+    }
+    fn pop(&self) -> Option<Arc<Task>> {
+        self.queue.q.lock().pop_front()
+    }
+    /// Runs the tasks that are queued now, once each.
+    fn run_until_stalled_once(&self) {
+        let _g = enter(&self.handle);
+        let queued = self.queue.q.lock().len();
+        for t in (0..queued).map_while(|_| self.pop()) {
+            t.run();
+        }
     }
     /// Runs every ready task and every due timer until nothing more can make progress without time passing.
     fn run_until_stalled(&self) -> usize {
@@ -454,11 +577,10 @@ impl LocalRuntime {
         let mut total = 0;
         loop {
             let fired = self.timer.fire_due();
+            // only what is queued now: a task that keeps yielding must not keep the timers waiting
             let mut ran = 0;
-            while let Some(t) = {
-                let n = self.queue.q.lock().pop_front();
-                n
-            } {
+            let queued = self.queue.q.lock().len();
+            for t in (0..queued).map_while(|_| self.pop()) {
                 t.run();
                 ran += 1;
             }
@@ -482,17 +604,12 @@ impl LocalRuntime {
             }
             self.timer.fire_due();
             let mut ran = false;
-            loop {
-                let t = self.queue.q.lock().pop_front();
-                match t {
-                    Some(t) => {
-                        t.run();
-                        ran = true;
-                        if self.queue.root.load(SeqCst) {
-                            break; // let the root future make progress promptly
-                        }
-                    }
-                    None => break,
+            let queued = self.queue.q.lock().len();
+            for t in (0..queued).map_while(|_| self.pop()) {
+                t.run();
+                ran = true;
+                if self.queue.root.load(SeqCst) {
+                    break; // let the root future make progress promptly
                 }
             }
             if ran || self.queue.root.load(SeqCst) {
@@ -500,19 +617,29 @@ impl LocalRuntime {
             }
             let mut g = self.queue.q.lock();
             if g.is_empty() && !self.queue.root.load(SeqCst) {
+                let now = self.timer.now();
                 match self.timer.next_deadline() {
-                    Some(d) => {
-                        let now = self.timer.now();
-                        if d > now {
-                            self.queue
-                                .cv
-                                .wait_for(&mut g, Duration::from_nanos(d - now));
-                        }
+                    Some(d) if d <= now => {} // already due: go round and fire it
+                    Some(d) if matches!(self.timer.clock, Clock::Real(_)) => {
+                        self.queue
+                            .cv
+                            .wait_for(&mut g, Duration::from_nanos(d - now));
                     }
-                    None => self.queue.cv.wait(&mut g),
+                    // a manual clock only moves through `Timer::advance`, which wakes whoever is due
+                    _ => self.queue.cv.wait(&mut g),
                 }
             }
         }
+    }
+}
+impl Drop for LocalRuntime {
+    fn drop(&mut self) {
+        let _g = enter(&self.handle); // destructors may spawn
+        self.queue.owned.close();
+        self.queue.owned.cancel_all();
+        let queued = std::mem::take(&mut *self.queue.q.lock());
+        drop(queued);
+        self.timer.clear();
     }
 }
 
@@ -528,7 +655,11 @@ struct MtShared {
     shutdown: AtomicBool,
     executed: Vec<AtomicU64>,
     stolen: Vec<AtomicU64>,
+    owned: OwnedTasks,
+    /// Test hook, `None` outside one check: called while tasks taken from the injector are in neither queue.
+    in_transit: Option<Hook>,
 }
+type Hook = Box<dyn Fn(&MtShared) + Send + Sync>;
 struct WorkerCtx {
     shared_id: usize,
     idx: usize,
@@ -550,6 +681,21 @@ impl MtShared {
     fn has_work(&self) -> bool {
         !self.injector.is_empty() || self.stealers.iter().any(|s| !s.is_empty())
     }
+    fn take_injected(&self, local: &Worker<Arc<Task>>) -> Steal<Arc<Task>> {
+        let Some(hook) = &self.in_transit else {
+            return self.injector.steal_batch_and_pop(local);
+        };
+        // a batch steal split in two, so a check can act in the gap that every batch steal has
+        let held = Worker::new_fifo();
+        let first = self.injector.steal_batch_and_pop(&held);
+        if !held.is_empty() {
+            hook(self);
+            while let Some(t) = held.pop() {
+                local.push(t);
+            }
+        }
+        first
+    }
     fn find_task(&self, idx: usize, tick: u64) -> Option<Arc<Task>> {
         WORKER.with(|w| {
             let w = w.borrow();
@@ -566,7 +712,7 @@ impl MtShared {
             }
             loop {
                 let mut retry = false;
-                match self.injector.steal_batch_and_pop(local) {
+                match self.take_injected(local) {
                     Steal::Success(t) => return Some(t),
                     Steal::Retry => retry = true,
                     Steal::Empty => {}
@@ -594,17 +740,22 @@ impl MtShared {
 impl Scheduler for MtShared {
     fn schedule(&self, task: Arc<Task>) {
         let id = self.id();
-        let leftover = WORKER.with(|w| match w.borrow().as_ref() {
-            Some(ctx) if ctx.shared_id == id => {
-                ctx.local.push(task); // fast path: own deque, no shared state touched
-                None
+        self.owned.push_if_open(task, |task| {
+            let leftover = WORKER.with(|w| match w.borrow().as_ref() {
+                Some(ctx) if ctx.shared_id == id => {
+                    ctx.local.push(task); // own deque: no queue lock
+                    None
+                }
+                _ => Some(task),
+            });
+            if let Some(t) = leftover {
+                self.injector.push(t);
             }
-            _ => Some(task),
         });
-        if let Some(t) = leftover {
-            self.injector.push(t);
-        }
         self.wake_one();
+    }
+    fn owned(&self) -> &OwnedTasks {
+        &self.owned
     }
 }
 
@@ -618,15 +769,18 @@ fn worker_main(shared: Arc<MtShared>, idx: usize, local: Worker<Arc<Task>>, hand
         })
     });
     let mut tick = 0u64;
-    loop {
+    // stop after the poll in progress; `Runtime::drop` destroys whatever is left, queued or waiting
+    while !shared.shutdown.load(SeqCst) {
         tick += 1;
         if let Some(task) = shared.find_task(idx, tick) {
+            // This worker is about to be busy, perhaps for long. Others may have looked while tasks were being moved
+            // (in neither queue) and gone to sleep, so if any work is still queued, wake one of them.
+            if shared.has_work() {
+                shared.wake_one();
+            }
             shared.executed[idx].fetch_add(1, Relaxed);
             task.run();
             continue;
-        }
-        if shared.shutdown.load(SeqCst) {
-            break; // graceful: only exit once a full scan found no runnable work
         }
         let mut g = shared.lock.lock();
         shared.sleepers.fetch_add(1, SeqCst);
@@ -635,8 +789,8 @@ fn worker_main(shared: Arc<MtShared>, idx: usize, local: Worker<Arc<Task>>, hand
             shared.sleepers.fetch_sub(1, SeqCst);
             continue;
         }
-        // 50 ms is only a safety net; correctness relies on the recheck above plus wake_one()
-        shared.cv.wait_for(&mut g, Duration::from_millis(50));
+        // no timeout: a lost wake-up must be fixed, not covered up
+        shared.cv.wait(&mut g);
         shared.sleepers.fetch_sub(1, SeqCst);
     }
     WORKER.with(|w| *w.borrow_mut() = None);
@@ -655,6 +809,9 @@ impl Runtime {
         Self::with_clock(workers, Clock::Real(Instant::now()))
     }
     fn with_clock(n: usize, clock: Clock) -> Runtime {
+        Self::build(n, clock, None)
+    }
+    fn build(n: usize, clock: Clock, in_transit: Option<Hook>) -> Runtime {
         let ws: Vec<Worker<Arc<Task>>> = (0..n).map(|_| Worker::new_fifo()).collect(); // FIFO: yield_now goes to the back
         let shared = Arc::new(MtShared {
             injector: Injector::new(),
@@ -665,6 +822,8 @@ impl Runtime {
             shutdown: AtomicBool::new(false),
             executed: (0..n).map(|_| AtomicU64::new(0)).collect(),
             stolen: (0..n).map(|_| AtomicU64::new(0)).collect(),
+            owned: OwnedTasks::default(),
+            in_transit,
         });
         let timer = Timer::new(clock);
         let (reactor, poll) = Reactor::new().expect("reactor");
@@ -723,6 +882,7 @@ impl Runtime {
 }
 impl Drop for Runtime {
     fn drop(&mut self) {
+        self.shared.owned.close(); // from here on nothing is queued, and a spawn is cancelled at once
         self.shared.shutdown.store(true, SeqCst);
         {
             let _g = self.shared.lock.lock();
@@ -738,15 +898,26 @@ impl Drop for Runtime {
         for t in self.threads.drain(..) {
             t.join().expect("runtime thread panicked");
         }
-        while let Steal::Success(t) = self.shared.injector.steal() {
-            drop(t); // never-run tasks: dropping the Arc drops their futures
+        // no thread runs tasks now, so every remaining future can be destroyed here, with the runtime current
+        let _current = enter(&self.handle);
+        self.shared.owned.cancel_all();
+        // queued references would keep each task and the scheduler pointing at each other
+        let queues = std::iter::once(None).chain(self.shared.stealers.iter().map(Some));
+        for queue in queues {
+            loop {
+                match queue.map_or_else(|| self.shared.injector.steal(), |s| s.steal()) {
+                    Steal::Success(t) => drop(t),
+                    Steal::Retry => {}
+                    Steal::Empty => break,
+                }
+            }
         }
-        self.timer.inner.lock().heap.clear();
+        self.timer.clear();
     }
 }
 
 // =====================================================================================================================
-// 3. TIME: injectable clock, BinaryHeap timer, sleep / timeout / interval
+// 3. TIME: injectable clock, timer ordered by deadline, sleep / timeout / interval
 // =====================================================================================================================
 enum Clock {
     Real(Instant),
@@ -774,35 +945,16 @@ impl Clock {
 
 struct TimerState {
     fired: AtomicBool,
-    cancelled: AtomicBool,
     waker: Mutex<Option<Waker>>,
 }
-struct Entry {
-    deadline: u64,
-    seq: u64,
-    st: Arc<TimerState>,
-}
-impl PartialEq for Entry {
-    fn eq(&self, o: &Self) -> bool {
-        (self.deadline, self.seq) == (o.deadline, o.seq)
-    }
-}
-impl Eq for Entry {}
-impl PartialOrd for Entry {
-    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(o))
-    }
-}
-impl Ord for Entry {
-    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
-        // reversed so BinaryHeap (a max-heap) pops the EARLIEST deadline; seq keeps equal deadlines FIFO
-        (o.deadline, o.seq).cmp(&(self.deadline, self.seq))
-    }
-}
+/// (deadline, sequence number): the map's order is firing order, equal deadlines first come first served.
+type TimerKey = (u64, u64);
 struct TimerInner {
-    heap: BinaryHeap<Entry>,
+    pending: BTreeMap<TimerKey, Arc<TimerState>>,
     seq: u64,
 }
+/// A map rather than a heap, so that dropping a `Sleep` can remove its entry at once.
+/// No `TimerState` is dropped while `inner` is locked: its waker may own a task whose destructor cancels a sleep.
 struct Timer {
     clock: Clock,
     inner: Mutex<TimerInner>,
@@ -813,7 +965,7 @@ impl Timer {
         Arc::new(Timer {
             clock,
             inner: Mutex::new(TimerInner {
-                heap: BinaryHeap::new(),
+                pending: BTreeMap::new(),
                 seq: 0,
             }),
             cv: Condvar::new(),
@@ -822,53 +974,74 @@ impl Timer {
     fn now(&self) -> u64 {
         self.clock.now()
     }
-    fn insert(&self, deadline: u64, st: Arc<TimerState>) {
+    /// Moves a manual clock and wakes what became due, so that a `block_on` asleep on another thread hears of it.
+    fn advance(&self, d: Duration) {
+        self.clock.advance(d);
+        self.fire_due();
+    }
+    fn insert(&self, deadline: u64, st: Arc<TimerState>) -> TimerKey {
         let mut g = self.inner.lock();
         g.seq += 1;
-        let seq = g.seq;
-        g.heap.push(Entry { deadline, seq, st });
+        let key = (deadline, g.seq);
+        g.pending.insert(key, st);
         self.cv.notify_one(); // the driver may be sleeping towards a later deadline
+        key
     }
-    fn collect_due(g: &mut TimerInner, now: u64) -> Vec<Waker> {
-        let mut out = Vec::new();
-        while g.heap.peek().is_some_and(|e| e.deadline <= now) {
-            let e = g.heap.pop().unwrap();
-            if e.st.cancelled.load(Acquire) {
-                continue;
+    fn cancel(&self, key: TimerKey) {
+        let removed = self.inner.lock().pending.remove(&key);
+        drop(removed); // after the lock is released
+    }
+    fn pending(&self) -> usize {
+        self.inner.lock().pending.len()
+    }
+    fn clear(&self) {
+        let all = std::mem::take(&mut self.inner.lock().pending);
+        drop(all);
+    }
+    fn take_due(g: &mut TimerInner, now: u64) -> Vec<Arc<TimerState>> {
+        let mut due = Vec::new();
+        while let Some(entry) = g.pending.first_entry() {
+            if entry.key().0 > now {
+                break;
             }
-            e.st.fired.store(true, SeqCst);
-            if let Some(w) = e.st.waker.lock().take() {
-                out.push(w);
+            let st = entry.remove();
+            st.fired.store(true, SeqCst);
+            due.push(st);
+        }
+        due
+    }
+    /// Call without any lock held: wake() may re-enter the scheduler and the timer.
+    fn wake(due: Vec<Arc<TimerState>>) -> usize {
+        let mut woken = 0;
+        for st in due {
+            let waker = st.waker.lock().take();
+            if let Some(w) = waker {
+                w.wake();
+                woken += 1;
             }
         }
-        out
+        woken
     }
     /// Fires everything due at the clock's current time (in deadline order); returns how many wakers were woken.
     fn fire_due(&self) -> usize {
-        let wakers = Self::collect_due(&mut self.inner.lock(), self.now());
-        let n = wakers.len();
-        for w in wakers {
-            w.wake(); // outside the timer lock: wake() may re-enter the scheduler
-        }
-        n
+        let due = Self::take_due(&mut self.inner.lock(), self.now());
+        Self::wake(due)
     }
     fn next_deadline(&self) -> Option<u64> {
-        self.inner.lock().heap.peek().map(|e| e.deadline)
+        self.inner.lock().pending.keys().next().map(|k| k.0)
     }
     fn run_driver(&self, stop: &AtomicBool) {
         let mut g = self.inner.lock();
         while !stop.load(SeqCst) {
             let now = self.now();
-            let wakers = Self::collect_due(&mut g, now);
-            if !wakers.is_empty() {
+            let due = Self::take_due(&mut g, now);
+            if !due.is_empty() {
                 drop(g);
-                for w in wakers {
-                    w.wake();
-                }
+                Self::wake(due);
                 g = self.inner.lock();
                 continue;
             }
-            match g.heap.peek().map(|e| e.deadline) {
+            match g.pending.keys().next().map(|k| k.0) {
                 Some(d) => {
                     let _ = self
                         .cv
@@ -884,20 +1057,20 @@ struct Sleep {
     timer: Arc<Timer>,
     deadline: u64,
     st: Arc<TimerState>,
-    registered: bool,
+    /// Where the timer keeps this sleep, once it has been polled.
+    key: Option<TimerKey>,
 }
 impl Sleep {
     fn new(timer: Arc<Timer>, deadline: u64) -> Sleep {
         let st = Arc::new(TimerState {
             fired: AtomicBool::new(false),
-            cancelled: AtomicBool::new(false),
             waker: Mutex::new(None),
         });
         Sleep {
             timer,
             deadline,
             st,
-            registered: false,
+            key: None,
         }
     }
 }
@@ -910,14 +1083,17 @@ impl Future for Sleep {
         {
             // register-then-recheck: store the waker first, then look at `fired` again
             let mut w = self.st.waker.lock();
-            if !w.as_ref().is_some_and(|old| old.will_wake(cx.waker())) {
-                *w = Some(cx.waker().clone());
-            }
+            let old = if w.as_ref().is_some_and(|old| old.will_wake(cx.waker())) {
+                None
+            } else {
+                w.replace(cx.waker().clone())
+            };
+            drop(w);
+            drop(old);
         }
-        if !self.registered {
-            self.registered = true;
-            let (d, st) = (self.deadline, self.st.clone());
-            self.timer.insert(d, st);
+        if self.key.is_none() {
+            let key = self.timer.insert(self.deadline, self.st.clone());
+            self.key = Some(key);
         }
         if self.st.fired.load(SeqCst) {
             Poll::Ready(())
@@ -928,8 +1104,13 @@ impl Future for Sleep {
 }
 impl Drop for Sleep {
     fn drop(&mut self) {
-        self.st.cancelled.store(true, Release); // lazy deletion: the heap entry is skipped when popped
+        if let Some(key) = self.key.take() {
+            self.timer.cancel(key); // a no-op if it has fired
+        }
     }
+}
+fn nanos(d: Duration) -> u64 {
+    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 fn now_ns() -> u64 {
     current().timer.now()
@@ -939,7 +1120,7 @@ fn sleep_until(deadline_ns: u64) -> Sleep {
 }
 fn sleep(d: Duration) -> Sleep {
     let t = current().timer;
-    let deadline = t.now() + d.as_nanos() as u64;
+    let deadline = t.now().saturating_add(nanos(d)); // sleep(Duration::MAX) means "for ever"
     Sleep::new(t, deadline)
 }
 
@@ -985,7 +1166,7 @@ fn interval(period: Duration) -> Interval {
     let next = timer.now();
     Interval {
         timer,
-        period: period.as_nanos() as u64,
+        period: nanos(period),
         next,
     }
 }
@@ -994,7 +1175,7 @@ impl Interval {
     async fn tick(&mut self) -> u64 {
         Sleep::new(self.timer.clone(), self.next).await;
         let t = self.next;
-        self.next += self.period;
+        self.next = self.next.saturating_add(self.period);
         t
     }
 }
@@ -1062,7 +1243,12 @@ impl<T> Drop for OsSender<T> {
 }
 impl<T> Drop for OsReceiver<T> {
     fn drop(&mut self) {
-        self.0.lock().rx_gone = true;
+        let unread = {
+            let mut g = self.0.lock();
+            g.rx_gone = true;
+            (g.value.take(), g.rx_waker.take())
+        };
+        drop(unread); // a value nobody will read is dropped now, outside the lock
     }
 }
 impl<T> Future for OsReceiver<T> {
@@ -1075,7 +1261,9 @@ impl<T> Future for OsReceiver<T> {
         if g.tx_gone {
             return Poll::Ready(Err(RecvError));
         }
-        g.rx_waker = Some(cx.waker().clone());
+        let old = g.rx_waker.replace(cx.waker().clone());
+        drop(g);
+        drop(old);
         Poll::Pending
     }
 }
@@ -1134,11 +1322,18 @@ impl<T> Drop for MpscSender<T> {
 }
 impl<T> Drop for MpscReceiver<T> {
     fn drop(&mut self) {
-        let ws = {
+        let (ws, queued, own) = {
             let mut g = self.0.st.lock();
             g.rx_closed = true;
-            std::mem::take(&mut g.tx_wakers)
+            (
+                std::mem::take(&mut g.tx_wakers),
+                std::mem::take(&mut g.q),
+                g.rx_waker.take(),
+            )
         };
+        // Senders keep the channel alive, so queued values must be dropped here: one may hold a reply channel whose
+        // other end is waiting. Dropped outside the lock, because their destructors may use this channel.
+        drop((queued, own));
         ws.into_iter().for_each(Waker::wake);
     }
 }
@@ -1187,7 +1382,9 @@ impl<T> MpscReceiver<T> {
             if g.senders == 0 {
                 return Poll::Ready(None);
             }
-            g.rx_waker = Some(cx.waker().clone());
+            let old = g.rx_waker.replace(cx.waker().clone());
+            drop(g);
+            drop(old);
             Poll::Pending
         })
         .await
@@ -1230,7 +1427,8 @@ impl Drop for Permit {
         ws.into_iter().for_each(Waker::wake);
     }
 }
-/// `notify_one` stores at most one permit if nobody waits, so notify-before-wait is not lost (same as tokio).
+/// `notify_one` stores at most one permit, so notify-before-wait is not lost. Unlike tokio, which picks a waiter for each
+/// call, this keeps one flag: two calls made before a waiter runs release one waiter only.
 struct Notify {
     st: Mutex<(bool, Vec<Waker>)>,
 }
@@ -1353,6 +1551,7 @@ impl<A: Future, B: Future> Future for Select2<A, B> {
     type Output = Either<A::Output, B::Output>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let t = self.get_mut();
+        assert!(t.a.is_some(), "Select2 polled after it returned");
         if let Some(Poll::Ready(v)) = t.a.as_mut().map(|f| f.as_mut().poll(cx)) {
             t.a = None;
             t.b = None; // cancel the loser right now
@@ -1371,12 +1570,73 @@ impl<A: Future, B: Future> Future for Select2<A, B> {
 // 5. IO REACTOR (mio) and TcpListener / TcpStream
 // =====================================================================================================================
 const WAKE_TOKEN: Token = Token(0);
+#[derive(Default)]
+struct Waiters {
+    next_id: u64,
+    list: Vec<(u64, Waker)>,
+}
+/// Reading or writing: how many readiness edges there have been, and who waits for the next one.
+#[derive(Default)]
+struct Direction {
+    epoch: AtomicU64,
+    waiters: Mutex<Waiters>,
+}
+impl Direction {
+    /// An edge arrived. Wake everyone: each tries its operation, and whoever gets nothing registers again.
+    fn ready(&self) {
+        self.epoch.fetch_add(1, SeqCst); // bump BEFORE taking the wakers (see poll_io)
+        let woken = std::mem::take(&mut self.waiters.lock().list);
+        for (_, waker) in woken {
+            waker.wake();
+        }
+    }
+}
+/// One operation's place among the waiters of a direction. Dropping the operation's future takes it out again.
+struct Waiter<'a> {
+    dir: &'a Direction,
+    id: Option<u64>,
+}
+impl<'a> Waiter<'a> {
+    fn new(dir: &'a Direction) -> Self {
+        Waiter { dir, id: None }
+    }
+    fn register(&mut self, waker: &Waker) {
+        let mut g = self.dir.waiters.lock();
+        let id = match self.id {
+            Some(id) => id,
+            None => {
+                g.next_id += 1;
+                *self.id.insert(g.next_id)
+            }
+        };
+        let old = match g.list.iter_mut().find(|entry| entry.0 == id) {
+            Some(entry) => Some(std::mem::replace(&mut entry.1, waker.clone())),
+            None => {
+                g.list.push((id, waker.clone()));
+                None
+            }
+        };
+        drop(g);
+        drop(old);
+    }
+}
+impl Drop for Waiter<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id {
+            let removed = {
+                let mut g = self.dir.waiters.lock();
+                let at = g.list.iter().position(|entry| entry.0 == id);
+                at.map(|at| g.list.swap_remove(at))
+            };
+            drop(removed);
+        }
+    }
+}
+#[derive(Default)]
 struct IoState {
     token: usize,
-    r_epoch: AtomicU64,
-    w_epoch: AtomicU64,
-    r_waker: Mutex<Option<Waker>>,
-    w_waker: Mutex<Option<Waker>>,
+    read: Direction,
+    write: Direction,
 }
 struct Reactor {
     registry: mio::Registry,
@@ -1403,17 +1663,15 @@ impl Reactor {
         let token = self.next_token.fetch_add(1, Relaxed);
         let st = Arc::new(IoState {
             token,
-            r_epoch: AtomicU64::new(0),
-            w_epoch: AtomicU64::new(0),
-            r_waker: Mutex::new(None),
-            w_waker: Mutex::new(None),
+            ..IoState::default()
         });
+        // listed before it is registered, so that the first event cannot miss it
         self.sources.lock().insert(token, st.clone());
-        self.registry.register(
-            &mut src,
-            Token(token),
-            Interest::READABLE | Interest::WRITABLE,
-        )?;
+        let interest = Interest::READABLE | Interest::WRITABLE;
+        if let Err(e) = self.registry.register(&mut src, Token(token), interest) {
+            self.sources.lock().remove(&token);
+            return Err(e);
+        }
         Ok(Io {
             src,
             st,
@@ -1439,16 +1697,10 @@ impl Reactor {
                 let st = self.sources.lock().get(&ev.token().0).cloned();
                 let Some(st) = st else { continue };
                 if ev.is_readable() || ev.is_read_closed() || ev.is_error() {
-                    st.r_epoch.fetch_add(1, SeqCst); // bump BEFORE taking the waker (see poll_io)
-                    if let Some(w) = st.r_waker.lock().take() {
-                        w.wake();
-                    }
+                    st.read.ready();
                 }
                 if ev.is_writable() || ev.is_write_closed() || ev.is_error() {
-                    st.w_epoch.fetch_add(1, SeqCst);
-                    if let Some(w) = st.w_waker.lock().take() {
-                        w.wake();
-                    }
+                    st.write.ready();
                 }
             }
         }
@@ -1465,29 +1717,19 @@ impl<S: mio::event::Source> Drop for Io<S> {
         self.reactor.sources.lock().remove(&self.st.token);
     }
 }
-#[derive(Clone, Copy)]
-enum Dir {
-    Read,
-    Write,
-}
 /// The edge-triggered recipe: (1) remember the epoch, (2) TRY the operation, (3) on WouldBlock publish the waker, (4) if the
 /// epoch moved in the meantime an edge was delivered after our syscall: retry instead of sleeping on a missed event.
 fn poll_io<R>(
-    st: &IoState,
-    dir: Dir,
+    waiter: &mut Waiter<'_>,
     cx: &mut Context<'_>,
     mut f: impl FnMut() -> io::Result<R>,
 ) -> Poll<io::Result<R>> {
-    let (epoch, waker) = match dir {
-        Dir::Read => (&st.r_epoch, &st.r_waker),
-        Dir::Write => (&st.w_epoch, &st.w_waker),
-    };
     loop {
-        let e = epoch.load(SeqCst);
+        let e = waiter.dir.epoch.load(SeqCst);
         match f() {
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                *waker.lock() = Some(cx.waker().clone());
-                if epoch.load(SeqCst) != e {
+                waiter.register(cx.waker());
+                if waiter.dir.epoch.load(SeqCst) != e {
                     continue;
                 }
                 return Poll::Pending;
@@ -1497,7 +1739,6 @@ fn poll_io<R>(
         }
     }
 }
-
 struct TcpListener {
     io: Io<mio::net::TcpListener>,
 }
@@ -1519,8 +1760,8 @@ impl TcpListener {
         self.io.src.local_addr()
     }
     async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
-        let (s, a) =
-            poll_fn(|cx| poll_io(&self.io.st, Dir::Read, cx, || self.io.src.accept())).await?;
+        let mut waiter = Waiter::new(&self.io.st.read);
+        let (s, a) = poll_fn(|cx| poll_io(&mut waiter, cx, || self.io.src.accept())).await?;
         Ok((
             TcpStream {
                 io: Arc::new(reactor().register(s)?),
@@ -1533,8 +1774,9 @@ impl TcpStream {
     async fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
         let s = mio::net::TcpStream::connect(addr)?;
         let io = reactor().register(s)?;
+        let mut waiter = Waiter::new(&io.st.write);
         poll_fn(|cx| {
-            poll_io(&io.st, Dir::Write, cx, || {
+            poll_io(&mut waiter, cx, || {
                 if let Some(e) = io.src.take_error()? {
                     return Err(e);
                 }
@@ -1548,10 +1790,12 @@ impl TcpStream {
             })
         })
         .await?;
+        drop(waiter);
         Ok(TcpStream { io: Arc::new(io) })
     }
     async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        poll_fn(|cx| poll_io(&self.io.st, Dir::Read, cx, || (&self.io.src).read(buf))).await
+        let mut waiter = Waiter::new(&self.io.st.read);
+        poll_fn(|cx| poll_io(&mut waiter, cx, || (&self.io.src).read(buf))).await
     }
     async fn read_exact(&self, buf: &mut [u8]) -> io::Result<()> {
         let mut off = 0;
@@ -1567,12 +1811,9 @@ impl TcpStream {
         let mut off = 0;
         while off < buf.len() {
             // NOT cancel safe: dropping mid-way leaves a prefix written
-            off += poll_fn(|cx| {
-                poll_io(&self.io.st, Dir::Write, cx, || {
-                    (&self.io.src).write(&buf[off..])
-                })
-            })
-            .await?;
+            let mut waiter = Waiter::new(&self.io.st.write);
+            off += poll_fn(|cx| poll_io(&mut waiter, cx, || (&self.io.src).write(&buf[off..])))
+                .await?;
         }
         Ok(())
     }
@@ -1884,7 +2125,7 @@ fn t_timers_real(rep: &mut Report) {
         v
     });
     assert!(res.iter().all(|&(a, b)| a && b), "a timer fired early");
-    // sleep(0) and past deadlines complete immediately; many cancelled sleeps are skipped lazily
+    // sleep(0) and past deadlines complete immediately; a cancelled sleep leaves the timer at once
     rt.block_on(async {
         sleep(Duration::ZERO).await;
         for _ in 0..100 {
@@ -2454,13 +2695,593 @@ fn t_shutdown(rep: &mut Report) {
             });
         }
         drop(rt);
-        // graceful: workers drain runnable work before exiting, so everything that was runnable at shutdown ran or was dropped
+        // some ran; `Runtime::drop` destroyed the rest (the live-task count at the end of main proves it)
         assert!(counter.load(SeqCst) <= 1000);
     }
     assert_eq!(LIVE_THREADS.load(SeqCst), before, "leaked runtime threads");
     rep.add(
         "clean shutdown",
         "all worker/timer/reactor threads joined after drop".into(),
+    );
+}
+
+// ---- one check per ordering, cleanup and wake-up bug. Each drives the schedule itself or through a hook: no sleeps. ----
+
+/// Turns a hang into a failure. The limit only matters when a check is failing.
+fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let t = thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    if rx.recv_timeout(Duration::from_secs(20)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+        panic!("{what}: hung");
+    }
+    t.join().unwrap_or_else(|p| std::panic::resume_unwind(p));
+}
+
+/// A waker that runs a closure, so a check can look at the world at the exact moment of a wake.
+struct OnWake<F: Fn() + Send + Sync>(F);
+impl<F: Fn() + Send + Sync + 'static> Wake for OnWake<F> {
+    fn wake(self: Arc<Self>) {
+        (self.0)()
+    }
+}
+fn on_wake(f: impl Fn() + Send + Sync + 'static) -> Waker {
+    Waker::from(Arc::new(OnWake(f)))
+}
+fn counting_waker() -> (Arc<AtomicUsize>, Waker) {
+    let n = Arc::new(AtomicUsize::new(0));
+    let m = n.clone();
+    (
+        n,
+        on_wake(move || {
+            m.fetch_add(1, SeqCst);
+        }),
+    )
+}
+fn poll_with<F: Future + Unpin>(f: &mut F, waker: &Waker) -> Poll<F::Output> {
+    Pin::new(f).poll(&mut Context::from_waker(waker))
+}
+
+/// A future that is ready (or not) at once and whose destructor does what the check says.
+struct Probe<D: FnMut()> {
+    ready: bool,
+    on_drop: D,
+}
+impl<D: FnMut() + Unpin> Future for Probe<D> {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+        if self.ready {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+impl<D: FnMut()> Drop for Probe<D> {
+    fn drop(&mut self) {
+        (self.on_drop)()
+    }
+}
+
+fn t_join_after_cleanup(rep: &mut Report) {
+    for finishes in [true, false] {
+        let rt = LocalRuntime::new(Clock::manual());
+        let gone = Arc::new(AtomicBool::new(false));
+        let g = gone.clone();
+        let mut h = rt.spawn(Probe {
+            ready: finishes,
+            on_drop: move || g.store(true, SeqCst),
+        });
+        // 0 = not woken, 1 = woken while the future still existed, 2 = woken after it was destroyed
+        let seen = Arc::new(AtomicU8::new(0));
+        let (s, g) = (seen.clone(), gone.clone());
+        let waker = on_wake(move || s.store(1 + g.load(SeqCst) as u8, SeqCst));
+        assert!(poll_with(&mut h, &waker).is_pending());
+        rt.run_until_stalled();
+        if !finishes {
+            h.abort();
+            rt.run_until_stalled();
+        }
+        assert_eq!(
+            seen.load(SeqCst),
+            2,
+            "the joiner was told before the future was destroyed"
+        );
+    }
+    rep.add(
+        "join after cleanup",
+        "finished and aborted: destroyed, then the joiner is woken".into(),
+    );
+}
+
+/// An output whose destructor panics.
+struct BoomOnDrop;
+impl Drop for BoomOnDrop {
+    fn drop(&mut self) {
+        panic!("boom in a destructor");
+    }
+}
+
+fn t_panicking_destructors(rep: &mut Report) {
+    let rt = LocalRuntime::new(Clock::manual());
+    let boom = || panic!("boom in a destructor");
+    let finished = rt.spawn(Probe {
+        ready: true,
+        on_drop: boom,
+    });
+    let aborted = rt.spawn(Probe {
+        ready: false,
+        on_drop: boom,
+    });
+    let unwakeable = rt.spawn(Probe {
+        ready: false,
+        on_drop: boom,
+    });
+    drop(rt.spawn(async { BoomOnDrop })); // nobody takes this output
+    aborted.abort();
+    let payload = rt.spawn(async { std::panic::panic_any(BoomOnDrop) });
+    let escaped = catch_unwind(AssertUnwindSafe(|| rt.run_until_stalled()));
+    assert!(escaped.is_ok(), "a destructor's panic reached the executor");
+    let want = Err(JoinError::Panic("boom in a destructor".into()));
+    for h in [finished, aborted, unwakeable] {
+        assert!(h.is_finished());
+        assert_eq!(rt.block_on(h), want);
+    }
+    assert!(matches!(rt.block_on(payload), Err(JoinError::Panic(_))));
+    rep.add(
+        "panicking destructors",
+        "caught on finish, abort, free, unread output and panic payload".into(),
+    );
+}
+
+/// Spawns another task from its destructor.
+struct SpawnOnDrop(Arc<AtomicUsize>);
+impl Drop for SpawnOnDrop {
+    fn drop(&mut self) {
+        let inner = DropGuard(self.0.clone());
+        drop(spawn(async move {
+            let _g = inner;
+            std::future::pending::<()>().await;
+        }));
+    }
+}
+
+fn check_shutdown_of(spawner: Handle, shut_down: impl FnOnce()) {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started) = std::sync::mpsc::channel();
+    let (tx, rx) = oneshot::<()>(); // the check keeps the sender: someone else still holds this task's waker
+    let (g, child) = (DropGuard(drops.clone()), SpawnOnDrop(drops.clone()));
+    let mut waiting = spawner.spawn(async move {
+        let _held = (g, child);
+        started_tx.send(()).unwrap();
+        let _ = rx.await;
+    });
+    let g = DropGuard(drops.clone());
+    let mut sleeping = spawner.spawn(async move {
+        let _g = g;
+        sleep(Duration::from_secs(3600)).await;
+    });
+    let g = DropGuard(drops.clone());
+    let mut spinning = spawner.spawn(async move {
+        let _g = g;
+        loop {
+            yield_now().await;
+        }
+    });
+    // on a local executor nothing has run yet, and `shut_down` first lets it run
+    shut_down();
+    let _ = started.try_recv();
+    // three guards, and the child that a destructor spawned during the shutdown
+    assert_eq!(drops.load(SeqCst), 4, "a future survived the shutdown");
+    let (_, w) = counting_waker();
+    for h in [&mut waiting, &mut sleeping, &mut spinning] {
+        assert_eq!(poll_with(h, &w), Poll::Ready(Err(JoinError::Cancelled)));
+    }
+    let g = DropGuard(drops.clone());
+    let mut late = spawner.spawn(async move {
+        let _g = g;
+        unreachable!("polled after shutdown");
+    });
+    assert_eq!(
+        drops.load(SeqCst),
+        5,
+        "a task spawned after shutdown was kept"
+    );
+    assert_eq!(
+        poll_with(&mut late, &w),
+        Poll::Ready(Err::<(), _>(JoinError::Cancelled))
+    );
+    assert!(tx.send(()).is_err());
+}
+
+fn t_shutdown_strands_nothing(rep: &mut Report) {
+    within("shutdown of a runtime with threads", || {
+        let rt = Runtime::new(2);
+        check_shutdown_of(rt.handle.clone(), move || drop(rt));
+    });
+    within("shutdown of a local runtime", || {
+        let rt = LocalRuntime::new(Clock::manual());
+        check_shutdown_of(rt.handle.clone(), move || {
+            rt.run_until_stalled_once();
+            drop(rt);
+        });
+    });
+    // a handle alone does not keep a task alive that nobody can wake
+    let rt = LocalRuntime::new(Clock::manual());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let g = DropGuard(drops.clone());
+    let h = rt.spawn(async move {
+        let _g = g;
+        std::future::pending::<()>().await;
+    });
+    rt.run_until_stalled();
+    assert_eq!(
+        drops.load(SeqCst),
+        1,
+        "an unwakeable task was kept by its handle"
+    );
+    assert_eq!(rt.block_on(h), Err(JoinError::Cancelled));
+    rep.add(
+        "shutdown",
+        "waiting, sleeping, yielding and late tasks destroyed; handles say Cancelled".into(),
+    );
+}
+
+fn t_two_waiters(rep: &mut Report) {
+    within("two acceptors", || {
+        let rt = Runtime::new(1);
+        let _g = enter(&rt.handle);
+        let listener = TcpListener::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wakers: Vec<Waker> = (0..2)
+            .map(|i| {
+                let tx = tx.clone();
+                on_wake(move || {
+                    let _ = tx.send(i);
+                })
+            })
+            .collect();
+        let mut first = Box::pin(listener.accept());
+        let mut second = Box::pin(listener.accept());
+        assert!(poll_with(&mut first, &wakers[0]).is_pending());
+        assert!(poll_with(&mut second, &wakers[1]).is_pending());
+        let _client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut woken = [false; 2];
+        while woken != [true; 2] {
+            let i = rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("an acceptor was forgotten: not every waiter was woken");
+            woken[i] = true;
+        }
+    });
+    // each waiter has one entry, however often it is polled, and cancelling removes it
+    let st = IoState::default();
+    let (a_woken, a) = counting_waker();
+    let (b_woken, b) = counting_waker();
+    let would_block = || Err::<(), _>(io::Error::from(io::ErrorKind::WouldBlock));
+    let mut first = Waiter::new(&st.read);
+    let mut second = Waiter::new(&st.read);
+    for _ in 0..3 {
+        assert!(poll_io(&mut first, &mut Context::from_waker(&a), would_block).is_pending());
+        assert!(poll_io(&mut second, &mut Context::from_waker(&b), would_block).is_pending());
+    }
+    assert_eq!(st.read.waiters.lock().list.len(), 2);
+    drop(second);
+    assert_eq!(
+        st.read.waiters.lock().list.len(),
+        1,
+        "a cancelled waiter stayed"
+    );
+    st.read.ready();
+    assert_eq!((a_woken.load(SeqCst), b_woken.load(SeqCst)), (1, 0));
+    rep.add(
+        "two waiters, one socket",
+        "both acceptors woken; a cancelled wait leaves no entry".into(),
+    );
+}
+
+fn t_cancelled_timers(rep: &mut Report) {
+    let rt = LocalRuntime::new(Clock::manual());
+    let _g = enter(&rt.handle);
+    let (_, w) = counting_waker();
+    for i in 1..=1000 {
+        let mut s = sleep(Duration::from_secs(i));
+        assert!(poll_with(&mut s, &w).is_pending());
+    }
+    assert_eq!(
+        rt.timer.pending(),
+        0,
+        "cancelled sleeps stayed in the timer"
+    );
+    let mut forever = sleep(Duration::MAX);
+    assert!(poll_with(&mut forever, &w).is_pending());
+    assert_eq!(rt.timer.pending(), 1);
+    drop(forever);
+    assert_eq!(rt.timer.pending(), 0);
+    rep.add(
+        "cancelled timers",
+        "1000 dropped sleeps leave the timer empty".into(),
+    );
+}
+
+fn t_manual_advance_wakes(rep: &mut Report) {
+    let rt = LocalRuntime::new(Clock::manual());
+    {
+        let _g = enter(&rt.handle);
+        let (woken, w) = counting_waker();
+        let mut s = sleep(Duration::from_secs(3600));
+        assert!(poll_with(&mut s, &w).is_pending());
+        rt.advance(Duration::from_secs(3600));
+        assert_eq!(woken.load(SeqCst), 1, "advancing the clock woke nobody");
+    }
+    within("advance from another thread", || {
+        let rt = LocalRuntime::new(Clock::manual());
+        let timer = rt.timer.clone();
+        let (polled_tx, polled) = std::sync::mpsc::channel();
+        let advancer = thread::spawn(move || {
+            polled.recv().unwrap();
+            timer.advance(Duration::from_secs(3600));
+        });
+        rt.block_on(async {
+            let mut s = sleep(Duration::from_secs(3600));
+            poll_fn(|cx| {
+                let r = Pin::new(&mut s).poll(cx);
+                let _ = polled_tx.send(());
+                r
+            })
+            .await;
+        });
+        advancer.join().unwrap();
+    });
+    rep.add(
+        "manual clock",
+        "advance wakes sleepers, also a block_on on another thread".into(),
+    );
+}
+
+fn t_yielding_cannot_starve_timers(rep: &mut Report) {
+    let rt = LocalRuntime::new(Clock::Real(Instant::now()));
+    let done = Arc::new(AtomicBool::new(false));
+    let d = done.clone();
+    // gives up after a long while only so that a failure is not a hang
+    let spinner = rt.spawn(async move {
+        let started = Instant::now();
+        while !d.load(SeqCst) {
+            if started.elapsed() > Duration::from_secs(10) {
+                return false;
+            }
+            yield_now().await;
+        }
+        true
+    });
+    let seen = rt.block_on(async move {
+        spawn(async move {
+            sleep(Duration::from_millis(1)).await;
+            done.store(true, SeqCst);
+        });
+        spinner.await
+    });
+    assert_eq!(
+        seen,
+        Ok(true),
+        "a task that keeps yielding kept the timer from firing"
+    );
+    rep.add(
+        "yield loop vs timer",
+        "the sleep fired while another task kept yielding".into(),
+    );
+}
+
+/// While worker X moves a batch from the injector, the other tasks are in no queue. The hook makes worker Y look exactly
+/// then and go to sleep. X then runs a task that blocks until another of the batch has run.
+fn t_batch_wake(rep: &mut Report) {
+    within("batch wake-up", || {
+        let (release_y, y_released) = std::sync::mpsc::channel::<()>();
+        let release_y = Mutex::new(release_y);
+        let armed = Arc::new(AtomicBool::new(false));
+        let a = armed.clone();
+        let hook: Hook = Box::new(move |shared: &MtShared| {
+            if !a.swap(false, SeqCst) {
+                return;
+            }
+            release_y.lock().send(()).unwrap();
+            // Y counts itself under the lock and releases it only by waiting, so seeing 1 while holding it means asleep
+            loop {
+                let _g = shared.lock.lock();
+                if shared.sleepers.load(SeqCst) == 1 {
+                    break;
+                }
+                drop(_g);
+                thread::yield_now();
+            }
+        });
+        let rt = Runtime::build(2, Clock::Real(Instant::now()), Some(hook));
+        // keep both workers busy while the batch is put into the injector
+        let (started_tx, started) = std::sync::mpsc::channel();
+        let (release_x, x_released) = std::sync::mpsc::channel::<()>();
+        let blockers: Vec<_> = [x_released, y_released]
+            .into_iter()
+            .map(|wait| {
+                let started = started_tx.clone();
+                rt.spawn(async move {
+                    started.send(()).unwrap();
+                    wait.recv().unwrap();
+                })
+            })
+            .collect();
+        started.recv().unwrap();
+        started.recv().unwrap();
+        const OTHERS: usize = 7;
+        let (ran_tx, ran) = std::sync::mpsc::channel();
+        // its thread stays blocked until the rest of the batch has run, which needs the other worker
+        let first = rt.spawn(async move {
+            (0..OTHERS).all(|_| ran.recv_timeout(Duration::from_secs(5)).is_ok())
+        });
+        for _ in 0..OTHERS {
+            let ran = ran_tx.clone();
+            rt.spawn(async move {
+                let _ = ran.send(());
+            });
+        }
+        armed.store(true, SeqCst);
+        release_x.send(()).unwrap();
+        let all_ran = rt.block_on(first);
+        assert!(
+            !armed.load(SeqCst),
+            "no batch was moved, so the check tested nothing"
+        );
+        assert_eq!(
+            all_ran,
+            Ok(true),
+            "a worker slept while tasks of a moved batch were waiting"
+        );
+        for b in blockers {
+            assert_eq!(rt.block_on(b), Ok(()));
+        }
+    });
+    rep.add(
+        "batch wake-up",
+        "a worker that slept during a batch move is woken again".into(),
+    );
+}
+
+fn t_dropped_receiver_drops_the_queue(rep: &mut Report) {
+    let rt = LocalRuntime::new(Clock::manual());
+    let (tx, rx) = mpsc_channel::<OsSender<u8>>(1);
+    let (reply_tx, mut reply) = oneshot::<u8>();
+    assert!(rt.block_on(tx.send(reply_tx)).is_ok());
+    drop(rx);
+    let (_, w) = counting_waker();
+    assert_eq!(
+        poll_with(&mut reply, &w),
+        Poll::Ready(Err(RecvError)),
+        "the request is still queued"
+    );
+    rep.add(
+        "dropped receiver",
+        "queued requests are destroyed, so their reply channels close".into(),
+    );
+}
+
+/// A replaced waker may own the last reference to something that locks the same channel when dropped.
+fn t_wakers_dropped_outside_locks(rep: &mut Report) {
+    within("a replaced waker is dropped", || {
+        let (tx, mut rx) = mpsc_channel::<u8>(1);
+        let rt = LocalRuntime::new(Clock::manual());
+        let mut recv = Box::pin(rx.recv());
+        {
+            let owned = tx.clone();
+            let waker = on_wake(move || {
+                let _ = &owned;
+            });
+            assert!(poll_with(&mut recv, &waker).is_pending());
+        }
+        // replacing it drops a sender of this channel
+        let (_, w) = counting_waker();
+        assert!(poll_with(&mut recv, &w).is_pending());
+        drop(rt);
+    });
+    rep.add(
+        "wakers and locks",
+        "replacing a channel's waker cannot deadlock".into(),
+    );
+}
+
+/// Needs a model of weak memory to be able to fail: run with Miri. A waker publishes data with a relaxed store and then
+/// wakes; the poll that follows the wake must see it. Natively this only checks that nothing is stuck.
+fn t_wake_publishes(rep: &mut Report) {
+    const N: usize = if cfg!(miri) { 2000 } else { 200 };
+    let queue = Arc::new(LocalQueue {
+        q: Mutex::new(VecDeque::new()),
+        cv: Condvar::new(),
+        root: AtomicBool::new(false),
+        owned: OwnedTasks::default(),
+    });
+    let sched: Arc<dyn Scheduler> = queue.clone();
+    let run_all = || {
+        loop {
+            let t = queue.q.lock().pop_front();
+            match t {
+                Some(t) => t.run(),
+                None => break,
+            }
+        }
+    };
+    let mut lost = 0;
+    for _ in 0..N {
+        let data = Arc::new(AtomicUsize::new(0));
+        let d = data.clone();
+        let handle = spawn_on(
+            &sched,
+            poll_fn(move |_| match d.load(Relaxed) {
+                1 => Poll::Ready(()),
+                _ => Poll::Pending,
+            }),
+        );
+        // hold a waker so that the pending task stays alive, then race its wake against the first run
+        let task = handle.task.upgrade().expect("queued");
+        let waker = Waker::from(task);
+        let publisher = thread::spawn(move || {
+            data.store(1, Relaxed);
+            waker.wake_by_ref();
+            waker
+        });
+        run_all();
+        let waker = publisher.join().unwrap();
+        run_all();
+        if !handle.is_finished() {
+            lost += 1;
+        }
+        drop(waker);
+    }
+    assert_eq!(
+        lost, 0,
+        "wakes whose data the following poll did not see, out of {N}"
+    );
+    rep.add(
+        "wake publishes",
+        format!("{N} racing wakes of a queued or running task, none lost"),
+    );
+}
+
+/// The same for `block_on` with two wakers: it must see what BOTH published. A loss shows as a deadlock under Miri.
+fn t_root_wake_publishes(rep: &mut Report) {
+    const N: usize = if cfg!(miri) { 500 } else { 100 };
+    let local = LocalRuntime::new(Clock::manual());
+    for round in 0..N {
+        let flags = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+        let mut threads = Vec::new();
+        let f = flags.clone();
+        let root = poll_fn(|cx| {
+            if threads.is_empty() {
+                for i in 0..2 {
+                    let (f, w) = (f.clone(), cx.waker().clone());
+                    threads.push(thread::spawn(move || {
+                        f[i].store(1, Relaxed);
+                        w.wake();
+                    }));
+                }
+            }
+            if f.iter().all(|x| x.load(Relaxed) == 1) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        });
+        if round % 2 == 0 {
+            park_block_on(&local.handle, root);
+        } else {
+            local.block_on(root);
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+    }
+    rep.add(
+        "root wake publishes",
+        format!("{N} block_on calls saw both wakers' data"),
     );
 }
 
@@ -2473,12 +3294,34 @@ fn main() {
             .downcast_ref::<&str>()
             .map(|s| s.to_string())
             .or_else(|| info.payload().downcast_ref::<String>().cloned());
-        if !msg.as_deref().is_some_and(|m| m.starts_with("boom")) {
+        let expected = msg.as_deref().is_some_and(|m| m.starts_with("boom"));
+        if !expected && !info.payload().is::<BoomOnDrop>() {
             default_hook(info); // only the deliberate "boom" panics are silenced
         }
     }));
     let mut rep = Report(Vec::new());
     println!("c09 mini async runtime");
+    if cfg!(miri) {
+        // Miri has no mio on every host, and these are the checks that need its weak memory model
+        t_wake_publishes(&mut rep);
+        t_root_wake_publishes(&mut rep);
+        for (name, detail) in &rep.0 {
+            println!("{name:<24} | {detail}");
+        }
+        return;
+    }
+    t_join_after_cleanup(&mut rep);
+    t_panicking_destructors(&mut rep);
+    t_shutdown_strands_nothing(&mut rep);
+    t_two_waiters(&mut rep);
+    t_cancelled_timers(&mut rep);
+    t_manual_advance_wakes(&mut rep);
+    t_yielding_cannot_starve_timers(&mut rep);
+    t_batch_wake(&mut rep);
+    t_dropped_receiver_drops_the_queue(&mut rep);
+    t_wakers_dropped_outside_locks(&mut rep);
+    t_wake_publishes(&mut rep);
+    t_root_wake_publishes(&mut rep);
     t_100k_tasks(&mut rep);
     t_work_stealing(&mut rep);
     t_wake_hazards(&mut rep);

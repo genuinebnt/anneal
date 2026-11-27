@@ -24,12 +24,12 @@ body = """
 user futures ──spawn──▶ Arc<Task>{state, Mutex<Option<BoxFuture>>} ──▶ JoinHandle<T> (slot + waker)
                                 │ wake() = CAS state machine, schedules at most once
                                 ▼
-┌──────────── Scheduler trait ───────────────┐      ┌───── Timer (BinaryHeap<deadline,seq>) ─────┐
+┌──────────── Scheduler trait ───────────────┐      ┌───── Timer (BTreeMap<(deadline,seq)>) ─────┐
 │ LocalQueue (VecDeque, block_on drives it)  │      │ Clock: Real(Instant) | Manual(AtomicU64)   │
 │ MtShared: Injector + N x (Worker, Stealer) │◀wake─│ driver thread sleeps until next deadline   │
 │   idle workers park on Condvar             │      └────────────────────────────────────────────┘
 └────────────────────────────────────────────┘      ┌───── Reactor (mio::Poll thread) ───────────┐
-      worker i: local.pop → injector → steal ◀──wake─│ token → IoState{epoch, waker} (read/write) │
+      worker i: local.pop → injector → steal ◀──wake─│ token → IoState{epoch, wakers} x2 (r/w)    │
                                                      └────────────────────────────────────────────┘
 ```
 
@@ -39,13 +39,13 @@ user futures ──spawn──▶ Arc<Task>{state, Mutex<Option<BoxFuture>>} ─
 [[sections]]
 heading = "What it is"
 body = """
-&#126;1000 lines that reproduce the moving parts of an async runtime using only `Future`/`Waker`/`Wake`, crossbeam deques, parking_lot and mio. No `unsafe` is needed at all: `Wake` for `Arc<Task>` replaces the raw-vtable waker and `Pin<Box<..>>` replaces pin projections.
+One file, with the runtime first and its checks after it, that reproduces the moving parts of an async runtime using only `Future`/`Waker`/`Wake`, crossbeam deques, parking_lot and mio. No `unsafe` is needed at all: `Wake` for `Arc<Task>` replaces the raw-vtable waker and `Pin<Box<..>>` replaces pin projections.
 """
 
 [[sections]]
 heading = "Why it matters"
 body = """
-every `.await` bottoms out in "store my waker somewhere, return Pending, someone calls wake()". Building the somewhere (timer heap, reactor, channel slot, join slot) shows why wakeups get lost and why cancellation is "drop".
+every `.await` bottoms out in "store my waker somewhere, return Pending, someone calls wake()". Building the somewhere (timer queue, reactor, channel slot, join slot) shows why wakeups get lost and why cancellation is "drop".
 """
 
 [[sections]]
@@ -54,11 +54,24 @@ body = """
 - Task state machine **idle** -> **scheduled** -> **running** -> (**notified**) -> **idle** &#124; **complete**. **Lost wakeup**: if `wake` ignored a **running** task and the poll then returned Pending, the event that woke us would be forgotten forever; instead a wake during **running** sets **notified** and the poller re-schedules after Pending.
 
    **Double schedule**: two threads waking an **idle** task must not both enqueue it (two workers would poll the same future concurrently: UB in real runtimes, a data race here); only the CAS winner of **idle**->**scheduled** enqueues. A `polling` flag asserts exclusivity at run time.
+- **Memory order**: every wake writes the task's state, also when the task is already queued. A wake that only read it would publish nothing, and the next run could miss data stored without a lock. Every later write of the state is a read-modify-write, and the root wakers of `block_on` use a swap.
+- **Sleeping workers** have no timeout. While a worker moves a batch between queues the tasks are in neither, so another worker can see nothing and sleep. A worker that takes a task and still sees queued work therefore wakes one more.
+- **Order of an ending**: the future is destroyed first, then the `JoinHandle` hears of it. A panic from its destructor, or from dropping an output nobody wants, is caught.
+- **Shutdown**: each executor lists its live tasks through weak references. Dropping it refuses new work, stops its threads after the polls in progress, then destroys every remaining future. Spawning later destroys the future without polling it.
 - Wakers are stored **before** re-checking the condition (timer fired? epoch changed? queue empty?), the standard register-then-recheck pattern that closes the race between "check" and "park".
-- Edge-triggered IO: mio reports readiness once per transition, so the reactor bumps an epoch counter and wakes; the consumer always **tries** the syscall first and only on WouldBlock registers a waker and re-checks the epoch.
+- Edge-triggered IO: mio reports readiness once per transition, so the reactor bumps an epoch counter and wakes; the consumer always **tries** the syscall first and only on WouldBlock registers a waker and re-checks the epoch. Several tasks may wait for one direction, such as two `accept` calls. Each has its own entry, removed when its future is dropped.
 - Cancellation = dropping the future (destructors run); `abort()` just marks the task so its next run drops it.
 - Cancellation safety: `select2`/`timeout` drop the loser. That is only safe for futures that lose no data when dropped mid-await: `mpsc::recv`, `Notify::notified`, `Sleep` are safe; a half-finished `write_all` is **not** (a prefix was already written), and `send` hands the value back inside the error only if it was never enqueued.
-- Known simplification: tasks parked forever at shutdown form an Arc cycle (task -> future -> waker -> task); tokio avoids it with an owned-task list. All tests here finish their tasks, and a live-task counter proves nothing leaks.
+- Limits: do not drop a runtime from one of its own tasks. A socket used outside its runtime after shutdown gets no more events.
+- Simpler than tokio: `Notify` keeps one flag, so two `notify_one` calls made before either waiter runs release only one. `Semaphore` and `mpsc` wake every waiter and are not fair.
+"""
+
+[[sections]]
+heading = "How it is checked"
+body = """
+Running the example runs its checks. The cleanup, shutdown, waiter, timer and sleeping-worker rules above have checks that drive the schedule themselves, through a waker or a test hook. Time limits only turn a hang into a failure.
+
+The two memory-order checks can only fail on a model of weak memory. `MIRIFLAGS=-Zmiri-seed=0 cargo +nightly miri run --example mini_async_runtime` runs just those. A normal run does not test the orderings, and a few Miri seeds are not a proof. One ordering has no check that fails without it: the swap that queues a task again after a wake during its poll.
 """
 
 [[sections]]

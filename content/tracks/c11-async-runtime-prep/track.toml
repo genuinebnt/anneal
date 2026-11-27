@@ -1,0 +1,21 @@
+code = "C11"
+name = "Async runtime: preparation"
+section = "C"
+tier = "sde3"
+order = 11
+summary = "Preparation for the async runtime capstone: waiting for many things, primitives that suspend a task, waking without losing or repeating work, time, events and worker threads."
+
+[[stages]]
+slug = "many-waits"
+name = "Many waits in one task"
+band = "medium"
+
+[[stages]]
+slug = "tasks-that-survive"
+name = "Tasks that survive anything"
+band = "medium"
+
+[[stages]]
+slug = "events-and-threads"
+name = "Time, events and threads"
+band = "hard"

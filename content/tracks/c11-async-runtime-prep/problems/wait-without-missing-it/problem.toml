@@ -1,0 +1,32 @@
+slug = "wait-without-missing-it"
+title = "Wait for news that is only told once"
+mode = "write"
+level = "hard"
+stage = "events-and-threads"
+order = 8
+status = "ready"
+tags = ["wakers", "lost wake-up", "edge-triggered", "epoch counter", "WouldBlock"]
+teaches = [
+  "Edge-triggered sources report a change once; a missed report is never repeated.",
+  "Try first, then register the waker, then check again whether anything happened since before the try.",
+  "An epoch counter turns \"did something happen meanwhile?\" into one comparison.",
+]
+follow_up = "1) Another design registers the waker **before** calling `op`. Is it correct? What does it cost on the success path? 2) Why must `ready` bump the counter before it takes the waker? Swap the two and find the bad interleaving. 3) Where does tokio keep its equivalent of this, and what is `AtomicWaker`?"
+related = ["C5", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Draw the timeline: you try, find nothing, store the waker. Put the news at each possible point of that line. At which point does nobody ever learn of it?"
+
+[[hints]]
+kind = "rust"
+text = "An `AtomicU64` that `ready` increments, and a `Mutex<Option<Waker>>` it takes from. Read the counter at a point where you can later tell whether it moved."
+
+[[hints]]
+kind = "edge"
+text = "When you read the counter matters as much as comparing it. And `ready` may run on your own stack, inside `op`."
+
+[solution]
+explanation = "`ready` increments an epoch and then takes and wakes the stored waker. `poll_io` reads the epoch, tries the operation, and on `WouldBlock` stores the waker and reads the epoch again. If it moved, news may have arrived between the try and the store, so it tries again; if not, any later news will find the stored waker."
+time = "O(1) per attempt"
+space = "O(1)"

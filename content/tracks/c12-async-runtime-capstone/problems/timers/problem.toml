@@ -1,0 +1,33 @@
+slug = "timers"
+title = "Capstone 4: sleep, timeout and interval"
+mode = "write"
+level = "hard"
+stage = "one-thread"
+order = 4
+status = "ready"
+tags = ["timers", "manual clock", "timeout", "interval", "cancel safety"]
+teaches = [
+  "A timer is a waker filed under a deadline; the runtime wakes what is due.",
+  "A clock you move by hand makes time-dependent behaviour exact and instant to test.",
+  "Cancelled timers must leave at once, or long timeouts that finish early pile up.",
+  "An `async` block destroys what it holds as it finishes; a hand-built future keeps its fields until it is dropped.",
+]
+follow_up = "1) tokio keeps timers in a hierarchical wheel. What does your ordered map cost per timer, and when would the wheel win? 2) A burst of late ticks can overload a service. What other policies for missed ticks are there? 3) Why must `advance` change the time before it takes the runtime's lock?"
+related = ["C11", "C12"]
+
+[[hints]]
+kind = "approach"
+text = "Keep the pending sleeps in a structure ordered by deadline that also lets one entry be removed from the middle. The runtime's idle condition now has one more reason to wake."
+
+[[hints]]
+kind = "rust"
+text = "A `BTreeMap<(Duration, u64), Waker>` orders by deadline then by a sequence number, and `remove` is cheap. `timeout` can be a plain function that makes the `Sleep` first and returns an `async move` block."
+
+[[hints]]
+kind = "edge"
+text = "The caller may keep your finished timeout future for a while: what does it still own? And `advance` can happen between a runtime deciding to sleep and sleeping: what lock closes that gap?"
+
+[solution]
+explanation = "Pending sleeps live in a `BTreeMap` keyed by deadline and a sequence number; dropping a `Sleep` removes its key. The runtime fires due entries before each round of tasks, and its idle wait also ends when a timer is due. `advance` changes the time, then signals through the queue's lock and condition variable. `timeout` polls the value before the deadline, inside an `async` block, so both are destroyed before it returns."
+time = "O(log timers) per timer operation"
+space = "O(pending timers)"

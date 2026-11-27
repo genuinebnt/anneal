@@ -6,6 +6,7 @@
 
 [series]
 id = "regex-engine"
+rank = 6
 title = "Build a regular-expression engine"
 summary = "Small parts give you what the capstone needs. Then you build an engine that stays fast on any pattern, and check it."
 note = "All times are estimates; nobody has been timed."

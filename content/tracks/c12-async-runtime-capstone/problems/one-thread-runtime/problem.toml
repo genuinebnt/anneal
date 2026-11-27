@@ -1,0 +1,33 @@
+slug = "one-thread-runtime"
+title = "Capstone 3: a runtime on one thread"
+mode = "write"
+level = "hard"
+stage = "one-thread"
+order = 3
+status = "ready"
+tags = ["executor", "thread-local context", "Condvar", "fairness", "shutdown"]
+teaches = [
+  "A runtime is a scheduler plus the loop that runs what it collects, and the root future is not a task.",
+  "Fairness between the root and the tasks is a rule you have to design, not something a queue gives you.",
+  "A thread-local current handle lets code spawn without passing the runtime around.",
+  "Dropping a runtime must cope with destructors that spawn.",
+]
+follow_up = "1) Why is the root future not a task? What would you lose if it were? 2) tokio's `current_thread` runtime polls the root less often than yours may. What does it gain? 3) A queued task holds an `Arc` of the queue that holds it. Where is that cycle broken?"
+related = ["C11", "C12"]
+
+[[hints]]
+kind = "approach"
+text = "The root has its own waker, which only sets a flag and wakes the sleeping loop. The loop alternates: poll the root if flagged, run tasks until the flag appears, sleep if there is nothing."
+
+[[hints]]
+kind = "rust"
+text = "`Condvar::wait_while` on the queue's mutex, with a predicate that looks at the queue and at an `AtomicBool` for the root. The root's waker must take that mutex before notifying. `std::pin::pin!` pins the root on the stack."
+
+[[hints]]
+kind = "edge"
+text = "In `drop`, the tasks' destructors run user code. Is the queue locked at that moment? And what happens to a task scheduled after you emptied the queue?"
+
+[solution]
+explanation = "The scheduler is a locked queue with a condition variable. `block_on` polls the root when its flag is set, then runs tasks until the flag is set again. It sleeps only when the queue is empty and the root is not woken. Both wake paths take the same lock, so no wake is missed. Drop marks the queue closed and drops the queued tasks outside the lock."
+time = "O(1) per task run"
+space = "O(tasks)"

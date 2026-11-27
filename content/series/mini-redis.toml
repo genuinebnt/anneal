@@ -6,6 +6,7 @@
 
 [series]
 id = "mini-redis"
+rank = 4
 title = "From bytes on a socket to a mini Redis"
 summary = "Small parts give you what the capstone needs. Then you build a small Redis, one step at a time."
 note = "All times are estimates; nobody has been timed."

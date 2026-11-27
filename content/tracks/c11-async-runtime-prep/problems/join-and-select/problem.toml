@@ -1,0 +1,32 @@
+slug = "join-and-select"
+title = "Wait for several things inside one task"
+mode = "write"
+level = "medium"
+stage = "many-waits"
+order = 1
+status = "ready"
+tags = ["Future", "Pin<Box>", "cancellation", "combinators"]
+teaches = [
+  "A future that holds other futures drives them with the context it was given.",
+  "`Box::pin` gives each child a fixed address, so the combinator itself can stay `Unpin`.",
+  "Cancelling a future means dropping it, and the moment you drop it is part of the behaviour.",
+]
+follow_up = "1) Your `select` always favours the left side. When can that starve the right side, and how would you make it fair? 2) `join_all` polls every unfinished child on every wake-up. With 10,000 children, what does that cost, and how does `FuturesUnordered` avoid it? 3) Which futures are safe to put on the losing side of a `select`?"
+related = ["C5", "C4"]
+
+[[hints]]
+kind = "approach"
+text = "Each child is in one of two states: still running, or finished with a value waiting. Write that down as a type, and the rules about polling and dropping follow from it."
+
+[[hints]]
+kind = "rust"
+text = "`Box::pin(child)` gives a `Pin<Box<F>>` that you can poll with `.as_mut()`. If every child is boxed, you may write `impl<F: Future> Unpin for JoinAll<F> {}` and use `get_mut`. Replacing an enum value drops the old one."
+
+[[hints]]
+kind = "edge"
+text = "Don't use `&&` or `all()` on the results of polling: they stop early. How do you know a combinator has already finished?"
+
+[solution]
+explanation = "Each child is boxed and pinned. `join_all` keeps a slot per child that is either running or done, and overwriting a running slot with its output drops the child in that very poll. `select` keeps both children in one `Option` and sets it to `None` when one wins, which cancels the loser immediately and also marks the future as finished."
+time = "O(unfinished children) per poll"
+space = "O(children)"

@@ -1,0 +1,32 @@
+slug = "the-current-one"
+title = "The current one, on this thread"
+mode = "write"
+level = "medium"
+stage = "tasks-that-survive"
+order = 6
+status = "ready"
+tags = ["thread_local!", "RefCell", "RAII guard", "reentrancy"]
+teaches = [
+  "`thread_local!` gives each thread its own value without locks.",
+  "A guard that undoes its own change, even when guards are dropped out of order.",
+  "Never hold a `RefCell` borrow while running code you don't control, destructors included.",
+]
+follow_up = "1) tokio panics when its runtime guards are dropped out of order. Why might a library prefer that to what you built? 2) What changes when the \"current\" value must follow an async task across threads? Look at `tracing`'s `Instrument`. 3) Why is the guard `!Send`?"
+related = ["C5", "S7"]
+
+[[hints]]
+kind = "approach"
+text = "A single \"previous value\" saved in the guard is not enough once guards die in any order. What must the thread remember, and how does a guard find its own part of it?"
+
+[[hints]]
+kind = "rust"
+text = "`thread_local!` with a `RefCell<Vec<_>>`. Give every guard a number. Move things **out** of the `RefCell` and let the borrow end before they are dropped."
+
+[[hints]]
+kind = "edge"
+text = "Where exactly does the last `Arc` get dropped, and is anything borrowed at that moment? The same question applies to `with_current`."
+
+[solution]
+explanation = "Each thread keeps a vector of the live entries, oldest first, each with a unique id. The current context is the last one. A guard removes its own entry by id, so any drop order works. Entries are moved out of the `RefCell` before they are dropped, and `with_current` clones the `Arc` before calling out, so reentrant code never meets an active borrow."
+time = "O(live guards) per drop in the worst case, O(1) otherwise"
+space = "O(live guards)"

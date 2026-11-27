@@ -6,6 +6,7 @@
 
 [series]
 id = "job-service"
+rank = 2
 title = "From one HTTP request to a job service"
 summary = "Small parts give you what the capstone needs. Then you build a service that runs background jobs over HTTP, one step at a time."
 note = "All times are estimates; nobody has been timed."

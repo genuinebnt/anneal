@@ -1,0 +1,34 @@
+slug = "finding-work"
+title = "Capstone 5: where a worker finds its next task"
+mode = "write"
+level = "hard"
+stage = "many-threads"
+order = 5
+status = "ready"
+crates = ["crossbeam"]
+tags = ["work stealing", "crossbeam::deque", "thread-local", "fairness"]
+teaches = [
+  "The queue layout of a work-stealing scheduler: a queue per worker, a shared queue and stealers.",
+  "A thread-local worker context lets `schedule` push to the caller's own queue without a parameter.",
+  "A periodic look at the shared queue keeps outside work from starving.",
+  "The identity of the pool matters when a thread belongs to a different one.",
+]
+follow_up = "1) Why 61, and what changes if it is 1 or 1000000? Where does tokio use the same number? 2) tokio keeps a LIFO slot for the task a worker woke last. What does it buy and what can it starve? 3) Your thread-local holds the queue itself. Why can't the queue live in the shared `Pool`?"
+related = ["C11", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "The thread needs to know which worker it is right now, and `schedule` has to read that without being told. Where can a thread keep something like that?"
+
+[[hints]]
+kind = "rust"
+text = "`crossbeam::deque::Worker` is not `Sync`, so only one thread can push to it: move it into a thread-local while entered and back on drop. Use `steal_batch_and_pop`, and loop on `Steal::Retry`."
+
+[[hints]]
+kind = "edge"
+text = "Guards of two pools can be nested and dropped in either order. And which counter decides the 61st look: calls, or tasks taken?"
+
+[solution]
+explanation = "Each worker owns a FIFO deque whose stealer lives in the shared pool beside an injector. Entering moves the deque into a thread-local stack; `schedule` pushes there only when the innermost entry belongs to the same pool. `next_task` takes from its own deque, then the injector, then the other stealers, retrying on `Retry`, and every 61st call asks the injector first."
+time = "O(workers) per failed look, O(1) otherwise"
+space = "O(queued tasks)"

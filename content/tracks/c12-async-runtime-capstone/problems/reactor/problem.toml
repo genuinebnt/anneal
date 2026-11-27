@@ -1,0 +1,34 @@
+slug = "reactor"
+title = "Capstone 7: a reactor and async I/O"
+mode = "write"
+level = "hard"
+stage = "many-threads"
+order = 7
+status = "ready"
+crates = ["crossbeam"]
+tags = ["reactor", "edge-triggered", "async I/O", "mio-style poller"]
+teaches = [
+  "A reactor thread maps each event's token to the wakers that wait for it, one set per direction.",
+  "With edge-triggered events you try first, wait only after `WouldBlock`, and check the event count after registering.",
+  "Async `read_exact` and `write_all` are loops over single non-blocking attempts, and only some of them are cancel safe.",
+  "A reactor that goes away must release its waiters, or their tasks wait for ever.",
+]
+follow_up = "1) With real mio, what replaces `sim`, and how do you learn that a non-blocking `connect` finished? 2) Why is `write_all` not cancel safe, and what would you build for use inside `select`? 3) tokio runs its I/O driver on the worker threads instead of its own thread. What does that save and cost?"
+related = ["C11", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "For each token keep two small meeting points, one for reading and one for writing. The thread only looks up the token and signals the right ones; all the care is in the polling side."
+
+[[hints]]
+kind = "rust"
+text = "It is the shape of the preparation part about news that is only told once, with a list of wakers. `std::future::poll_fn` turns `poll_read_with` into `read`."
+
+[[hints]]
+kind = "edge"
+text = "Three moments can leave a task asleep for ever. An event may land between the attempt and the registration. A second task may wait in the same direction. The reactor may go away while someone waits."
+
+[solution]
+explanation = "The reactor keeps a map from token to a pair of directions, each an event counter and a list of wakers; its thread bumps the counter and wakes. A poll reads the counter, tries the operation, registers on `WouldBlock`, then checks the stop flag and the counter again. Drop stops the thread and then signals every direction, so waiters wake up and see the flag."
+time = "O(1) per event plus the woken tasks"
+space = "O(registered sources + waiting tasks)"
