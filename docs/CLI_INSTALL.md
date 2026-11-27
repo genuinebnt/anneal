@@ -53,7 +53,7 @@ without running the installer again:
   compares it with the hash of the running binary and, if they differ, downloads `/downloads/anneal-<target>` next to the binary,
   checks size, hash and `--version`, and renames it over the old one. `--check` only reports. The app is the one you signed in to, or `--from`.
 - **`anneal course update [--from <url>] [--offline]`** first asks `GET /courses-bundle/<course>` (ETag = the bundle's fingerprint) for the
-  course's learner-facing files (`course.toml`, `lectures.toml`, `modules/`, `template/`; never `reference/`), extracts them under
+  course's learner-facing files (`course.toml`, `lectures.toml`, `concepts/`, `modules/`, `template/`; never `reference/`), extracts them under
   `~/.cache/anneal/bundles/`, and updates your repo from those: new stages, tests and stubs arrive with no new binary. A given file you
   did not touch is refreshed; one you edited stays and the new version lands beside it as `<file>.new`. With no network, no sign-in or
   `--offline` it uses the files built into the binary. A bundle in a newer format than the binary reads (`X-Anneal-Bundle-Format`) is
@@ -80,5 +80,15 @@ Screens are pure functions returning text, so they are unit-tested; colour follo
 run (kept in `.git/anneal-last-run.json`, never committed or reported); a failing `test` names the first test of the file still to fix and
 the hint command; a pass draws a completion box (module box, trophy on the last stage); `status` shows a one-line roadmap of the modules
 (● done, ◐ begun, ○ not yet); `init` and `anneal course guide` print the logo and the one-screen guide.
+
+The concept articles (`courses/<id>/concepts/`) travel with the stage definitions into `.anneal/course/concepts` (and in the built-in
+copy and the update bundle). After the banner, `show` names the stage's concepts (required ones marked); `anneal course concept <id>` reads
+one (drawings become their caption; an unknown id lists the close ones) and `anneal course concepts [stage]` lists them with titles. A repo
+made before this has none until `anneal course update`.
+
+`anneal course show --hint N` works offline: with a session the app reveals the hint and records that the stage was helped, as before;
+without one, or when the app cannot be reached, the hint is read from `.anneal/course` and a `{"kind":"hint",...}` line is queued in
+`.anneal/outbox.jsonl` beside the queued runs (lines with no `kind` are runs). `anneal course sync` and the next reported run send the
+queued hint opens first, and hold back runs while one is still waiting, so a stage passed after an offline hint still counts as helped.
 
 A run that hangs is stopped (180 s for a stage, 300 s for the earlier stages' regression run). What the test binary had already printed is kept: finished tests show their results, and each test that never finished fails with "Time limit exceeded"; the web stage page then says "time limit exceeded" instead of "did not run". Stage test files that wrap their tests in `within(60 s)` (1g, 2b, 2c) get the same message from inside, per test, after 60 s.

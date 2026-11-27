@@ -99,6 +99,19 @@ pub enum CourseCmd {
         #[arg(long)]
         answers: bool,
     },
+    /// Read a concept article (an idea the stages build on), formatted for the terminal and paged like `show`.
+    Concept {
+        /// A concept id, e.g. buffer-pool-anatomy (`anneal course concepts` lists them).
+        id: String,
+        /// Print everything at once instead of through a pager.
+        #[arg(long)]
+        no_pager: bool,
+    },
+    /// List a stage's concept articles with their titles (required first, then optional), or every concept article with no stage.
+    Concepts {
+        /// A stage id, e.g. 1a-01.
+        stage: Option<String>,
+    },
     /// Run a stage's tests (default: the current stage, then the earlier stages as a regression check).
     Test {
         /// A stage id, e.g. 1a-03.
@@ -276,6 +289,12 @@ struct StageToml {
     /// A boss stage may pass before it starts: it is a milestone, not new code.
     #[serde(default)]
     retest: bool,
+    /// Concept articles (`concepts/<id>.md`) the stage needs.
+    #[serde(default)]
+    concepts: Vec<String>,
+    /// Concept articles worth reading beyond what the stage needs.
+    #[serde(default)]
+    concepts_optional: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -852,6 +871,8 @@ pub fn run(cmd: CourseCmd) -> anyhow::Result<ExitCode> {
             done
         }
         CourseCmd::Show { stage, hint, no_pager, answers } => show(stage.as_deref(), hint, no_pager, answers),
+        CourseCmd::Concept { id, no_pager } => concept_command(&id, no_pager),
+        CourseCmd::Concepts { stage } => concepts_command(stage.as_deref()),
         CourseCmd::Test { stage, all, only, verbose, filter, watch } => {
             let done = test_command(stage.as_deref(), TestOpts { all, only, verbose, hook: false }, filter.as_deref(), watch);
             if !watch {
@@ -918,6 +939,10 @@ fn copy_definition(root: &Path, defs: &Path, planned: &[String]) -> anyhow::Resu
         fs::copy(root.join("lectures.toml"), defs.join("lectures.toml"))?;
     }
     copy_dir(&root.join("modules"), &defs.join("modules"))?;
+    // the concept articles the stages point to, read with `anneal course concept`
+    if root.join("concepts").is_dir() {
+        copy_dir(&root.join("concepts"), &defs.join("concepts"))?;
+    }
     for dir in sorted_dirs(&defs.join("modules"))? {
         let module: ModuleToml = read_toml(&dir.join("module.toml"))?;
         if planned.contains(&module.code) {
@@ -1869,6 +1894,9 @@ fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_
     let (body, hints) = render::split_hints(&s.readme);
     let (color, width) = (term::color_on(), term::text_width());
     let mut text = format!("{}\n\n", crate::ui::stage_banner(&stage_info(course, progress, s)));
+    if let Some(line) = concepts_line(s, width, color) {
+        text.push_str(&line);
+    }
     let files = stage_files(repo, &s.def.id);
     if !files.is_empty() {
         let list = files.iter().map(|(f, n)| format!("  {f}  ({n} place{})", if *n == 1 { "" } else { "s" })).collect::<Vec<_>>().join("\n");
@@ -1892,6 +1920,163 @@ fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_
         text.push_str(&format!("\n{} {titles}\n{}\n", term::bold("Hints:"), term::dim(&format!("open one with `anneal course show {} --hint 1`; the website then counts the stage as passed with help once it passes", s.def.id))));
     }
     term::page(&text, no_pager);
+}
+
+/// The stage's concept articles in one short paragraph after the banner: the required ones first and marked, then the command that opens
+/// one. `None` when the stage names none.
+fn concepts_line(s: &Stage, width: usize, color: bool) -> Option<String> {
+    if s.def.concepts.is_empty() && s.def.concepts_optional.is_empty() {
+        return None;
+    }
+    let ids: Vec<String> = s.def.concepts.iter().map(|c| format!("{c} (required)")).chain(s.def.concepts_optional.iter().cloned()).collect();
+    let line = render::render_page(&format!("**Concepts:** {}\n", ids.join(", ")), width, color, &s.def.id, false);
+    Some(format!("{}{}\n\n", line, term::dim(&format!("read one with `anneal course concept <id>`; `anneal course concepts {}` lists their titles", s.def.id))))
+}
+
+/// A concept article: a `---` header giving title, summary and minutes, then markdown.
+#[derive(Debug)]
+struct ConceptDoc {
+    title: String,
+    summary: String,
+    minutes: Option<u32>,
+    body: String,
+}
+
+fn parse_concept(id: &str, text: &str) -> ConceptDoc {
+    let (head, body) = text.strip_prefix("---\n").and_then(|r| r.split_once("\n---\n")).unwrap_or(("", text));
+    let field = |k: &str| head.lines().find_map(|l| l.strip_prefix(&format!("{k}:")).map(|v| v.trim().trim_matches('"').to_owned()));
+    ConceptDoc { title: field("title").unwrap_or_else(|| id.to_owned()), summary: field("summary").unwrap_or_default(), minutes: field("minutes").and_then(|m| m.parse().ok()), body: body.to_owned() }
+}
+
+/// The learner's copy of the course's concept articles.
+fn concepts_dir(repo: &Path) -> PathBuf {
+    repo.join(STATE_DIR).join("course").join("concepts")
+}
+
+/// The ids of the concept articles in `dir`, sorted.
+fn concept_ids(dir: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "md")).filter_map(|p| Some(p.file_stem()?.to_str()?.to_owned())).collect())
+        .unwrap_or_default();
+    ids.sort();
+    ids
+}
+
+/// The article `id` of `dir`; `None` when there is none (only ids that are files of `dir` are read).
+fn load_concept(dir: &Path, ids: &[String], id: &str) -> Option<ConceptDoc> {
+    let id = ids.iter().find(|c| *c == id)?;
+    fs::read_to_string(dir.join(format!("{id}.md"))).ok().map(|t| parse_concept(id, &t))
+}
+
+/// Levenshtein distance, by characters.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (row[j + 1] + 1).min(row[j] + 1).min(diag + usize::from(ca != *cb));
+            diag = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+/// The ids closest to a mistyped `want`, best first, at most five: those sharing a word with it (`buffer` finds every `buffer-...`),
+/// then those a few typos away.
+fn close_matches<'a>(want: &str, ids: &'a [String]) -> Vec<&'a str> {
+    let want = want.to_ascii_lowercase();
+    let words: Vec<&str> = want.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| w.len() > 2).collect();
+    let mut scored: Vec<(usize, usize, &str)> = ids
+        .iter()
+        .filter_map(|id| {
+            let shared = words.iter().filter(|w| id.split('-').any(|part| part.starts_with(**w) || (part.len() > 3 && w.starts_with(part)))).count();
+            let d = edit_distance(&want, id);
+            (shared > 0 || d <= want.chars().count().max(3) / 3).then_some((shared, d, id.as_str()))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    scored.into_iter().take(5).map(|(.., id)| id).collect()
+}
+
+/// `anneal course concept <id>` as text: the article rendered for the terminal, or an error naming the closest ids.
+fn concept_page(dir: &Path, id: &str, width: usize, color: bool) -> anyhow::Result<String> {
+    let ids = concept_ids(dir);
+    if ids.is_empty() {
+        bail!("this repo's copy of the course has no concept articles yet: `anneal course update` brings them in");
+    }
+    let Some(doc) = load_concept(dir, &ids, id) else {
+        let close = close_matches(id, &ids);
+        if close.is_empty() {
+            bail!("no concept {id:?}; `anneal course concepts` lists them all");
+        }
+        bail!("no concept {id:?}. Did you mean\n{}\n(`anneal course concepts` lists them all)", close.iter().map(|c| format!("  {c}")).collect::<Vec<_>>().join("\n"));
+    };
+    let about = match doc.minutes {
+        Some(m) => format!("concept {id} · {m} min read"),
+        None => format!("concept {id}"),
+    };
+    let mut md = String::new();
+    if !doc.summary.is_empty() {
+        md.push_str(&format!("*{}*\n\n", doc.summary));
+    }
+    md.push_str(&doc.body);
+    Ok(format!("{}\n{}\n\n{}", term::bold(&doc.title), term::dim(&about), render::render_page(&md, width, color, id, false)))
+}
+
+fn concept_command(id: &str, no_pager: bool) -> anyhow::Result<ExitCode> {
+    let repo = find_repo()?;
+    let text = concept_page(&concepts_dir(&repo), id, term::text_width(), term::color_on())?;
+    term::page(&text, no_pager);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `anneal course concepts [stage]` as text: the stage's articles (required, then optional) with their titles, or every article.
+fn concepts_list(dir: &Path, stage: Option<&Stage>) -> String {
+    let ids = concept_ids(dir);
+    let title = |id: &str| load_concept(dir, &ids, id).map_or_else(|| "(not in your copy of the course: `anneal course update` brings it in)".to_owned(), |d| d.title);
+    let rows = |list: &[String]| {
+        let w = list.iter().map(String::len).max().unwrap_or(0);
+        list.iter().map(|id| format!("  {id:<w$}  {}\n", title(id))).collect::<String>()
+    };
+    let mut out = String::new();
+    match stage {
+        Some(s) => {
+            out.push_str(&format!("{}\n\n", term::bold(&format!("Stage {} · {}", s.def.id, s.def.title))));
+            if s.def.concepts.is_empty() && s.def.concepts_optional.is_empty() {
+                out.push_str("This stage names no concept articles.\n");
+                return out;
+            }
+            if !s.def.concepts.is_empty() {
+                out.push_str(&format!("{}\n{}", term::bold("Required"), rows(&s.def.concepts)));
+            }
+            if !s.def.concepts_optional.is_empty() {
+                if !s.def.concepts.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&format!("{}\n{}", term::bold("Optional"), rows(&s.def.concepts_optional)));
+            }
+        }
+        None if ids.is_empty() => {
+            out.push_str("This repo's copy of the course has no concept articles yet: `anneal course update` brings them in.\n");
+            return out;
+        }
+        None => {
+            out.push_str(&format!("{}\n\n{}", term::bold(&format!("{} concept articles", ids.len())), rows(&ids)));
+        }
+    }
+    out.push_str(&format!("\n{}\n", term::dim("read one with `anneal course concept <id>`")));
+    out
+}
+
+fn concepts_command(stage: Option<&str>) -> anyhow::Result<ExitCode> {
+    let repo = find_repo()?;
+    let course = learner_course(&repo)?;
+    let s = stage.map(|id| course.stage(id)).transpose()?;
+    term::page(&concepts_list(&concepts_dir(&repo), s), false);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn next() -> anyhow::Result<ExitCode> {
@@ -2647,7 +2832,7 @@ mod learner_screens {
             .iter()
             .enumerate()
             .map(|(i, (id, module, kind))| Stage {
-                def: StageToml { id: (*id).into(), title: format!("title {id}"), kind: (*kind).into(), difficulty: "easy".into(), tests: vec![format!("stages_{module}::s{}", id.replace('-', "_"))], retest: false },
+                def: StageToml { id: (*id).into(), title: format!("title {id}"), kind: (*kind).into(), difficulty: "easy".into(), tests: vec![format!("stages_{module}::s{}", id.replace('-', "_"))], retest: false, concepts: vec![], concepts_optional: vec![] },
                 module: (*module).into(),
                 optional: optional_modules.contains(module) || *kind == "challenge",
                 module_title: format!("module {module}"),
@@ -2763,7 +2948,7 @@ mod learner_screens {
         )
         .unwrap();
         let stage = |tests: &[&str]| Stage {
-            def: StageToml { id: "9z-01".into(), title: "t".into(), kind: "build".into(), difficulty: "easy".into(), tests: tests.iter().map(|t| (*t).to_owned()).collect(), retest: false },
+            def: StageToml { id: "9z-01".into(), title: "t".into(), kind: "build".into(), difficulty: "easy".into(), tests: tests.iter().map(|t| (*t).to_owned()).collect(), retest: false, concepts: vec![], concepts_optional: vec![] },
             module: "9z".into(),
             optional: false,
             module_title: "m".into(),
@@ -2775,6 +2960,101 @@ mod learner_screens {
         assert_eq!(stage_test_names(&dir, &stage(&["stages_9z"])).len(), 3);
         assert!(stage_test_names(&dir, &stage(&["stages_missing"])).is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn concept_fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("anneal-concepts-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("concepts")).unwrap();
+        fs::create_dir_all(root.join("modules/01-a/stages/01-x")).unwrap();
+        fs::create_dir_all(root.join("modules/02-b/stages")).unwrap();
+        fs::create_dir_all(root.join("reference/src")).unwrap();
+        fs::write(root.join("course.toml"), "id = \"t\"\ntitle = \"T\"\nrepo_name = \"t\"\nplanned_modules = [\"2b\"]\n").unwrap();
+        fs::write(root.join("modules/01-a/module.toml"), "code = \"1a\"\ntitle = \"A\"\n").unwrap();
+        fs::write(root.join("modules/02-b/module.toml"), "code = \"2b\"\ntitle = \"B\"\n").unwrap();
+        fs::write(
+            root.join("modules/01-a/stages/01-x/stage.toml"),
+            "id = \"1a-01\"\ntitle = \"X\"\nkind = \"build\"\ndifficulty = \"easy\"\ntests = [\"stages_1a\"]\nconcepts = [\"buffer-pool-anatomy\"]\nconcepts_optional = [\"page-layout\", \"gone-missing\"]\n",
+        )
+        .unwrap();
+        fs::write(root.join("modules/01-a/stages/01-x/stage.md"), "Do it.\n").unwrap();
+        fs::write(root.join("reference/src/lib.rs"), "// the solution\n").unwrap();
+        fs::write(
+            root.join("concepts/buffer-pool-anatomy.md"),
+            "---\ntitle: The buffer pool\nsummary: Frames, pins and the page table.\nminutes: 7\n---\nA pool of **frames**.\n\n## Pins\n\nA pinned page stays.\n\n```svg\ncaption: Frames in a row.\n<svg></svg>\n```\n",
+        )
+        .unwrap();
+        fs::write(root.join("concepts/page-layout.md"), "---\ntitle: Page layout\nsummary: Slots.\nminutes: 4\n---\nSlots grow from the front.\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn the_concept_articles_arrive_with_the_course_definition() {
+        let root = concept_fixture("copy");
+        let defs = root.join("learner/.anneal/course");
+        copy_definition(&root, &defs, &["2b".to_owned()]).unwrap();
+        assert_eq!(concept_ids(&defs.join("concepts")), ["buffer-pool-anatomy", "page-layout"]);
+        assert!(!defs.join("modules/02-b").exists(), "a planned module still stays out");
+        assert!(!defs.join("reference").exists(), "the reference never reaches the learner");
+        let course = Course::load(&defs).unwrap();
+        let s = course.stage("1a-01").unwrap();
+        assert_eq!((s.def.concepts.as_slice(), s.def.concepts_optional.as_slice()), (&["buffer-pool-anatomy".to_owned()][..], &["page-layout".to_owned(), "gone-missing".to_owned()][..]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_concept_article_renders_for_the_terminal() {
+        let root = concept_fixture("page");
+        let page = concept_page(&root.join("concepts"), "buffer-pool-anatomy", 80, false).unwrap();
+        assert!(page.starts_with("The buffer pool\nconcept buffer-pool-anatomy · 7 min read\n"), "{page}");
+        assert!(page.contains("Frames, pins and the page table.") && page.contains("A pool of frames.") && page.contains("Pins"), "{page}");
+        assert!(page.contains("Figure: Frames in a row.") && !page.contains("<svg"), "{page}");
+        assert!(!page.contains("title:") && !page.contains("---"), "the header is not printed as text: {page}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unknown_concept_names_the_close_ones() {
+        let root = concept_fixture("unknown");
+        let dir = root.join("concepts");
+        let err = concept_page(&dir, "buffer-pool", 80, false).unwrap_err().to_string();
+        assert!(err.contains("no concept \"buffer-pool\"") && err.contains("  buffer-pool-anatomy"), "{err}");
+        let err = concept_page(&dir, "page-layuot", 80, false).unwrap_err().to_string();
+        assert!(err.contains("  page-layout"), "a typo is found: {err}");
+        let err = concept_page(&dir, "zzz", 80, false).unwrap_err().to_string();
+        assert!(err.contains("no concept \"zzz\"; `anneal course concepts` lists them all"), "{err}");
+        let err = concept_page(&dir, "../course", 80, false).unwrap_err().to_string();
+        assert!(err.starts_with("no concept"), "only the articles themselves are read: {err}");
+        let err = concept_page(&root.join("nowhere"), "page-layout", 80, false).unwrap_err().to_string();
+        assert!(err.contains("`anneal course update`"), "an older copy without articles says how to get them: {err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stage_lists_its_concepts_required_first() {
+        let root = concept_fixture("list");
+        let course = Course::load(&root).unwrap();
+        let s = course.stage("1a-01").unwrap();
+        let list = concepts_list(&root.join("concepts"), Some(s));
+        let (req, opt) = (list.find("Required").unwrap(), list.find("Optional").unwrap());
+        assert!(req < list.find("buffer-pool-anatomy  The buffer pool").unwrap() && opt < list.find("page-layout ").unwrap() && req < opt, "{list}");
+        assert!(list.contains("gone-missing") && list.contains("`anneal course update`"), "a missing article says how to get it: {list}");
+        let all = concepts_list(&root.join("concepts"), None);
+        assert!(all.starts_with("2 concept articles") && all.contains("page-layout          Page layout"), "{all}");
+        let line = concepts_line(s, 100, false).unwrap();
+        assert!(line.starts_with("Concepts: buffer-pool-anatomy (required), page-layout, gone-missing\n"), "{line}");
+        assert!(line.contains("anneal course concept <id>"), "{line}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_concept_article_of_the_course_renders_without_its_drawings_code() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../courses/bustub/concepts");
+        let ids = concept_ids(&dir);
+        for id in &ids {
+            let page = concept_page(&dir, id, 80, false).unwrap();
+            assert!(!page.contains("<svg") && !page.contains("caption:"), "{id}");
+        }
     }
 
     #[test]

@@ -352,7 +352,7 @@ pub fn sync(repo: &Path) -> anyhow::Result<()> {
     if f.hints > 0 {
         sent.push(plural(f.hints, "hint opened offline", "hints opened offline"));
     }
-    println!("Sent {} of {waiting} waiting to {}.", sent.join(" and "), s.url);
+    println!("Sent {} of {waiting} waiting to {}: {}.", f.runs + f.hints, s.url, sent.join(" and "));
     if f.refused > 0 {
         println!("{} the server refused and dropped (an unknown stage, for example).", f.refused);
     }

@@ -40,13 +40,30 @@ fn render_checks(md: &str, width: usize, color: bool, answers: bool, stage: &str
     format!("{body}\n{heading}\n{}", r2.finish())
 }
 
-/// Rewrites what only the website draws: `^[a sidenote]` becomes a numbered marker `[n]` (the notes are returned in order), and a
-/// `> [!KIND] Title` opening of a quote becomes a bold lead. Code fences are left alone.
+/// Rewrites what only the website draws: `^[a sidenote]` becomes a numbered marker `[n]` (the notes are returned in order), a
+/// `> [!KIND] Title` opening of a quote becomes a bold lead, and a drawing (a ```` ```svg ```` block) becomes its `caption:` line.
+/// Other code fences are left alone.
 fn prepare(md: &str) -> (String, Vec<String>) {
     let mut out = String::with_capacity(md.len());
     let mut notes = Vec::new();
     let mut fence = false;
+    // inside a drawing: its caption, once read
+    let mut figure: Option<String> = None;
     for line in md.split_inclusive('\n') {
+        if let Some(caption) = figure.as_mut() {
+            if line.trim_start().starts_with("```") {
+                let lead = if caption.is_empty() { String::new() } else { format!("{caption} ") };
+                out.push_str(&format!("> **Figure:** {lead}*(drawn on the website)*\n\n"));
+                figure = None;
+            } else if let Some(c) = line.trim_start().strip_prefix("caption:") {
+                *caption = c.trim().to_owned();
+            }
+            continue;
+        }
+        if !fence && line.trim() == "```svg" {
+            figure = Some(String::new());
+            continue;
+        }
         if line.trim_start().starts_with("```") || line.trim_start().starts_with("> ```") {
             fence = !fence;
             out.push_str(line);
@@ -655,6 +672,15 @@ mod tests {
 
     fn render(md: &str, width: usize, color: bool) -> String {
         render_page(md, width, color, "1a-01", false)
+    }
+
+    #[test]
+    fn a_drawing_becomes_its_caption() {
+        let md = "Before.\n\n```svg\ncaption: A tree of pages.\n<svg viewBox=\"0 0 10 10\"><text>x</text></svg>\n```\nAfter.\n\n```rust\nlet svg = 1;\n```\n";
+        let out = plain(md, 80);
+        assert!(out.contains("Figure: A tree of pages. (drawn on the website)"), "{out}");
+        assert!(!out.contains("<svg") && !out.contains("viewBox"), "{out}");
+        assert!(out.contains("After.") && out.contains("let svg = 1;"), "{out}");
     }
 
     #[test]
