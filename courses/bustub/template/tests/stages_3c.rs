@@ -139,13 +139,23 @@ fn s3c_01_a_refused_tuple_leaves_a_heap_with_tuples_as_it_was() {
         heap.insert_tuple(&meta(false), &bytes_tuple(2, BUSTUB_PAGE_SIZE)).is_err(),
         "a tuple that fits no page is an error, also after other tuples"
     );
+    let next = heap.insert_tuple(&meta(false), &bytes_tuple(3, 100)).unwrap();
+    assert_eq!(next.page_id(), first.page_id(), "the refused tuple did not link a new page: the next tuple still goes into the first page");
+    assert_eq!(raw_get(&bpm, next).1.get_length() as usize, 100, "and reads back by its rid");
+}
+
+#[test]
+fn s3c_02_a_scan_after_a_refused_insert_sees_exactly_the_tuples_that_were_inserted() {
+    let bpm = bpm(10);
+    let heap = TableHeap::new(&bpm);
+    heap.insert_tuple(&meta(false), &bytes_tuple(1, 100)).unwrap();
+    assert!(heap.insert_tuple(&meta(false), &bytes_tuple(2, BUSTUB_PAGE_SIZE)).is_err(), "a tuple that fits no page is an error");
     assert_eq!(
         heap.make_iterator().count(),
         1,
         "a scan after the refused insert sees exactly the tuple that was there (no empty page left behind)"
     );
-    let next = heap.insert_tuple(&meta(false), &bytes_tuple(3, 100)).unwrap();
-    assert_eq!(next.page_id(), first.page_id(), "the refused tuple did not move the heap on to a new page");
+    heap.insert_tuple(&meta(false), &bytes_tuple(3, 100)).unwrap();
     assert_eq!(heap.make_iterator().count(), 2, "the heap goes on working after the refused insert");
 }
 
