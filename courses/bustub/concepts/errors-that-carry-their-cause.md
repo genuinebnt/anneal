@@ -209,7 +209,7 @@ fn nothing_is_built_when_there_is_no_error() {
 
 ### In the exercises
 
-- **3k-01 to 3k-05:** the whole module builds a `DbError`: keep the cause (01), convert every layer's error (02), add context and walk the chain (03), derive a code and a client-safe message (04), and check it across threads and random stacks of context (05).
+- **3k-01 to 3k-03:** the whole module builds a `DbError`: keep the cause, convert every layer's error, add context and walk the chain (01), derive a code and a client-safe message (02), and check it across threads and random stacks of context (03).
 
 ### Where it is used
 

@@ -49,6 +49,9 @@ pushed. `git log origin/master..review/bustub-assessment` lists it.
   3d is now 3d-01 "Columns, comparisons and arithmetic" (old 01 + 02), 3d-02 "AND, OR and functions by name" (old 03 + the
   function factory of 06, whose design choice is a match or a registry), the lexer 3d-03, the parser 3d-04 and the boss 3d-05; the
   three end-to-end SQL tests of old 3d-06 moved to the boss, which is the first stage where the lexer and parser exist.
+  3k is now 3k-01 "One error type and its chain of causes" (old 01 + 02 + 03), 3k-02 codes (old 04) and the boss 3k-03. The
+  `Display` of the seven error enums that only optional challenges introduce is given; the learner writes `DbError`, the lexer
+  error's message (what and where), the eight `From`s (one macro) and the context chain.
 
 ## Cookbook pages: one frame (local, not released; 2026-11-27)
 

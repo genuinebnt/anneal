@@ -1,0 +1,8 @@
+id = "3k-01"
+title = "One error type and its chain of causes"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_3k::s3k_01"]
+learn = ["an error type that keeps its cause as a value, not as text", "Display for one layer and source() for the chain", "why a real Error needs one From per layer, and a macro for the same shape", "adding a layer that says what the caller was doing, and walking the chain to the root", "Send + Sync + 'static as a property tests can check"]
+concepts = ["errors-that-carry-their-cause"]
+concepts_optional = ["designing-error-types", "errors-as-values-with-result", "iterators-and-closures", "send-and-sync", "smart-pointers-box-rc-arc", "trait-objects-and-the-disk-seam", "generics-and-static-dispatch"]

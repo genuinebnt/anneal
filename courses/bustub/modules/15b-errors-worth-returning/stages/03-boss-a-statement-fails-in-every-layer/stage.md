@@ -69,7 +69,7 @@ Optional. Predict first, then run.
 
 ## Other designs
 
-None for this stage. The *Other designs* sections of 3k-01 to 3k-04 list the alternatives.
+None for this stage. The *Other designs* sections of 3k-01 and 3k-02 list the alternatives.
 
 ## In BusTub
 
