@@ -1947,11 +1947,13 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
     if filter.is_some() {
         return Ok(if ok { ExitCode::SUCCESS } else { failure_code(opts, cfg.block_on_fail, report.tests.is_empty()) });
     }
-    {
-        let tests: Vec<(String, bool, String)> = report.tests.iter().map(|t| (t.name.clone(), t.ok, t.detail.lines().filter(|l| !l.trim().is_empty()).take(6).collect::<Vec<_>>().join("\n"))).collect();
-        course_sync::report_run(&repo, &course.meta.id, &target.def.id, &tests, report.problem.as_deref(), &head_commit(&repo), started.elapsed().as_millis() as u64);
-    }
+    // The web app marks the stage solved on the first passing report, so a pass is reported only after the regression check below.
+    let stage_tests: Vec<(String, bool, String)> = report.tests.iter().map(|t| (t.name.clone(), t.ok, report_detail(&t.detail))).collect();
+    let report_to_web = |tests: &[(String, bool, String)], problem: Option<&str>| {
+        course_sync::report_run(&repo, &course.meta.id, &target.def.id, tests, problem, &head_commit(&repo), started.elapsed().as_millis() as u64);
+    };
     if !ok {
+        report_to_web(&stage_tests, report.problem.as_deref());
         println!("\n{} `anneal course show {}` has the task and hints; `-v` shows every failure in full.", red("Not yet."), target.def.id);
         let failing: Vec<String> = report.tests.iter().filter(|t| !t.ok).map(|t| short_test_name(&t.name)).collect();
         // the first one in the order of the test file: the stage builds up, so that is the one to fix first
@@ -1981,17 +1983,23 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         let broken: Vec<&TestOutcome> = reg.tests.iter().filter(|t| !t.ok).collect();
         if let Some(p) = &reg.problem {
             println!("\nRegression run failed: {}", crate::term::tty_text(p));
+            report_to_web(&stage_tests, Some(&format!("This stage's tests pass, but the check of the stages you already passed did not run.\n{p}")));
             return Ok(failure_code(opts, cfg.block_on_fail, true));
         }
         if !broken.is_empty() {
             println!("\nThis stage passes, but you broke earlier stages:");
-            for t in broken {
+            for t in &broken {
                 println!("  {} {}", red("✗"), t.name);
             }
+            // reported as a run that does not pass: the broken earlier tests are its failures
+            let mut tests = stage_tests.clone();
+            tests.extend(broken.iter().map(|t| (t.name.clone(), false, format!("A test of a stage you already passed: this change broke it.\n{}", report_detail(&t.detail)))));
+            report_to_web(&tests, None);
             return Ok(failure_code(opts, cfg.block_on_fail, false));
         }
         println!("{} earlier tests still pass.", reg.tests.len());
     }
+    report_to_web(&stage_tests, None);
     if !progress.passed.contains_key(&target.def.id) {
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         progress.passed.insert(target.def.id.clone(), Passed { at, commit: head_commit(&repo), ms });
@@ -2020,6 +2028,33 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         println!("\n{}", green(&format!("✓ Stage {} passes (already recorded).", target.def.id)));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// How many lines of a failure to show when it is shortened: the first few, or, for a property test, through the end of its "minimal
+/// failing input" block (the case to debug), at most `MAX_FAILURE_LINES`.
+fn shown_lines<S: AsRef<str>>(lines: &[S]) -> usize {
+    const FIRST: usize = 6;
+    let Some(start) = lines.iter().position(|l| l.as_ref().contains("minimal failing input")) else { return lines.len().min(FIRST) };
+    // proptest ends the block with its counters (`successes: 3`, `local rejects: 0`, ...): stop before them
+    let end = lines[start + 1..].iter().position(|l| l.as_ref().trim_start().starts_with("successes:")).map_or(lines.len(), |i| start + 1 + i);
+    end.max(FIRST).min(lines.len()).min(MAX_FAILURE_LINES)
+}
+
+const MAX_FAILURE_LINES: usize = 60;
+
+/// The failure text sent with a run report: the non-empty lines `shown_lines` keeps, within the size the web app accepts per test.
+fn report_detail(detail: &str) -> String {
+    let lines: Vec<&str> = detail.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut out = lines[..shown_lines(&lines)].join("\n");
+    if out.len() > 3_900 {
+        let mut cut = 3_900;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
+        out.push_str("\n…");
+    }
+    out
 }
 
 /// The tests of one run: the passing ones a line each, the failing ones grouped by their message (a stage whose stub panics with the same
@@ -2051,7 +2086,7 @@ fn print_report(r: &RunReport, verbose: bool) {
             names.iter().for_each(|n| println!("      {}", dim(n)));
         }
         if verbose || k < 4 {
-            let shown = if verbose { lines.len() } else { 6 };
+            let shown = if verbose { lines.len() } else { shown_lines(lines) };
             lines.iter().take(shown).for_each(|l| println!("        {l}"));
         } else {
             hidden += 1;
@@ -2486,6 +2521,25 @@ mod learner_screens {
         // not a stage prefix: left alone
         assert_eq!(readable_test_name("plain_name_here"), "plain name here");
         assert_eq!(readable_test_name("short"), "short");
+    }
+
+    #[test]
+    fn a_property_test_failure_keeps_its_whole_minimal_failing_input() {
+        let mut detail = vec!["thread 's1d_03_model' panicked at tests/stages_1d.rs:40:5:".to_owned(), "Test failed: the victims differ.".to_owned(), "minimal failing input: ops = [".to_owned()];
+        detail.extend((0..12).map(|i| format!("    Access({i}),")));
+        detail.extend(["]".to_owned(), "\tsuccesses: 3".to_owned(), "\tlocal rejects: 0".to_owned(), "\tglobal rejects: 0".to_owned()]);
+        let n = shown_lines(&detail);
+        assert_eq!(detail[n - 1], "]", "everything through the end of the input, and not the counters: {:?}", &detail[..n]);
+        let plain: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        assert_eq!(shown_lines(&plain), 6, "an ordinary failure is shortened to its first lines");
+        assert_eq!(shown_lines(&plain[..3]), 3);
+        let mut huge = vec!["minimal failing input: v = [".to_owned()];
+        huge.extend((0..500).map(|i| format!("    {i},")));
+        assert_eq!(shown_lines(&huge), MAX_FAILURE_LINES, "a huge input is bounded");
+        let sent = report_detail(&detail.join("\n"));
+        assert!(sent.contains("Access(11)") && !sent.contains("successes"), "the report carries the input too: {sent}");
+        let wide = report_detail(&format!("minimal failing input: s = \"{}\"", "é".repeat(5_000)));
+        assert!(wide.len() < 4_000, "within what the web app accepts per test");
     }
 
     #[test]
