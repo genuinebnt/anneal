@@ -79,17 +79,19 @@ pub fn key_has_null(key: &Tuple, key_schema: &Schema) -> bool {
 }
 
 /// The error of a statement that would give a second live row a key the unique index `index_name` already holds. It is an `Invalid`
-/// error, so it reaches the caller with its message instead of only failing the statement.
+/// error, so it reaches the caller with its message instead of only failing the statement, and its SQLSTATE is `23505`.
 pub fn unique_violation(index_name: &str) -> Exception {
     Exception::new(ExceptionType::Invalid, format!("duplicate key value violates unique constraint \"{index_name}\""))
+        .with_sqlstate("23505")
 }
 
-/// The error of a statement that would store a NULL in column `column` of the primary key of `table`.
+/// The error of a statement that would store a NULL in column `column` of the primary key of `table`. Its SQLSTATE is `23502`.
 pub fn not_null_violation(column: &str, table: &str) -> Exception {
     Exception::new(
         ExceptionType::Invalid,
         format!("null value in column \"{column}\" of relation \"{table}\" violates not-null constraint"),
     )
+    .with_sqlstate("23502")
 }
 
 /// An ordered set of entries `(key, rid)`, ordered by key, then by rid.

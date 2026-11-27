@@ -189,7 +189,7 @@ impl DbError {
     ///
     /// It comes from the innermost cause, so adding context never changes it.
     pub fn code(&self) -> &'static str {
-        todo!("3k-02: look at the innermost cause and answer from the table on the stage page; anything not listed is XX000")
+        todo!("3k-02: look at the innermost cause and answer from the table on the stage page (an exception's own sqlstate first); anything not listed is XX000")
     }
 
     /// What a client of the database may be shown: the code and, for the user's own mistakes, this error's message. Failures of the

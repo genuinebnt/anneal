@@ -265,6 +265,9 @@ impl DbError {
         // @begin 3k-02
         let root = self.root_cause();
         if let Some(e) = root.downcast_ref::<Exception>() {
+            if let Some(code) = e.sqlstate {
+                return code;
+            }
             return match e.kind {
                 ExceptionType::Invalid => "22023",
                 ExceptionType::OutOfRange | ExceptionType::Decimal => "22003",
@@ -310,7 +313,7 @@ impl DbError {
             return "XX001";
         }
         "XX000"
-        //~ todo!("3k-02: look at the innermost cause and answer from the table on the stage page; anything not listed is XX000")
+        //~ todo!("3k-02: look at the innermost cause and answer from the table on the stage page (an exception's own sqlstate first); anything not listed is XX000")
         // @end
     }
 
