@@ -9,9 +9,16 @@ The heart of the set. **Insert** probes forward from the home bucket carrying a 
 
 ## The task
 
-- `insert(&key) -> bool`: write lock; if an equal key is already there, replace it and return `true`; if the table is **full** (`size == capacity`) return `false` **before touching anything**; otherwise probe forward from the key's home bucket carrying `(key, its home)`: an empty bucket takes the carried key (size + 1, `true`); a live resident whose probe distance is **smaller** than the carried key's is swapped out (the carried key takes the bucket, the resident becomes the carried key and keeps probing); go on to the next bucket, wrapping.
-- `contains(&key)` (read lock), `get_bucket(&key)`: the bucket that holds the key, or `bucket_count()` if it is absent.
-- the lookup itself: probe from the home bucket for at most `capacity` steps, wrapping: an empty bucket ends the search (a key cannot be beyond one); a live equal key is the answer; tombstones and other keys are probed past.
+In `src/primer/robin_hood_hash_set.rs`:
+
+- **`insert(&key)` returns `true` when the key is added or an equal key was already there** (it is replaced), and **`false` when the table is full of other keys, with nothing changed.**
+- **Keys are placed the Robin Hood way.** Probing forward from its home bucket, wrapping, a key takes the bucket of a resident that is closer to its own home than the key is to its own, and the resident moves on. After inserts alone there is no gap between a key's home and its bucket, and along a run of taken buckets a key is never more than one step further from home than the key before it.
+- **`contains(&key)` is whether the key is in the set; `get_bucket(&key)` is the bucket that holds it, or `bucket_count()` if it is absent.** A lookup ends, with the right answer, in a crowded or full table too, and stays right once removals exist (stage 3).
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `insert(&key) -> bool`: write lock; if an equal key is already there, replace it and return `true`; if the table is **full** (`size == capacity`) return `false` **before touching anything**; otherwise probe forward from the key's home bucket carrying `(key, its home)`: an empty bucket takes the carried key (size + 1, `true`); a live resident whose probe distance is **smaller** than the carried key's is swapped out (the carried key takes the bucket, the resident becomes the carried key and keeps probing); go on to the next bucket, wrapping.
+> - `contains(&key)` (read lock), `get_bucket(&key)`: the bucket that holds the key, or `bucket_count()` if it is absent.
+> - the lookup itself: probe from the home bucket for at most `capacity` steps, wrapping: an empty bucket ends the search (a key cannot be beyond one); a live equal key is the answer; tombstones and other keys are probed past.
 
 The tests: exact scenarios (insert, duplicate, replace, lookup and statistics; strings; a single-bucket table holds one key; a key further from home takes the bucket of a closer one; insert fails only when every bucket is taken; probing wraps around the end; an absent key is reported absent in a crowded table; every key is found after many displacements), and a property: **after inserts alone the table is a proper Robin Hood table**: keys at distinct buckets, no gap between a key's home and its place, and along a run of taken buckets a key is never more than one step further from home than the key before it.
 
@@ -21,20 +28,13 @@ How you probe (an index loop with a modulo, `cycle().skip(home)`), how you carry
 
 ## The Rust toolbox
 
-**`std::mem::replace`.** `let Slot::Live(displaced) = std::mem::replace(&mut slots[b], Slot::Live(carried)) else { unreachable!() };` swaps a bucket's contents and gives you the old one: the Robin Hood swap in one line.
+**`std::mem::replace`.** `let old = std::mem::replace(&mut seats[i], Seat::Taken(guest));` puts a new value in place and hands you the old one by value, with no clone and no moment where the place is empty. A `let Seat::Taken(previous) = old else { unreachable!() };` then takes out the data when you already know the variant.
 
 **A loop with a bounded number of steps.** `for _ in 0..capacity { .. bucket = (bucket + 1) % capacity; }` cannot loop forever on a full table.
 
-**`match` on a reference to the slot.** `match &table.slots[bucket] { Slot::Empty => .., Slot::Live(resident) => .., Slot::Tombstone => .. }` borrows, so decide what to do and only then mutate.
+**`match` on a reference.** `match &seats[i] { Seat::Free => .., Seat::Taken(guest) => .., Seat::Vacated => .. }` borrows the element: decide what to do inside the arm, and mutate `seats[i]` only once the borrow (`guest`) is no longer used.
 
 **Write lock then read lock.** `insert` takes `write()`, `contains` and `get_bucket` take `read()`; a private `find(&table, key)` serves both without locking again.
-
-```rust
-let Slot::Live(displaced) = std::mem::replace(&mut table.slots[bucket], Slot::Live(carried)) else { unreachable!() };
-carried = displaced;
-home = resident_home;
-bucket = (bucket + 1) % self.capacity;
-```
 
 ## Design notes
 
