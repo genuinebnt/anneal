@@ -139,11 +139,17 @@ owner's go-ahead (CLAUDE.md rule), plus a server-side token (`ANNEAL_CLI_TOKEN`,
 courses/bustub/
   course.toml          lectures.toml (CMU lecture catalogue)
   modules/<NN>-<slug>/module.toml          code, title, summary, lectures = [..], bustub = [..], [[resources]] kind/title/url
-  modules/<NN>-<slug>/stages/<NN>-<slug>/stage.toml   id, title, kind, difficulty, tests = ["bin::filter", ...], retest?
+  modules/<NN>-<slug>/stages/<NN>-<slug>/stage.toml   id, title, kind, difficulty, tests = ["bin::filter", ...], retest?, renamed_from?
   modules/<NN>-<slug>/stages/<NN>-<slug>/stage.md
   template/            generated: the repo as it is before stage 1 (committed; what `init` copies)
   reference/           the complete solution with stage markers       <- committed (§8): never embedded in the CLI, never in the image
 ```
+
+**Renaming, moving, splitting or merging a stage** keeps everyone's progress if the new stage lists the ids it replaces:
+`renamed_from = ["2a-02"]` (renamed or moved; each part of a split lists the stage it came from; a merge lists every half). A stage
+renamed again keeps the older ids in one entry, newest first: `renamed_from = [["2b-02", "2a-02"]]`. Nothing is moved: the web app and
+`progress.json` keep the rows under the old ids, and a stage with no state of its own counts as passed when every stage it replaces
+passed. CI (`tools/check-progress-safety.py`) fails a push that drops a stage id, or an old id, without this.
 
 The reference tree is the whole learner repo with the solution written out. What a learner writes is marked:
 

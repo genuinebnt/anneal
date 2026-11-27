@@ -53,7 +53,9 @@ survive any content change. Per-problem progress is keyed by problem id, so thre
 1. **Renames carry history.** A problem lists its earlier ids in `renamed_from`; at startup the API moves every
    row stored under an old id to the current one (`preflight::apply_renames`, idempotent).
 2. **CI** (`tools/check-progress-safety.py`) fails a push that removes a problem id without a `renamed_from`, or
-   edits or deletes an applied migration.
+   edits or deletes an applied migration. Course stages are checked the same way: a stage id (or an id in a stage's
+   `renamed_from`) that disappears must be listed in some stage's `renamed_from`. Course rows are not moved: a stage reads
+   the progress stored under the ids it replaces (`tools/test_check_progress_safety.py` tests the check).
    The same CI step now also fails a *new* migration that can destroy stored data (DROP TABLE or COLUMN, TRUNCATE, DELETE FROM,
    ALTER COLUMN TYPE, an UPDATE with no WHERE) unless it carries a `-- allow-data-loss: <why>` comment. Progress is never lost.
 3. **The deploy** backs up the database, then runs `anneal-api preflight` with the *new* image against the live
