@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anneal_content::{Catalog, Loaded, Mode, Status};
-use anneal_runner::{Outcome, RunResult, Runner, RunnerConfig, Sandbox, Submission, Suite};
+use anneal_runner::{Outcome, RunResult, Runner, RunnerConfig, Sandbox, Submission, Suite, strip_ansi};
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 
@@ -382,7 +382,7 @@ async fn submit(runner: &Runner, c: &Case, code: &str) -> Result<RunResult, anne
 /// The first compiler error or failing test, for a one-line report.
 fn first_problem(r: &RunResult) -> String {
     if let Some(d) = r.diagnostics.iter().find(|d| d.is_error()) {
-        return format!(" · {}", d.rendered.lines().take(3).collect::<Vec<_>>().join(" | "));
+        return format!(" · {}", strip_ansi(&d.rendered).lines().take(3).collect::<Vec<_>>().join(" | "));
     }
     r.tests
         .iter()
@@ -396,7 +396,9 @@ fn first_problem(r: &RunResult) -> String {
 
 fn print_result(r: &RunResult) {
     for d in &r.diagnostics {
-        println!("{}", d.rendered.trim_end());
+        // rustc's colours only where a terminal can show them (never in a pipe or under NO_COLOR)
+        let rendered = if term::color_on() { d.rendered.as_str().into() } else { strip_ansi(&d.rendered) };
+        println!("{}", rendered.trim_end());
     }
     for t in &r.tests {
         let mark = match t.outcome {

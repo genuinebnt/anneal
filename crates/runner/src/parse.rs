@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use crate::ansi::strip_ansi;
 use crate::project::TEST_PREFIX;
 use crate::result::{Check, Diagnostic, Level, Outcome, Span, Suite, TestOutcome};
 
@@ -89,13 +90,14 @@ fn user_span(s: &Value) -> Option<Span> {
 
 /// What to show when cargo failed the build without a compiler error: the end of what it printed.
 pub(crate) fn build_failure(stderr: &str) -> Diagnostic {
-    let killed = ["SIGKILL", "signal: 9", "out of memory", "memory allocation of"].iter().any(|t| stderr.contains(t));
+    let plain = strip_ansi(stderr);
+    let killed = ["SIGKILL", "signal: 9", "out of memory", "memory allocation of"].iter().any(|t| plain.contains(t));
     let message = if killed {
         "the compiler was stopped before it finished, usually because it ran out of memory. Your code may be fine: run it again"
     } else {
         "the build failed, but the compiler reported no error in your code. What cargo printed is below"
     };
-    let lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+    let lines: Vec<&str> = stderr.lines().filter(|l| !strip_ansi(l).trim().is_empty()).collect();
     let tail = lines[lines.len().saturating_sub(30)..].join("\n");
     Diagnostic {
         level: Level::Error,
@@ -144,7 +146,7 @@ fn span(s: &Value) -> Option<Span> {
 /// libtest events don't name their binary, so suites are matched to the
 /// `Running tests/<name>.rs` lines cargo writes to stderr, in order.
 pub(crate) fn tests(stdout: &str, stderr: &str) -> Vec<TestOutcome> {
-    let suites: Vec<Suite> = stderr
+    let suites: Vec<Suite> = strip_ansi(stderr)
         .lines()
         .filter_map(|l| {
             let rest = l.trim_start().strip_prefix("Running ")?;
@@ -221,11 +223,14 @@ fn split_stdout(raw: &str) -> (Option<Check>, Option<String>, String) {
     let mut rest = Vec::new();
     let mut lines = raw.lines().peekable();
     while let Some(line) = lines.next() {
-        if let Some(json) = line.strip_prefix("ANNEAL ") {
+        // Matched on the plain text: a test that printed a colour and no newline puts its escape in front of our line.
+        let plain = strip_ansi(line);
+        if let Some(json) = plain.strip_prefix("ANNEAL ") {
             check = serde_json::from_str::<Check>(json).ok();
-        } else if line.starts_with("thread '") && line.contains("panicked at") {
+        } else if plain.starts_with("thread '") && plain.contains("panicked at") {
             let mut msg = Vec::new();
             while let Some(next) = lines.peek() {
+                let next = strip_ansi(next);
                 if next.starts_with("note: run with `RUST_BACKTRACE")
                     || next.starts_with("stack backtrace:")
                 {
@@ -234,7 +239,7 @@ fn split_stdout(raw: &str) -> (Option<Check>, Option<String>, String) {
                 msg.push(lines.next().unwrap_or_default());
             }
             panic = Some(msg.join("\n").trim().to_owned());
-        } else if !line.starts_with("note: run with `RUST_BACKTRACE") {
+        } else if !plain.starts_with("note: run with `RUST_BACKTRACE") {
             rest.push(line);
         }
     }
@@ -278,6 +283,22 @@ mod tests {
             (t[1].suite, t[1].outcome),
             (Suite::Visible, Outcome::Passed)
         );
+    }
+
+    #[test]
+    fn coloured_cargo_output_parses_like_plain() {
+        // Cargo's own lines as it prints them with CARGO_TERM_COLOR=always.
+        let stderr = "\x1b[1m\x1b[92m     Running\x1b[0m tests/hidden.rs (target/debug/deps/hidden-1)\n";
+        let stdout = "{ \"type\": \"suite\", \"event\": \"started\" }\n{ \"type\": \"test\", \"name\": \"a\", \"event\": \"failed\", \"stdout\": \"\\u001b[32mANNEAL {\\\"input\\\":\\\"i\\\",\\\"expected\\\":\\\"e\\\",\\\"got\\\":\\\"g\\\"}\\n\\u001b[0mthread 'a' (1) panicked at tests/hidden.rs:9:5:\\n\\u001b[31mred reason\\u001b[0m\\n\\u001b[33mprinted\\n\" }\n";
+        let t = tests(stdout, stderr);
+        assert_eq!(t[0].suite, Suite::Hidden);
+        assert_eq!(t[0].check.as_ref().map(|c| c.got.as_str()), Some("g"));
+        // The learner's colours are kept for the web app to draw.
+        assert_eq!(t[0].panic.as_deref(), Some("\x1b[31mred reason\x1b[0m\n\x1b[33mprinted"));
+
+        let d = build_failure("\x1b[1m\x1b[91merror\x1b[0m: could not compile\n\x1b[0m\n  (signal: \x1b[1m9\x1b[0m, SIG\x1b[0mKILL)\n");
+        assert!(d.message.contains("ran out of memory"), "{}", d.message);
+        assert!(d.rendered.contains("\x1b[91merror"), "cargo's colours are kept: {:?}", d.rendered);
     }
 
     #[test]

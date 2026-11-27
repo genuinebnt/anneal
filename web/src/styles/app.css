@@ -224,6 +224,14 @@ a.tile:hover { border-color: var(--line); }
 .diag-sum { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .diag-toggle { margin-left: auto; font: 500 11px var(--mono); color: var(--dim); }
 .diag-toggle:hover { color: var(--fg); }
+/* The terminal's sixteen colours as theme tokens (workspace/ansiText.ts draws compiler and program output with them), so they
+   follow dark and light. Black and white are the theme's quiet and plain text, readable on either ground. */
+:root {
+  --ansi-black: var(--dim); --ansi-red: var(--bad); --ansi-green: var(--grn); --ansi-yellow: var(--warn);
+  --ansi-blue: var(--fn); --ansi-magenta: var(--vio); --ansi-cyan: var(--mac); --ansi-white: var(--fg);
+  --ansi-bright-black: var(--dim); --ansi-bright-red: var(--bad); --ansi-bright-green: var(--grn); --ansi-bright-yellow: var(--warn);
+  --ansi-bright-blue: var(--fn); --ansi-bright-magenta: var(--lt); --ansi-bright-cyan: var(--mac); --ansi-bright-white: var(--fg);
+}
 .dcard { border: 1px solid var(--line2); border-left: 3px solid var(--bad); border-radius: 8px; background: var(--bg); margin-bottom: 10px; overflow: hidden; }
 .dcard.warning { border-left-color: var(--warn); }
 .dcard.note, .dcard.help { border-left-color: var(--mac); }

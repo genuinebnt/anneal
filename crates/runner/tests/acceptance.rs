@@ -500,3 +500,36 @@ async fn scratch_main_runs_against_the_library() {
     assert_eq!(out.status, ScratchStatus::CompileError);
     assert!(out.diagnostics.iter().any(|d| d.code.as_deref() == Some("E0308")), "{:?}", out.diagnostics);
 }
+
+/// The runner asks cargo and rustc for colour, and keeps the learner's: everything it reads from that text still reads.
+#[tokio::test]
+async fn coloured_output_is_kept_and_still_parsed() {
+    use anneal_runner::strip_ansi;
+    let sub = Submission {
+        lib_rs: "pub fn f(v: &mut Vec<i32>) -> i32 { let a = &v[0]; v.push(1); *a }\n",
+        visible_tests: "use solution::*;\n#[test]\nfn t() { f(&mut vec![1]); }\n",
+        hidden_tests: None,
+        crates: &[],
+        perf: Perf::default(),
+    };
+    let r = runner(Sandbox::Host).run("colour-demo", &sub).await.unwrap();
+    assert_eq!(r.status, RunStatus::CompileError, "{r:#?}");
+    let d = r.diagnostics.iter().find(|d| d.code.as_deref() == Some("E0502")).expect("a borrow error");
+    assert!(d.rendered.contains('\x1b') && !d.message.contains('\x1b'), "{d:?}");
+    assert!(strip_ansi(&d.rendered).starts_with("error[E0502]: cannot borrow"), "{}", d.rendered);
+
+    // A print that leaves its colour open and has no newline sits in front of the check! report.
+    let sub = Submission {
+        lib_rs: "pub fn two() -> i32 { print!(\"\\x1b[31m\"); 3 }\n",
+        visible_tests: "use solution::*;\n#[test]\nfn visible() { check!(\"two()\", two(), 2); }\n",
+        hidden_tests: Some("use solution::*;\n#[test]\nfn secret() { let n = two(); assert_eq!(n, 2, \"\\x1b[33mwrong\"); }\n"),
+        ..sub
+    };
+    let r = runner(Sandbox::Host).run("colour-demo", &sub).await.unwrap();
+    assert_eq!((r.status, r.total), (RunStatus::Failed, 2), "{r:#?}");
+    let test = |name: &str| r.tests.iter().find(|t| t.name == name).unwrap();
+    assert_eq!((test("visible").suite, test("secret").suite), (Suite::Visible, Suite::Hidden), "cargo's coloured Running lines still name the suites");
+    assert_eq!(test("visible").check.as_ref().map(|c| c.got.as_str()), Some("3"), "{r:#?}");
+    assert!(test("secret").panic.as_deref().is_some_and(|p| p.starts_with("assertion `left == right` failed: \x1b[33mwrong")), "{r:#?}");
+    assert_eq!(test("secret").stdout, "\x1b[31m");
+}

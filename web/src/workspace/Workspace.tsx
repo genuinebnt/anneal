@@ -17,7 +17,8 @@ import { deriveLanes } from "./lanes";
 import { FocusTimer } from "../components/FocusTimer";
 import { useShowIdeas } from "../spoilers";
 import { Connections, SeriesComplete, SeriesSwitch, placeName } from "../components/seriesBits";
-import { Ansi } from "./ansi";
+import { Ansi, AnsiLine, ansiLines, lineText, stripAnsi } from "./ansi";
+import type { Segment } from "./ansiText";
 import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
 import "../styles/workspace.css";
@@ -1218,19 +1219,23 @@ function CaseCard({
           {t?.check && (
             <>
               <span>got</span>
-              <pre style={{ color: "var(--bad)" }}>{t.check.got}</pre>
+              <pre style={{ color: "var(--bad)" }}>{stripAnsi(t.check.got)}</pre>
             </>
           )}
           {t && !t.check && t.panic && (
             <>
               <span>panic</span>
-              <pre style={{ color: "var(--bad)" }}>{t.panic}</pre>
+              <pre style={{ color: "var(--bad)" }}>
+                <Ansi text={t.panic} />
+              </pre>
             </>
           )}
           {t?.stdout && (
             <>
               <span>stdout</span>
-              <pre>{t.stdout}</pre>
+              <pre>
+                <Ansi text={t.stdout} />
+              </pre>
             </>
           )}
           {c.input === undefined && !t && (
@@ -1341,7 +1346,7 @@ function TestsPanel({
             {firstError.code ?? "ERROR"} · LINE {firstError.spans.find((s) => s.primary)?.line_start ?? "?"}
           </span>
           <br />
-          {firstError.message}
+          {stripAnsi(firstError.message)}
           <div className="note" style={{ marginTop: 6 }}>
             Full output in the Compiler tab below.
           </div>
@@ -1407,7 +1412,7 @@ function DiagCard({ d, onGoto }: { d: Diagnostic; onGoto: Goto }) {
           ) : (
             <span className="dcode">{d.code}</span>
           ))}
-        <span className="dmsg">{d.message}</span>
+        <span className="dmsg">{stripAnsi(d.message)}</span>
         {primary && (
           <button className="dloc" onClick={() => onGoto(primary.file, primary.line_start, primary.col_start)} title="Jump to this line">
             {primary.file}:{primary.line_start}:{primary.col_start}
@@ -1465,7 +1470,9 @@ function DiagnosticsList({ diagnostics, busy, empty, onGoto }: { diagnostics: Di
 }
 
 /** One output line: `dbg!` lines split into location, expression and value; panics highlighted. */
-function OutLine({ line, stderr }: { line: string; stderr?: boolean }) {
+function OutLine({ line: segments, stderr }: { line: Segment[]; stderr?: boolean }) {
+  // What a line is gets decided on its plain text: colour codes around it change nothing.
+  const line = lineText(segments);
   const dbg = /^\[(.+?:\d+:\d+)\] (.+?) = (.*)$/.exec(line);
   if (dbg)
     return (
@@ -1477,7 +1484,7 @@ function OutLine({ line, stderr }: { line: string; stderr?: boolean }) {
   if (/^note: run with `RUST_BACKTRACE=1`/.test(line)) return <span className="ln dimln">{line}</span>;
   return (
     <span className={`ln${stderr ? " err" : ""}`}>
-      <Ansi text={line} />
+      <AnsiLine line={segments} />
     </span>
   );
 }
@@ -1517,8 +1524,8 @@ function Terminal({
   stdout: string;
   stderr?: string;
 }) {
-  const lines = (t: string) => t.replace(/\n$/, "").split("\n");
-  const all = [stdout, stderr].filter(Boolean).join("\n");
+  const lines = (t: string) => ansiLines(t.replace(/\n$/, ""));
+  const all = stripAnsi([stdout, stderr].filter(Boolean).join("\n"));
   return (
     <div className="term">
       <div className="term-h">

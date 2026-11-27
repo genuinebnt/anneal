@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -18,6 +19,12 @@ OUTPUT_LIMIT = 16 * 1024
 def emit(event):
     REAL_STDOUT.write("@@anneal@@" + json.dumps(event) + "\n")
     REAL_STDOUT.flush()
+
+
+def cut(text, limit):
+    """The first `limit` characters, without half an escape sequence at the end, and with the colour reset."""
+    text = re.sub(r"\x1b(\[[0-?]*[ -/]*|[\]PX^_][^\x07\x1b\n]*|[ -/]*)$", "", text[:limit])
+    return text + "\x1b[0m" if "\x1b" in text else text
 
 
 class TestTimeout(BaseException):
@@ -45,7 +52,15 @@ def solution_line(tb):
 def report_error(kind, exc):
     line = solution_line(exc.__traceback__)
     emit({"kind": kind, "message": f"{type(exc).__name__}: {exc}", "line": line or 1, "col": 1,
-          "trace": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)[-6:])})
+          "trace": "".join(format_trace(exc)[-6:])})
+
+
+def format_trace(exc):
+    """The traceback's lines, in the interpreter's own colours where it has them (Python 3.13 and later)."""
+    try:
+        return list(traceback.TracebackException.from_exception(exc).format(colorize=True))
+    except TypeError:
+        return traceback.format_exception(type(exc), exc, exc.__traceback__)
 
 
 def main(suites):
@@ -110,7 +125,7 @@ def main(suites):
                 outcome, panic, check = "timed_out", f"took longer than {PER_TEST_SECONDS:g} s", None
             out = buf.getvalue()
             if len(out) > OUTPUT_LIMIT:
-                out = out[:OUTPUT_LIMIT] + "\n… output cut"
+                out = cut(out, OUTPUT_LIMIT) + "\n… output cut"
             emit({"kind": "test", "suite": suite, "name": name[len("test_"):], "outcome": outcome,
                   "ms": (time.perf_counter() - started) * 1000.0, "check": check, "panic": panic, "stdout": out})
     emit({"kind": "done"})

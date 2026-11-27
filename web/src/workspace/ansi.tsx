@@ -1,75 +1,54 @@
-import type { CSSProperties, ReactNode } from "react";
+import { Fragment } from "react";
+import { ansiCss, ansiLines, type Segment } from "./ansiText";
 
-// rustc's terminal colours (SGR codes) mapped onto the theme, so compiler output reads like a terminal.
-const COLOURS: Record<number, string> = {
-  31: "var(--bad)", 91: "var(--bad)",
-  32: "var(--grn)", 92: "var(--grn)",
-  33: "var(--warn)", 93: "var(--warn)",
-  34: "var(--fn)", 94: "var(--fn)",
-  35: "var(--vio)", 95: "var(--vio)",
-  36: "var(--mac)", 96: "var(--mac)",
-  37: "var(--fg)", 97: "var(--fg)",
-};
+export { ansiLines, lineText, stripAnsi } from "./ansiText";
 
-/** Renders text containing ANSI SGR escapes (colour and bold) as styled spans. */
-export function Ansi({ text }: { text: string }) {
-  const out: ReactNode[] = [];
-  let style: { color?: string; bold?: boolean } = {};
-  const re = /\x1b\[([0-9;]*)m/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  const push = (chunk: string) => {
-    if (!chunk) return;
-    const css: CSSProperties = { color: style.color, fontWeight: style.bold ? 600 : undefined };
-    out.push(style.color || style.bold ? <span key={out.length} style={css}>{chunk}</span> : chunk);
-  };
-  while ((m = re.exec(text))) {
-    push(text.slice(last, m.index));
-    last = re.lastIndex;
-    for (const code of (m[1] || "0").split(";").map(Number)) {
-      if (code === 0) style = {};
-      else if (code === 1) style = { ...style, bold: true };
-      else if (code === 22) style = { ...style, bold: false };
-      else if (code === 39) style = { ...style, color: undefined };
-      else if (COLOURS[code]) style = { ...style, color: COLOURS[code] };
-    }
-  }
-  push(text.slice(last));
-  return <>{out}</>;
+/** One parsed line as styled spans. Text goes in as text nodes, so output can't inject markup. */
+export function AnsiLine({ line }: { line: Segment[] }) {
+  return (
+    <>
+      {line.map((s, i) => {
+        const css = ansiCss(s.style);
+        return css ? (
+          <span key={i} style={css}>
+            {s.text}
+          </span>
+        ) : (
+          <Fragment key={i}>{s.text}</Fragment>
+        );
+      })}
+    </>
+  );
 }
 
-/** Text with ANSI escapes removed. */
-export const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+/** Renders terminal output, coloured from the theme. */
+export function Ansi({ text }: { text: string }) {
+  return (
+    <>
+      {ansiLines(text).map((line, i) => (
+        <Fragment key={i}>
+          {i > 0 && "\n"}
+          <AnsiLine line={line} />
+        </Fragment>
+      ))}
+    </>
+  );
+}
 
 /** The same rendering into plain DOM, for CodeMirror widgets and tooltips that aren't React. */
 export function appendAnsi(parent: HTMLElement, text: string) {
-  let color: string | undefined;
-  let bold = false;
-  const re = /\x1b\[([0-9;]*)m/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  const push = (chunk: string) => {
-    if (!chunk) return;
-    if (!color && !bold) {
-      parent.append(chunk);
-      return;
+  ansiLines(text).forEach((line, i) => {
+    if (i > 0) parent.append("\n");
+    for (const s of line) {
+      const css = ansiCss(s.style);
+      if (!css) {
+        parent.append(s.text);
+        continue;
+      }
+      const span = document.createElement("span");
+      Object.assign(span.style, css);
+      span.textContent = s.text;
+      parent.append(span);
     }
-    const span = document.createElement("span");
-    if (color) span.style.color = color;
-    if (bold) span.style.fontWeight = "600";
-    span.textContent = chunk;
-    parent.append(span);
-  };
-  while ((m = re.exec(text))) {
-    push(text.slice(last, m.index));
-    last = re.lastIndex;
-    for (const code of (m[1] || "0").split(";").map(Number)) {
-      if (code === 0) [color, bold] = [undefined, false];
-      else if (code === 1) bold = true;
-      else if (code === 22) bold = false;
-      else if (code === 39) color = undefined;
-      else if (COLOURS[code]) color = COLOURS[code];
-    }
-  }
-  push(text.slice(last));
+  });
 }

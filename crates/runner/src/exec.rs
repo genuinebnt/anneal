@@ -60,7 +60,8 @@ pub(crate) async fn run(
             c.args(args)
                 .current_dir(work)
                 .env("CARGO_TARGET_DIR", target)
-                .env("CARGO_TERM_COLOR", "never")
+                // Colour even into a pipe: the web app draws it, and everything that reads the text strips it first.
+                .env("CARGO_TERM_COLOR", "always")
                 // No incremental compilation: rustc's copies from its incremental directory have failed ("unable to
                 // copy …/incremental/…: No such file or directory"), failing a run for nothing the learner wrote.
                 .env("CARGO_INCREMENTAL", "0")
@@ -114,6 +115,9 @@ pub(crate) async fn run(
                     "-e",
                     // as for host runs; overrides the image's setting
                     "CARGO_INCREMENTAL=0",
+                    "-e",
+                    // likewise (images built before colour set `never`)
+                    "CARGO_TERM_COLOR=always",
                     "-e",
                     "PYTHONDONTWRITEBYTECODE=1",
                     "-e",

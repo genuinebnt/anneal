@@ -1,5 +1,8 @@
 // The stage page's Hints, Solution, Concepts and Last run tabs, in the mockup's markup (docs/mockups/course-motion.html, screen 2).
 
+import { Ansi } from "../../workspace/ansi";
+import { stripAnsi } from "../../workspace/ansiText";
+import { CompilerText } from "../../workspace/CompilerText";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -278,10 +281,12 @@ export function RunTab({ runs, stageId, sources = {} }: { runs: CourseRun[]; sta
     const prevPassed = prev && !prev.problem ? prev.passed : null;
     const newlyFailing = failed.filter((t) => change(t.name, false) === "new").length;
     const same = new Map<string, number>();
-    for (const t of failed) same.set(t.detail.trim(), (same.get(t.detail.trim()) ?? 0) + 1);
+    // grouped on the plain text, so two failures that differ only in colour codes are one message
+    const key = (detail: string) => stripAnsi(detail).trim();
+    for (const t of failed) same.set(key(t.detail), (same.get(key(t.detail)) ?? 0) + 1);
     const first = failed[0];
     const cmd = run.problem ? `anneal course test ${stageId}` : first ? `anneal course test ${stageId} --only -f ${first.name}` : null;
-    const errors = run.problem ? (run.problem.match(/^error(\[|:)/gm) ?? []).length : 0;
+    const errors = run.problem ? (stripAnsi(run.problem).match(/^error(\[|:)/gm) ?? []).length : 0;
     const tone = run.problem ? "k-wr" : failed.length > 0 ? "k-bad" : "k-ok";
     const shown = [...runs].reverse();
     return (
@@ -372,12 +377,7 @@ export function RunTab({ runs, stageId, sources = {} }: { runs: CourseRun[]; sta
                             <span className="k-rmeta">as the compiler printed it</span>
                         </div>
                         <pre>
-                            {run.problem.split("\n").map((l, i) => (
-                                <span key={i} className={/^error(\[|:)/.test(l) ? "k-er" : /^\s*-->/.test(l) ? "k-pt2" : /^\s*(\d+\s*)?\|/.test(l) ? "k-dm2" : undefined}>
-                                    {l}
-                                    {"\n"}
-                                </span>
-                            ))}
+                            <CompilerText text={run.problem} />
                         </pre>
                     </div>
                 )}
@@ -385,7 +385,7 @@ export function RunTab({ runs, stageId, sources = {} }: { runs: CourseRun[]; sta
                     <>
                         <div className="k-flab2" style={{ color: "var(--bad)", marginTop: 6 }}>FAILED · {failed.length}</div>
                         {failed.map((t) => {
-                            const n = (same.get(t.detail.trim()) ?? 1) - 1;
+                            const n = (same.get(key(t.detail)) ?? 1) - 1;
                             const ch = change(t.name, false);
                             return (
                                 <div className="k-rt k-bad" key={t.name}>
@@ -406,7 +406,7 @@ export function RunTab({ runs, stageId, sources = {} }: { runs: CourseRun[]; sta
                                                     same message as {n} other test{n === 1 ? "" : "s"}
                                                 </div>
                                             )}
-                                            <pre>{t.detail}</pre>
+                                            <pre><Ansi text={t.detail} /></pre>
                                         </div>
                                     )}
                                     {codeShown(t.name, true) && sourceOf(sources, t.name) && <TestCode src={sourceOf(sources, t.name)!} />}

@@ -16,6 +16,7 @@
 //! network, a read-only root filesystem, capped memory, CPU and processes, and
 //! runs as the invoking user.
 
+mod ansi;
 mod deps;
 mod exec;
 mod parse;
@@ -27,6 +28,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+pub use ansi::strip_ansi;
 pub use deps::{VENDOR_DIR, known_crates};
 pub use project::write as write_project;
 pub use python::{PySubmission, SOLUTION_FILE as PYTHON_FILE};
@@ -93,11 +95,7 @@ const OUTPUT_LIMIT: usize = 64 * 1024;
 
 fn clip(mut s: String) -> String {
     if s.len() > OUTPUT_LIMIT {
-        let mut end = OUTPUT_LIMIT;
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        s.truncate(end);
+        ansi::cut(&mut s, OUTPUT_LIMIT);
         s.push_str("\n… output cut at 64 KiB");
     }
     s

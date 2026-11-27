@@ -1,5 +1,6 @@
 // Pieces the Rust track pages and the workspace share: the interview follow-up questions as a list, and a problem brief (what it
 // teaches, what you will be asked after). Styles: styles/rust.css.
+import { Ansi, stripAnsi } from "../workspace/ansi";
 import { marked } from "marked";
 import { useState } from "react";
 import type { RunView, StageView, TestOutcome } from "../api";
@@ -135,10 +136,10 @@ export function TestResults({ run }: { run: RunView }) {
                                     <dl>
                                         <dt>input</dt><dd><code>{t.check.input}</code></dd>
                                         <dt>expected</dt><dd><code>{t.check.expected}</code></dd>
-                                        <dt>got</dt><dd><code>{t.check.got}</code></dd>
+                                        <dt>got</dt><dd><code>{stripAnsi(t.check.got)}</code></dd>
                                     </dl>
                                 )}
-                                {t.panic && <pre>{t.panic}</pre>}
+                                {t.panic && <pre><Ansi text={t.panic} /></pre>}
                             </li>
                         ))}
                     </ul>

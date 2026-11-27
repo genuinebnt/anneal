@@ -566,7 +566,8 @@ fn run_entries(repo: &Path, entries: &[String], target_dir: Option<&Path>, timeo
     for bin in &bins {
         build.args(["--test", bin]);
     }
-    build.env("RUST_BACKTRACE", "0").env("CARGO_TERM_COLOR", "never");
+    // Coloured: the stage page draws what the compiler printed in its colours. `print_report` strips them for a pipe.
+    build.env("RUST_BACKTRACE", "0").env("CARGO_TERM_COLOR", "always");
     if let Some(t) = target_dir {
         build.env("CARGO_TARGET_DIR", t);
     }
@@ -589,7 +590,7 @@ fn run_entries(repo: &Path, entries: &[String], target_dir: Option<&Path>, timeo
         }
     }
     if code != Some(0) {
-        let tail: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+        let tail: Vec<&str> = stderr.lines().filter(|l| !anneal_runner::strip_ansi(l).trim().is_empty()).collect();
         let shown = if tail.len() > 40 { &tail[..40] } else { &tail[..] };
         report.problem = Some(format!("{}: the tests didn't compile or run\n{}", bins.first().copied().unwrap_or("build"), shown.join("\n")));
         return report;
@@ -637,7 +638,7 @@ fn run_entries(repo: &Path, entries: &[String], target_dir: Option<&Path>, timeo
                 }
                 let (stderr, code) = (ran.stderr, ran.code);
                 if report.tests.len() == before {
-                    let tail: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+                    let tail: Vec<&str> = stderr.lines().filter(|l| !anneal_runner::strip_ansi(l).trim().is_empty()).collect();
                     let shown = if tail.len() > 40 { &tail[..40] } else { &tail[..] };
                     report.problem = Some(if code == Some(0) {
                         format!("{bin}: no test matched {filters:?}")
@@ -1963,7 +1964,7 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         let reg = run_entries(&repo, &uniq, None, Duration::from_secs(300));
         let broken: Vec<&TestOutcome> = reg.tests.iter().filter(|t| !t.ok).collect();
         if let Some(p) = &reg.problem {
-            println!("\nRegression run failed: {p}");
+            println!("\nRegression run failed: {}", crate::term::tty_text(p));
             return Ok(failure_code(opts, cfg.block_on_fail, true));
         }
         if !broken.is_empty() {
@@ -2044,7 +2045,7 @@ fn print_report(r: &RunReport, verbose: bool) {
         println!("        {}", dim(&format!("({hidden} more groups of failures without their messages: run with -v to see them)")));
     }
     if let Some(p) = &r.problem {
-        println!("\n{p}");
+        println!("\n{}", crate::term::tty_text(p));
     }
     let total = tests.len();
     let passed = tests.iter().filter(|t| t.ok).count();
@@ -2303,7 +2304,7 @@ fn verify(course_id: &str, courses: &Path, only: Option<&str>, from: Option<&str
             problems += 1;
             println!("FAIL  {:<8} {}", s.def.id, s.def.title);
             for n in notes {
-                println!("        {n}");
+                println!("        {}", crate::term::tty_text(&n));
             }
         }
     }

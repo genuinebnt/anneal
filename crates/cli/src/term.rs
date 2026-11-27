@@ -24,6 +24,11 @@ fn paint(code: &str, text: &str) -> String {
     if color_on() { format!("\x1b[{code}m{text}\x1b[0m") } else { text.to_owned() }
 }
 
+/// Text another tool coloured (cargo's account of a failed build): as it is on a terminal, plain in a pipe or under `NO_COLOR`.
+pub fn tty_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if color_on() { text.into() } else { anneal_runner::strip_ansi(text) }
+}
+
 pub fn green(t: &str) -> String {
     paint("32", t)
 }

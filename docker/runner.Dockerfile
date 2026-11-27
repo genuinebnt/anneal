@@ -20,7 +20,7 @@ RUN cd /opt/anneal-deps \
     && chmod -R a+rX /opt/anneal-vendor
 
 ENV CARGO_HOME=/tmp/cargo-home \
-    CARGO_TERM_COLOR=never \
+    CARGO_TERM_COLOR=always \
     CARGO_INCREMENTAL=0 \
     RUSTC_BOOTSTRAP=1
 

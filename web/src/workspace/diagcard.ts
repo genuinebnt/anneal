@@ -1,7 +1,8 @@
 // The rustc-style diagnostic card: `error[E0502] message`, the labelled spans with their code, and a footer.
 // The inline lens after a run and the hover over a rust-analyzer squiggle both use it, so they look the same.
 import type { Diagnostic, Level } from "../api";
-import { appendAnsi, stripAnsi } from "./ansi";
+import { appendAnsi } from "./ansi";
+import { stripAnsi } from "./ansiText";
 
 const LEVEL_COLOUR: Record<Level, string> = { error: "var(--bad)", warning: "var(--warn)", note: "var(--dim)", help: "var(--grn)" };
 
@@ -21,7 +22,7 @@ export function diagCard(d: Diagnostic, lines: string[], options: CardOptions = 
   const code = document.createElement("span");
   code.style.cssText = `color:${LEVEL_COLOUR[d.level]};font-weight:600`;
   code.textContent = `${d.level}${d.code ? `[${d.code}]` : ""}`;
-  head.append(code, ` ${d.message}`);
+  head.append(code, ` ${stripAnsi(d.message)}`);
   el.append(head);
   const labelled = d.spans.filter((s) => s.file === file && s.label);
   if (labelled.length) {

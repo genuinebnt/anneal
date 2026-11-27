@@ -2,6 +2,9 @@
 // reading column with its tabs in the middle, the page panel and focus timer on the right, a run strip along the bottom, a reading-progress
 // bar across the top, a condensed header and a back-to-top ring that appear as you scroll.
 
+import { Ansi } from "../workspace/ansi";
+import { stripAnsi } from "../workspace/ansiText";
+import { CompilerText } from "../workspace/CompilerText";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -604,7 +607,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                                                 <i />
                                                                 <div>
                                                                     <div className="k-n">{t.name}</div>
-                                                                    <div className="k-d">{t.ok ? "passes" : (t.detail.split("\n").find((l) => l.trim()) ?? "fails")}</div>
+                                                                    <div className="k-d">{t.ok ? "passes" : (stripAnsi(t.detail).split("\n").find((l) => l.trim()) ?? "fails")}</div>
                                                                 </div>
                                                             </div>
                                                         ))}
@@ -836,11 +839,11 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                 {!run ? (
                                     "No run yet."
                                 ) : run.problem ? (
-                                    run.problem
+                                    <CompilerText text={run.problem} />
                                 ) : failedFirst ? (
                                     <>
                                         <span className="k-er">{failedFirst.name}</span> failed{"\n"}
-                                        {failedFirst.detail}
+                                        <Ansi text={failedFirst.detail} />
                                     </>
                                 ) : (
                                     "All tests passed."
