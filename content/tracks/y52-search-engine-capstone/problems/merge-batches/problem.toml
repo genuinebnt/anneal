@@ -1,0 +1,36 @@
+slug = "merge-batches"
+title = "Merge batches without changing an answer"
+mode = "write"
+level = "hard"
+stage = "keep-up"
+order = 7
+status = "ready"
+tags = ["search engine", "segment merge", "compaction", "invariants"]
+teaches = [
+  "Merging builds one new batch from neighbours and swaps it in. Their page numbers already run on from each other, so nothing is renumbered.",
+  "Packed lists cannot be glued together: only the first gap of a list counts from 0.",
+  "A merge is correct when no answer can show that it happened. That is a test you can run on random histories.",
+  "Folding batches in one at a time repacks the same postings again and again. Gather each word from all inputs and pack it once.",
+]
+follow_up = "1) How would searches keep running while a merge is being built? 2) Which batches would you merge, and when? Compare the rule of *A message history that only grows*. 3) How would deleting a page change merging?"
+related = ["Y52", "Y17", "S7"]
+
+[perf]
+count_allocs = true
+
+[[hints]]
+kind = "approach"
+text = "A batch holds four things: page lengths, word lists, folded texts and window lists. For each, say what the merged version is in terms of the inputs. Build the new batch from all inputs together, then replace the old ones."
+
+[[hints]]
+kind = "rust"
+text = "`first.checked_add(count)` rejects ranges that wrap. `Vec::splice(first..end, [merged])` replaces a run of items with one. Collect each word's unpacked postings from all inputs, oldest first, into one map, and call `encode` once per word at the end."
+
+[[hints]]
+kind = "edge"
+text = "Check the range before changing anything: `count` below 2, or past the end, gives `false`. A word may be in the third input and not the first two. A pattern search must find the same candidates as before."
+
+[solution]
+explanation = "The range is checked first. One new batch takes the first page number of the oldest input. Page lengths and texts are joined in order. For every word, the postings of each input that has it are unpacked and appended, oldest first, and the whole list is packed once. Window lists hold global page numbers in rising order, so they are simply appended in the same order. The new batch then replaces the inputs. Every question already walks the batches in order, so no other code changes."
+time = "O(size of the merged inputs)"
+space = "O(size of the merged inputs)"

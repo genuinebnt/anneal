@@ -1,0 +1,475 @@
+# The series "Build a full-text search engine": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "search-engine"
+rank = 10
+title = "Build a full-text search engine"
+summary = "Small parts give you what the capstone needs. Then you build an engine that finds words, phrases and pieces of words, and ranks the answers."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a search engine"
+capstone_summary = "Packed word positions, batches and phrases, a query language, pieces of words, whole queries, ranking and merging."
+capstone_note = "Each step's starter carries reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and some of the preparation. The engine keeps everything in memory and never deletes a page."
+capstone_cookbook = "search-engine"
+
+[[stage]]
+id = "find-without-reading"
+name = "Find without reading everything"
+
+[[stage]]
+id = "small-and-growing"
+name = "Keep it small and keep adding"
+
+[[stage]]
+id = "search-and-order"
+name = "Search inside words and put the best first"
+
+[[stage]]
+id = "typed-input"
+name = "Read what people type"
+
+[[part]]
+number = 1
+id = "y51-pages-that-fit-the-words"
+stage = "find-without-reading"
+status = "new"
+minutes = 75
+blurb = "Answer questions about words without reading the pages again"
+new_idea = "Keeping for each word the sorted list of its pages, and starting from the shortest list"
+reuses = "nothing"
+know_first = "HashMap, Vec, slices and iterator adapters"
+required = []
+helpful = [
+    { id = "s4-compare-tags", why = "optional warm-up on set operations", reveals_method = false, hidden = true },
+]
+used_again = ["y51-which-songs-have-this-tune", "y52-pages-in-batches", "y52-answer-a-query"]
+real_uses = "Search engines, tag filters, GIN indexes in databases, log search."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Its segments map each term to postings, and eval combines them as sets. It uses BTreeSet and does not start from the rarest term.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "y51-which-songs-have-this-tune"
+stage = "find-without-reading"
+status = "new"
+minutes = 60
+blurb = "Find a run of items in thousands of sequences, while looking at very little of them"
+new_idea = "Keeping places as well, so that a run is a question about places that line up"
+reuses = "the lists of part 1"
+required = ["y51-pages-that-fit-the-words"]
+helpful = []
+used_again = ["y52-pages-in-batches"]
+real_uses = "Phrase search, DNA seed lookup, audio fingerprinting."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "phrase_docs lines up positions. It always starts from the first word.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "f5-varint-codec"
+stage = "small-and-growing"
+status = "existing"
+minutes = 60
+blurb = "Write numbers in few bytes and read them back from a stranger"
+new_idea = "Variable-length numbers, gaps between sorted values, and a decoder that trusts nothing"
+reuses = "nothing from this series"
+required = []
+helpful = []
+used_again = ["y52-pack-the-positions"]
+real_uses = "protobuf, WebAssembly, Lucene, columnar file formats."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "put_varint and get_varint are the 32-bit version of the encoding.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "y51-a-history-in-sealed-parts"
+stage = "small-and-growing"
+status = "new"
+minutes = 90
+blurb = "Keep adding to a long history while readers hold on to old views"
+new_idea = "Parts that never change, joined by a rule that keeps them few, with answers that do not notice"
+reuses = "nothing new"
+know_first = "Arc"
+required = []
+helpful = []
+used_again = ["y52-pages-in-batches", "y52-best-pages-first", "y52-merge-batches"]
+real_uses = "Lucene segments, LSM trees, persistent data structures, event stores."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Immutable segments with global page numbers and merge_all. It has no merge rule and no snapshots.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "y10-trigram-index"
+stage = "search-and-order"
+status = "existing"
+minutes = 60
+blurb = "Search inside words without reading every document"
+new_idea = "Ruling documents out by three-character windows, then checking the rest"
+reuses = "lists per key from part 1"
+required = ["y51-pages-that-fit-the-words"]
+helpful = []
+used_again = ["y52-pieces-of-words"]
+real_uses = "Code search, log search, LIKE indexes in databases."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Its trigram index works on bytes, not characters, and takes patterns with *.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "y10-bm25-ranking"
+stage = "search-and-order"
+status = "existing"
+minutes = 60
+blurb = "Put the most relevant documents first"
+new_idea = "A score from how often, how rare and how long"
+reuses = "lists per word from part 1"
+required = ["y51-pages-that-fit-the-words"]
+helpful = []
+used_again = ["y52-best-pages-first"]
+real_uses = "Lucene, Elasticsearch, tantivy, site search."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "bm25_scores works over several segments and a query tree.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "y51-the-best-few-of-many"
+stage = "search-and-order"
+status = "new"
+minutes = 60
+blurb = "Keep only the winners from a stream that never stops"
+new_idea = "A bounded collection with the worst item on top, for any ordered type, and a total order for a float score"
+reuses = "nothing new"
+required = []
+helpful = [
+    { id = "s5-binary-heap", why = "BinaryHeap on a smaller task", reveals_method = true, hidden = true },
+]
+used_again = ["y52-best-pages-first"]
+real_uses = "Leaderboards, top-k queries, ORDER BY with LIMIT, load reports."
+cookbook = [
+    { level = "similar", page = "search-engine", note = "top_k and Ranked, for page scores only.", source = "examples/capstones/search_engine.rs", hidden = true },
+    { level = "related", page = "heap-tiebreak", note = "A min-heap with a tie rule, for integer keys.", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "y51-what-unit-is-this"
+stage = "typed-input"
+status = "new"
+minutes = 75
+blurb = "Understand a small notation in which some things go unsaid"
+new_idea = "One function for each strength of binding, with an operator that is not written, and a depth limit"
+reuses = "nothing from this series"
+required = []
+helpful = [
+    { id = "y15-expand-the-braces", why = "optional warm-up: one function per level of a nested notation", reveals_method = false, hidden = true },
+    { id = "y14-pratt-parser", why = "another way to handle operator strengths", reveals_method = false, hidden = true },
+]
+used_again = ["y52-read-a-query"]
+real_uses = "Query languages, configuration expressions, calculators, filters."
+
+[[capstone]]
+step = 1
+id = "y52-pack-the-positions"
+title = "Pack where each word is"
+minutes = 75
+blurb = "Record where every word is in as few bytes as possible"
+new_idea = "A nested list written as gaps, with a decoder that checks every promise of the format"
+prepared_by = ["f5-varint-codec"]
+required = ["f5-varint-codec"]
+helpful = [
+    { id = "f7-posting-list-codec", why = "a tighter format that works in bits", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "encode_postings and decode_postings. The layout is the same; its errors are strings.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y52-pages-in-batches"
+title = "Add pages in batches and find phrases"
+minutes = 75
+blurb = "Accept new pages at any time, and find exact phrases"
+new_idea = "One immutable index per batch, with page numbers that run across batches"
+prepared_by = ["y51-pages-that-fit-the-words", "y51-which-songs-have-this-tune", "y51-a-history-in-sealed-parts"]
+required = ["y52-pack-the-positions", "y51-which-songs-have-this-tune"]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Segment::build, add_segment and phrase_docs. It has no packed_bytes, and doc_len walks the segments.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y52-read-a-query"
+title = "Read a query"
+minutes = 90
+blurb = "Understand what a person typed into the search box"
+new_idea = "A query language with an unwritten AND, positioned errors and a tree that stays shallow"
+prepared_by = ["y51-what-unit-is-this"]
+required = ["y52-pages-in-batches", "y51-what-unit-is-this"]
+helpful = [
+    { id = "y9-shell-line-parser", why = "splitting text with quotes", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "lex, Parser and parse. Its tree has two children per node, and it limits the number of tokens instead of the nesting, so errors differ.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y52-pieces-of-words"
+title = "Find pieces of words"
+minutes = 90
+blurb = "Find a few letters anywhere, without reading every page"
+new_idea = "A window index per batch that narrows the pages before they are read"
+prepared_by = ["y10-trigram-index", "y51-pages-that-fit-the-words"]
+required = ["y52-read-a-query", "y10-trigram-index"]
+helpful = [
+    { id = "y31-which-names-fit", why = "a fuller pattern language, matched against a whole name", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Segment::wildcard. It merges whole lists, and its candidate count follows the same definition.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y52-answer-a-query"
+title = "Answer a query"
+minutes = 60
+blurb = "Find every page that satisfies a whole query"
+new_idea = "Walking the tree and combining sets of pages"
+prepared_by = ["y51-pages-that-fit-the-words"]
+required = ["y52-pieces-of-words"]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Index::eval, over a tree with two children per node.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y52-best-pages-first"
+title = "Show the best pages first"
+minutes = 75
+blurb = "Put the most useful pages at the top"
+new_idea = "Ranking with statistics over all batches, only from words the person asked for"
+prepared_by = ["y10-bm25-ranking", "y51-the-best-few-of-many", "y51-a-history-in-sealed-parts"]
+required = ["y52-answer-a-query", "y10-bm25-ranking"]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "positive_terms, bm25_scores and top_k.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y52-merge-batches"
+title = "Merge batches without changing an answer"
+minutes = 60
+blurb = "Tidy up thousands of small batches while every answer stays the same"
+new_idea = "Replacing neighbours with one batch, in time that grows only with their size"
+prepared_by = ["y51-a-history-in-sealed-parts"]
+required = ["y52-best-pages-first"]
+cookbook = [
+    { level = "similar", page = "search-engine", note = "Segment::merge and merge_all. It folds one segment at a time and repacks shared terms each time; the largest test of this step rejects that way. It cannot merge a range.", source = "examples/capstones/search_engine.rs", hidden = true },
+]
+
+[[revisit]]
+part = "y51-pages-that-fit-the-words"
+after = "y10-trigram-index"
+how = "Solve part 1 again from a blank starter before the search stage ends."
+minutes = 30
+
+[[revisit]]
+part = "y51-what-unit-is-this"
+before = "y52-read-a-query"
+how = "Solve part 8 again from a blank starter before you read queries."
+minutes = 40
+
+[[revisit]]
+part = "y51-a-history-in-sealed-parts"
+before = "y52-merge-batches"
+how = "Write part 4's joining rule again from memory."
+minutes = 30
+
+[[readiness]]
+group = "Words and lists"
+concept = "split with a closure on char::is_alphanumeric, filter, to_lowercase"
+parts = ["y51-pages-that-fit-the-words", "y10-bm25-ranking"]
+steps = [1, 2]
+
+[[readiness]]
+group = "Words and lists"
+concept = "A map from each term to a sorted Vec: entry().or_default(), last() to skip repeats"
+parts = ["y51-pages-that-fit-the-words", "y51-which-songs-have-this-tune"]
+steps = [2, 4]
+
+[[readiness]]
+group = "Words and lists"
+concept = "binary_search, min_by_key, sorting lists by length, retain"
+parts = ["y51-pages-that-fit-the-words", "y10-trigram-index"]
+steps = [2, 4, 5]
+
+[[readiness]]
+group = "Words and lists"
+concept = "Positions that must line up; checked_sub"
+parts = ["y51-which-songs-have-this-tune"]
+steps = [2]
+note = "last_mut and binary_search_by_key are in step 2's Rust hint."
+
+[[readiness]]
+group = "Words and lists"
+concept = "Joining lists with flat_map, sort_unstable and dedup; every page except these"
+parts = ["y51-pages-that-fit-the-words"]
+steps = [5]
+note = "peekable with next_if_eq for the complement is in step 5's Rust hint."
+
+[[readiness]]
+group = "Bytes"
+concept = "LEB128 encode and a checked decode; bytes.get; gaps between sorted values"
+parts = ["f5-varint-codec"]
+steps = [1]
+note = "Part 3 works with u64. Step 1's statement gives the u32 limit."
+
+[[readiness]]
+group = "Bytes"
+concept = "checked_add; never reserving memory by a count from the input"
+parts = ["f5-varint-codec", "y51-what-unit-is-this", "y51-the-best-few-of-many"]
+steps = [1, 6, 7]
+
+[[readiness]]
+group = "Batches"
+concept = "Immutable parts that know their first number; partition_point to find one"
+parts = ["y51-a-history-in-sealed-parts"]
+steps = [2, 6]
+
+[[readiness]]
+group = "Batches"
+concept = "Totals over all parts, never averages of averages"
+parts = ["y51-a-history-in-sealed-parts"]
+steps = [6]
+
+[[readiness]]
+group = "Batches"
+concept = "Building one part from several, with the oldest first; replacing a run in a Vec"
+parts = ["y51-a-history-in-sealed-parts"]
+steps = [7]
+note = "Part 4 replaces the last two parts. Vec::splice for a run in the middle is in step 7's hints."
+
+[[readiness]]
+group = "Typed input"
+concept = "One function per strength, an operator that is not written, error positions"
+parts = ["y51-what-unit-is-this"]
+steps = [3]
+
+[[readiness]]
+group = "Typed input"
+concept = "A limit on nesting that is given back; flat chains handled by a loop"
+parts = ["y51-what-unit-is-this"]
+steps = [3]
+
+[[readiness]]
+group = "Typed input"
+concept = "Peeking at characters; a quoted run that must close"
+parts = ["y51-what-unit-is-this"]
+steps = [3]
+note = "Part 8 has no quotes. chars().enumerate().peekable() and next_if are in step 3's Rust hint."
+
+[[readiness]]
+group = "Typed input"
+concept = "An enum tree with Vec and Box children"
+parts = []
+steps = [3, 5, 6]
+note = "Step 3's starter declares the tree. Building it needs only vec! and Box::new."
+
+[[readiness]]
+group = "Pieces of words"
+concept = "Three-wide windows as keys; candidates checked against the text"
+parts = ["y10-trigram-index"]
+steps = [4]
+note = "Part 5 uses character windows. Step 4 uses bytes: as_bytes().windows(3)."
+
+[[readiness]]
+group = "Pieces of words"
+concept = "Lowercasing char by char; str::find and slicing after a match"
+parts = []
+steps = [4]
+note = "The starter gives fold, and step 4's Rust hint covers find."
+
+[[readiness]]
+group = "Ranking"
+concept = "The BM25 formula and f64::ln"
+parts = ["y10-bm25-ranking"]
+steps = [6]
+
+[[readiness]]
+group = "Ranking"
+concept = "BinaryHeap with Reverse, Ord from total_cmp with a tie rule, into_sorted_vec"
+parts = ["y51-the-best-few-of-many"]
+steps = [6]
+
+[[readiness]]
+group = "Ranking"
+concept = "Walking a tree while tracking whether you are under a NOT; BTreeSet for words once and in order"
+parts = []
+steps = [6]
+note = "This is new in step 6. Its statement gives the rule and its hints name BTreeSet."
+
+[[connection]]
+idea = "Questions about many documents"
+learn = ["y51-pages-that-fit-the-words"]
+again = ["y51-which-songs-have-this-tune", "y10-trigram-index", "y10-bm25-ranking"]
+apply = ["y52-pages-in-batches", "y52-pieces-of-words"]
+
+[[connection]]
+idea = "Questions with several words"
+learn = ["y51-pages-that-fit-the-words"]
+again = ["y51-which-songs-have-this-tune", "y10-trigram-index"]
+apply = ["y52-pieces-of-words", "y52-answer-a-query"]
+
+[[connection]]
+idea = "Small numbers, few bytes"
+learn = ["f5-varint-codec"]
+apply = ["y52-pack-the-positions", "y52-merge-batches"]
+
+[[connection]]
+idea = "Never change what is written"
+learn = ["y51-a-history-in-sealed-parts"]
+apply = ["y52-pages-in-batches", "y52-best-pages-first", "y52-merge-batches"]
+
+[[connection]]
+idea = "Keep only what can still win"
+learn = ["y10-bm25-ranking"]
+again = ["y51-the-best-few-of-many"]
+apply = ["y52-best-pages-first"]
+
+[[connection]]
+idea = "Text from a stranger"
+learn = ["f5-varint-codec"]
+again = ["y51-what-unit-is-this"]
+apply = ["y52-pack-the-positions", "y52-read-a-query"]
+
+[[side_path]]
+id = "f7-posting-list-codec"
+why = "after capstone step 1: pack sorted numbers into bits instead of bytes"
+after = "y52-pack-the-positions"
+
+[[side_path]]
+id = "y9-shell-line-parser"
+why = "before capstone step 3: more practice with quotes and tokens"
+before = "y52-read-a-query"
+
+[[side_path]]
+id = "y31-which-names-fit"
+why = "before capstone step 4: match patterns with more than stars"
+before = "y52-pieces-of-words"
+
+[[side_path]]
+id = "y16-catch-a-wrong-engine"
+why = "after capstone step 5: write the test that catches a wrong engine, for a different kind of engine"
+after = "y52-answer-a-query"
+
+[[side_path]]
+id = "s6-merge-sorted-streams"
+why = "after capstone step 7: combine many sorted inputs lazily"
+after = "y52-merge-batches"

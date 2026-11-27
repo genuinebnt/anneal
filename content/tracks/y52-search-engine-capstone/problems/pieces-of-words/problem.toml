@@ -1,0 +1,32 @@
+slug = "pieces-of-words"
+title = "Find pieces of words"
+mode = "write"
+level = "hard"
+stage = "answer"
+order = 4
+status = "ready"
+tags = ["search engine", "substring search", "trigram index", "filter then verify"]
+teaches = [
+  "A text that holds a piece also holds every three-byte window of that piece. So the windows can rule pages out without reading them.",
+  "The windows only suggest. Each candidate must still be read, because they may stand apart or in the wrong order.",
+  "Index and query must lowercase text the same way, one character at a time. A rule that looks at neighbours breaks pieces.",
+]
+follow_up = "1) Which pieces make the index useless, and what would you tell the user? 2) How would you get candidates for a regular expression such as `(cat|dog)s?`? 3) The window index is often larger than the word index. What would you give up to shrink it?"
+related = ["Y52", "Y10"]
+
+[[hints]]
+kind = "approach"
+text = "When a batch is built, also keep each page folded, and for each three-byte window the pages that have it. A question collects the lists of all the windows in all its pieces."
+
+[[hints]]
+kind = "rust"
+text = "`text.as_bytes().windows(3)` gives the byte windows, so multibyte characters need no special case. `str::find` returns a byte position, and slicing after the match keeps the next piece from sharing bytes with it."
+
+[[hints]]
+kind = "edge"
+text = "A window that is in no page of a batch leaves that batch with no candidates. With no window at all, every page is a candidate. Start from the shortest list and only look pages up in the others."
+
+[solution]
+explanation = "Each batch keeps its pages folded and maps every three-byte window to the sorted pages that have it. A pattern is folded and split at `*`. The candidates are the pages found in the lists of all windows of all pieces. Start from the shortest list. Keep a page when binary search finds it in each other list. Each candidate is then read: the pieces are searched for one after another, each from where the last one ended."
+time = "per batch O(w log w + s x w log n), where s is the shortest list among w windows, plus reading the candidates"
+space = "O(text)"

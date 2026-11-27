@@ -1,0 +1,33 @@
+slug = "best-pages-first"
+title = "Show the best pages first"
+mode = "write"
+level = "hard"
+stage = "answer"
+order = 6
+status = "ready"
+tags = ["search engine", "BM25", "ranking", "top-k", "floating point"]
+teaches = [
+  "Matching and ranking are separate: the query decides which pages are in, and the scoring words decide their order.",
+  "The numbers behind a score (how many pages, their mean length, how many have a word) cover all batches, so batching cannot change a ranking.",
+  "A word under one NOT says what you do not want, so it adds nothing. Under two NOTs it counts again.",
+  "Ties need a rule, and floats added in a fixed order make equal pages exactly equal.",
+]
+follow_up = "1) Which of these numbers would you keep ready instead of working out per query? 2) How can a search stop early once no other page can reach the top k? 3) How would you count a word in the title twice as much?"
+related = ["Y52", "Y10", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "First get the matching pages. Then collect the scoring words from the tree, remembering whether you are under an odd number of NOTs. For each word, walk its postings and add to the pages that matched. Finally keep the k best."
+
+[[hints]]
+kind = "rust"
+text = "A `BTreeSet<&str>` gives the words once each and in order. The matches are sorted, so `binary_search` finds a posting's page among them and gives the index for its score. `BinaryHeap` with `Reverse` keeps the k best, and `into_sorted_vec` returns them best first."
+
+[[hints]]
+kind = "edge"
+text = "`k` may be 0 or `usize::MAX`. A matching page may have none of the scoring words, and then its score is 0. You do not need to walk the batches one by one to find the length of a page. An index with no pages has no mean, and no matches either."
+
+[solution]
+explanation = "The tree is parsed and evaluated. A walk of the tree gathers each distinct word that sits under an even number of NOTs. Words are taken in alphabetical order. Their postings over all batches give both the number of pages with the word and the count on each page. Pages that matched get the BM25 term added. Page lengths come from a binary search over the batches. A heap of at most k entries, ordered by score and then by lower page number, keeps the best."
+time = "O(matching + posting lengths x log + matching x log k)"
+space = "O(matching + k)"

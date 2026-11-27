@@ -1,0 +1,32 @@
+slug = "answer-a-query"
+title = "Answer a query"
+mode = "write"
+level = "hard"
+stage = "answer"
+order = 5
+status = "ready"
+tags = ["search engine", "set operations", "tree evaluation", "differential testing"]
+teaches = [
+  "Every node of a query tree stands for a set of pages. AND intersects, OR joins and NOT takes the rest of all pages.",
+  "Sorted vectors make good sets: join by sorting and removing repeats, intersect from the smallest.",
+  "A very simple second evaluator, one page at a time, checks the fast one over thousands of random trees.",
+]
+follow_up = "1) `rare AND NOT common` builds the huge complement first. How would you avoid that? 2) How would you return matches one at a time, without building each set? 3) In what order should the parts of a long AND be evaluated if you want to stop early?"
+related = ["Y52", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "Write one recursive function from a tree to a rising list of pages. The leaves already have methods from earlier steps. Each of the three other nodes combines the lists of its children."
+
+[[hints]]
+kind = "rust"
+text = "Evaluate the children of an AND first, sort the lists by length, then `retain` on the shortest with `binary_search` in the others. For OR, `flat_map` then `sort_unstable` and `dedup`. For NOT, walk `0..len` beside the sorted list with `peekable` and `next_if_eq`."
+
+[[hints]]
+kind = "edge"
+text = "`Nothing` matches no page, so `NOT Nothing` matches all. An AND of no items matches all pages and an OR of none matches no page; the parser never builds them, but a caller can."
+
+[solution]
+explanation = "The function follows the shape of the tree. A word gives the pages of its postings, a phrase and a pattern use the earlier methods, and nothing gives the empty list. AND evaluates its children, starts from the smallest list and keeps the pages present in the others. OR puts all lists together, sorts and removes repeats. NOT lists every page that its child's list does not hold, by walking both in step. The tree's depth is bounded by the parser, so the recursion is safe."
+time = "O(total length of the lists, times log for lookups and sorting)"
+space = "O(lists)"

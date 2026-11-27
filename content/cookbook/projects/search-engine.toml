@@ -26,19 +26,25 @@ An `Index` is a list of segments plus global statistics, so BM25 gives the same 
 [[sections]]
 heading = "Why it matters"
 body = """
-delta coding turns large, increasing ids into small numbers, and varints store small numbers in one byte, so postings shrink several-fold versus `Vec<u32>`. Immutable segments make incremental indexing cheap (build a new small segment, never rewrite old ones) and a background **merge** keeps the segment count, and query cost, bounded.
+delta coding turns large, increasing ids into small numbers, and varints store small numbers in one byte, so postings shrink several-fold versus `Vec<u32>`. Immutable segments make incremental indexing cheap: build a new small segment, never rewrite old ones. A **merge** folds segments together, so a query visits fewer of them.
 """
 
 [[sections]]
 heading = "How it works"
 body = """
-a boolean query string is parsed (`NOT` > `AND` > `OR`, parentheses, "quoted phrases", `*wildcards*`) into an `Expr`; evaluation yields a sorted doc set (phrases check consecutive positions, wildcards use trigram filter-then-verify); matches are scored with BM25 over the positive terms and the best k are kept in a min-heap.
+a boolean query string is parsed (`NOT` > `AND` > `OR`, parentheses, "quoted phrases", `*wildcards*`) into an `Expr`; evaluation yields a sorted doc set (phrases check consecutive positions, wildcards use trigram filter-then-verify); matches are scored with BM25 over the terms under an even number of NOTs, and the best k are kept in a min-heap. A query is limited to 256 tokens.
+"""
+
+[[sections]]
+heading = "Limits"
+body = """
+<ul class="cb-g-uses"><li>everything is in memory, and no document is deleted or updated</li><li>merging is a manual call that folds all segments into one; it re-encodes shared terms once per segment, and there is no background merge or merge policy</li><li>each query decodes posting lists and builds whole document sets</li><li>text is not Unicode normalised</li><li>a wildcard matches anywhere in the raw text, across word boundaries, and adds nothing to a score</li><li><code>AND</code>, <code>OR</code> and <code>NOT</code> are keywords only in capitals</li></ul>
 """
 
 [[sections]]
 heading = "Common uses"
 body = """
-<ul class="cb-g-uses"><li>product/site search (Lucene, Elasticsearch, tantivy)</li><li>log search with substring filters (trigram indexes as in Google Code Search)</li><li><strong>Ide</strong> "find in files"</li><li>email/notes apps</li><li>autocomplete backends</li><li>patterns: inverted index</li><li>posting compression</li><li>LSM-style immutable segments + merge</li><li>filter-then-verify</li><li>top-k heap</li></ul>
+<ul class="cb-g-uses"><li>product/site search (Lucene, Elasticsearch, tantivy)</li><li>log search with substring filters (trigram indexes as in Google Code Search)</li><li>IDE "find in files"</li><li>email/notes apps</li><li>autocomplete backends</li><li>patterns: inverted index</li><li>posting compression</li><li>LSM-style immutable segments + merge</li><li>filter-then-verify</li><li>top-k heap</li></ul>
 """
 
 [[sections]]

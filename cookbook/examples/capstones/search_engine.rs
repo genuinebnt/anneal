@@ -7,12 +7,19 @@
 //! positional postings are delta + varint compressed byte strings, (2) a trigram index over the raw lowercase text for
 //! substring and `*wildcard*` queries, and (3) per-document lengths. An `Index` is a list of segments plus global
 //! statistics, so BM25 gives the same answer however documents are split across segments.
+//! LIMITS: everything is in memory; nothing is deleted or updated; `merge_all` is called by hand and folds every
+//! segment into one, re-encoding shared terms once per segment (there is no background merge or merge policy). Every
+//! query decodes its posting lists and builds whole doc sets. Doc ids and positions are `u32`. Text is not Unicode
+//! normalised, so a decomposed "é" is not the same as a composed one. `AND`, `OR` and `NOT` are keywords only in capitals.
+//! A wildcard word matches anywhere in the raw text (across word boundaries), so `cast*` also finds "broadcast"; it
+//! adds nothing to a score. A query may hold at most 256 tokens, which bounds the recursion of parse, eval and drop.
 //! WHY: delta coding turns large, increasing ids into small numbers, and varints store small numbers in one byte, so
 //! postings shrink several-fold versus `Vec<u32>`. Immutable segments make incremental indexing cheap (build a new
-//! small segment, never rewrite old ones) and a background MERGE keeps the segment count, and query cost, bounded.
+//! small segment, never rewrite old ones); a MERGE folds segments together so a query visits fewer of them.
 //! HOW: a boolean query string is parsed (`NOT` > `AND` > `OR`, parentheses, "quoted phrases", `*wildcards*`) into an
 //! `Expr`; evaluation yields a sorted doc set (phrases check consecutive positions, wildcards use trigram
-//! filter-then-verify); matches are scored with BM25 over the positive terms and the best k are kept in a min-heap.
+//! filter-then-verify); matches are scored with BM25 over the terms under an even number of NOTs, and the best k are
+//! kept in a min-heap.
 //! COMMON USES: product/site search (Lucene, Elasticsearch, tantivy), log search with substring filters (trigram
 //! indexes as in Google Code Search), IDE "find in files", email/notes apps, autocomplete backends; patterns:
 //! inverted index, posting compression, LSM-style immutable segments + merge, filter-then-verify, top-k heap.
@@ -21,6 +28,12 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
 
 // ---------- tokenizer ----------
+
+/// Lowercase one char at a time, for substring search. `str::to_lowercase` looks at neighbours (a Greek capital sigma
+/// becomes a different letter at the end of a word), so a lowercased needle could stop being part of the lowercased text.
+fn fold(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}
 
 /// Lowercase and split on every non-alphanumeric char. Working on `char`s (not bytes) keeps "café" one token.
 fn tokenize(text: &str) -> Vec<String> {
@@ -46,6 +59,9 @@ fn get_varint(buf: &[u8], pos: &mut usize) -> Result<u32, &'static str> {
     for shift in (0..35).step_by(7) {
         let b = *buf.get(*pos).ok_or("truncated varint")?;
         *pos += 1;
+        if shift == 28 && b > 0x0f {
+            return Err("varint overflows u32"); // the fifth byte has room for 4 more bits only
+        }
         value |= u32::from(b & 0x7f) << shift;
         if b & 0x80 == 0 {
             return Ok(value);
@@ -80,16 +96,27 @@ fn encode_postings(list: &[Posting]) -> Vec<u8> {
     out
 }
 
+/// Adds a decoded gap. Only the first gap of a list may be 0: later ones must move strictly forward.
+fn add_gap(prev: u32, gap: u32, first: bool) -> Result<u32, &'static str> {
+    if gap == 0 && !first {
+        return Err("values are not ascending");
+    }
+    prev.checked_add(gap).ok_or("value overflows u32")
+}
+
 fn decode_postings(buf: &[u8]) -> Result<Vec<Posting>, &'static str> {
     let mut pos = 0;
     let n = get_varint(buf, &mut pos)?;
-    let (mut doc, mut list) = (0, Vec::new());
-    for _ in 0..n {
-        doc += get_varint(buf, &mut pos)?;
+    let (mut doc, mut list) = (0u32, Vec::new());
+    for i in 0..n {
+        doc = add_gap(doc, get_varint(buf, &mut pos)?, i == 0)?;
         let tf = get_varint(buf, &mut pos)?;
-        let (mut p, mut positions) = (0, Vec::new());
-        for _ in 0..tf {
-            p += get_varint(buf, &mut pos)?;
+        if tf == 0 {
+            return Err("posting without positions");
+        }
+        let (mut p, mut positions) = (0u32, Vec::new());
+        for j in 0..tf {
+            p = add_gap(p, get_varint(buf, &mut pos)?, j == 0)?;
             positions.push(p);
         }
         list.push(Posting { doc, positions });
@@ -174,7 +201,7 @@ impl Segment {
                     .or_default()
                     .push(Posting { doc: id, positions });
             }
-            let lower = text.to_lowercase();
+            let lower = fold(text);
             let tris: BTreeSet<[u8; 3]> = lower
                 .as_bytes()
                 .windows(3)
@@ -262,8 +289,13 @@ enum Expr {
     Not(Box<Expr>),
 }
 
+/// Parsing, evaluating and dropping an `Expr` all recurse, and each level of the tree uses up at least one token.
+const MAX_TOKENS: usize = 256;
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 enum QueryError {
+    #[error("query has more than {MAX_TOKENS} tokens")]
+    TooLong,
     #[error("unterminated quote")]
     UnterminatedQuote,
     #[error("unexpected end of query")]
@@ -284,6 +316,9 @@ fn lex(q: &str) -> Result<Vec<Tok>, QueryError> {
     let mut chars = q.chars().peekable();
     let mut toks = Vec::new();
     while let Some(&c) = chars.peek() {
+        if toks.len() > MAX_TOKENS {
+            break;
+        }
         match c {
             '(' | ')' => {
                 chars.next();
@@ -291,9 +326,13 @@ fn lex(q: &str) -> Result<Vec<Tok>, QueryError> {
             }
             '"' => {
                 chars.next();
-                let s: String = chars.by_ref().take_while(|&c| c != '"').collect();
-                if !q.ends_with('"') && q.matches('"').count() % 2 == 1 {
-                    return Err(QueryError::UnterminatedQuote);
+                let mut s = String::new();
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some(c) => s.push(c),
+                        None => return Err(QueryError::UnterminatedQuote),
+                    }
                 }
                 toks.push(Tok::Quoted(s));
             }
@@ -312,6 +351,9 @@ fn lex(q: &str) -> Result<Vec<Tok>, QueryError> {
                 toks.push(Tok::Word(w));
             }
         }
+    }
+    if toks.len() > MAX_TOKENS {
+        return Err(QueryError::TooLong);
     }
     Ok(toks)
 }
@@ -377,7 +419,7 @@ impl Parser {
             }
             Tok::RParen => Err(QueryError::Unexpected(")".into())),
             Tok::Word(w) if w == "AND" || w == "OR" => Err(QueryError::Unexpected(w)),
-            Tok::Word(w) if w.contains('*') => Ok(Expr::Wild(w.to_lowercase())),
+            Tok::Word(w) if w.contains('*') => Ok(Expr::Wild(fold(&w))),
             Tok::Word(w) | Tok::Quoted(w) => Ok(text_to_expr(&w)),
         }
     }
@@ -404,18 +446,19 @@ fn parse(q: &str) -> Result<Expr, QueryError> {
     }
 }
 
-/// Terms that should contribute to ranking: everything not under a NOT.
-fn positive_terms(e: &Expr, out: &mut BTreeSet<String>) {
+/// Terms that should contribute to ranking: those under an even number of NOTs (so `NOT NOT rust` ranks like `rust`).
+fn positive_terms(e: &Expr, negated: bool, out: &mut BTreeSet<String>) {
     match e {
-        Expr::Term(t) => {
+        Expr::Term(t) if !negated => {
             out.insert(t.clone());
         }
-        Expr::Phrase(ts) => out.extend(ts.iter().cloned()),
+        Expr::Phrase(ts) if !negated => out.extend(ts.iter().cloned()),
         Expr::And(a, b) | Expr::Or(a, b) => {
-            positive_terms(a, out);
-            positive_terms(b, out);
+            positive_terms(a, negated, out);
+            positive_terms(b, negated, out);
         }
-        Expr::Empty | Expr::Wild(_) | Expr::Not(_) => {}
+        Expr::Not(a) => positive_terms(a, !negated, out),
+        Expr::Empty | Expr::Wild(_) | Expr::Term(_) | Expr::Phrase(_) => {}
     }
 }
 
@@ -428,10 +471,16 @@ struct Bm25 {
 }
 
 /// Heap entry ordered by score, ties broken so the LOWER doc id is "greater" (deterministic output).
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 struct Ranked {
     score: f64,
     doc: u32,
+}
+/// Equality must agree with `Ord`; a derived one would compare the floats with `==`, which disagrees on NaN and -0.0.
+impl PartialEq for Ranked {
+    fn eq(&self, o: &Self) -> bool {
+        self.cmp(o) == Ordering::Equal
+    }
 }
 impl Eq for Ranked {}
 impl PartialOrd for Ranked {
@@ -589,7 +638,7 @@ impl Index {
         let expr = parse(query)?;
         let matched = self.eval(&expr);
         let mut terms = BTreeSet::new();
-        positive_terms(&expr, &mut terms);
+        positive_terms(&expr, false, &mut terms);
         let scores = self.bm25_scores(&terms, &matched);
         Ok(top_k(scores.into_iter(), k))
     }
@@ -614,11 +663,35 @@ fn oracle_match(e: &Expr, tokens: &[String], text: &str) -> bool {
         Expr::Empty => false,
         Expr::Term(t) => tokens.contains(t),
         Expr::Phrase(ts) => tokens.windows(ts.len()).any(|w| w == ts.as_slice()),
-        Expr::Wild(p) => wildcard_match(&text.to_lowercase(), p),
+        Expr::Wild(p) => oracle_wildcard(&fold(text), p),
         Expr::And(a, b) => oracle_match(a, tokens, text) && oracle_match(b, tokens, text),
         Expr::Or(a, b) => oracle_match(a, tokens, text) || oracle_match(b, tokens, text),
         Expr::Not(a) => !oracle_match(a, tokens, text),
     }
+}
+
+/// A second wildcard matcher (a table over chars, with a `*` added at both ends), so the oracle does not call the code
+/// that the index uses to verify candidates.
+fn oracle_wildcard(text: &str, pattern: &str) -> bool {
+    let pattern: Vec<char> = format!("*{pattern}*").chars().collect();
+    // reach[i]: the first i pattern chars can match the text read so far
+    let mut reach = vec![false; pattern.len() + 1];
+    reach[0] = true;
+    for i in 0..pattern.len() {
+        reach[i + 1] = reach[i] && pattern[i] == '*';
+    }
+    for c in text.chars() {
+        let mut next = vec![false; pattern.len() + 1];
+        for (i, &p) in pattern.iter().enumerate() {
+            next[i + 1] = if p == '*' {
+                next[i] || reach[i + 1]
+            } else {
+                p == c && reach[i]
+            };
+        }
+        reach = next;
+    }
+    reach[pattern.len()]
 }
 
 fn oracle_scan(docs: &[String], e: &Expr) -> BTreeSet<u32> {
@@ -811,8 +884,104 @@ fn check_phrases(idx: &Index, docs: &[String], rng: &mut Rng) -> usize {
     hits
 }
 
+/// Input that an earlier version accepted wrongly, panicked on or crashed on.
+fn check_hostile_input() {
+    for q in ["rust \"", "\"a\" \"", "\"", "\"a"] {
+        assert_eq!(parse(q), Err(QueryError::UnterminatedQuote), "{q:?}");
+    }
+    let mut at = 0;
+    assert!(
+        get_varint(&[0xff, 0xff, 0xff, 0xff, 0x7f], &mut at).is_err(),
+        "bits above 31 must not vanish"
+    );
+    let mut at = 0;
+    assert_eq!(
+        get_varint(&[0xff, 0xff, 0xff, 0xff, 0x0f], &mut at),
+        Ok(u32::MAX)
+    );
+    assert!(
+        decode_postings(&[2, 0xff, 0xff, 0xff, 0xff, 0x0f, 1, 0, 5, 1, 0]).is_err(),
+        "doc overflow"
+    );
+    assert!(
+        decode_postings(&[1, 0, 2, 0xff, 0xff, 0xff, 0xff, 0x0f, 5]).is_err(),
+        "position overflow"
+    );
+    assert!(
+        decode_postings(&[2, 3, 1, 0, 0, 1, 0]).is_err(),
+        "the same doc twice"
+    );
+    assert!(
+        decode_postings(&[1, 3, 2, 4, 0]).is_err(),
+        "the same position twice"
+    );
+    assert!(
+        decode_postings(&[1, 3, 0]).is_err(),
+        "a posting without positions"
+    );
+    // each of these once overflowed the stack (which aborts the process)
+    for q in [
+        "(".repeat(200_000),
+        "NOT ".repeat(200_000) + "a",
+        "a ".repeat(200_000),
+    ] {
+        assert_eq!(parse(&q), Err(QueryError::TooLong));
+    }
+    let widest = "a ".repeat(MAX_TOKENS);
+    let deepest = "NOT ".repeat(MAX_TOKENS - 1) + "a";
+    let mut idx = Index::new(Bm25 { k1: 1.2, b: 0.75 });
+    idx.add_segment(&[
+        "rust a b c".to_string(),
+        "rust rust".to_string(),
+        "ΟΔΟΣΤΡΩΜΑ".to_string(),
+    ]);
+    assert!(idx.search(&widest, 3).is_ok() && idx.search(&deepest, 3).is_ok());
+    assert_eq!(
+        parse(&"a ".repeat(MAX_TOKENS + 1)),
+        Err(QueryError::TooLong)
+    );
+    let twice = idx.search("NOT NOT rust", 3).unwrap();
+    assert_eq!(
+        twice,
+        idx.search("rust", 3).unwrap(),
+        "two NOTs cancel, in the scores too"
+    );
+    assert!(twice[0].score > 0.0);
+    let found: Vec<u32> = idx
+        .search("*ΟΔΟΣ*", 3)
+        .unwrap()
+        .iter()
+        .map(|h| h.doc)
+        .collect();
+    assert_eq!(found, vec![2], "a capital sigma at the end of a needle");
+    // a segment folds its pages one char at a time too: lowercased as a string, this page would end in the other sigma
+    idx.add_segment(&["ΟΔΟΣ".to_string()]);
+    assert_eq!(
+        idx.wildcard("οδοσ").1,
+        BTreeSet::from([2, 3]),
+        "a page that ends in a capital sigma"
+    );
+    let nan = Ranked {
+        score: f64::NAN,
+        doc: 1,
+    };
+    assert!(
+        nan == Ranked {
+            score: f64::NAN,
+            doc: 1
+        }
+    );
+    assert!(
+        Ranked { score: 0.0, doc: 1 }
+            != Ranked {
+                score: -0.0,
+                doc: 1
+            }
+    );
+}
+
 fn check_substrings(idx: &Index, docs: &[String], rng: &mut Rng) -> f64 {
-    let lower: Vec<String> = docs.iter().map(|d| d.to_lowercase()).collect();
+    let lower: Vec<String> = docs.iter().map(|d| fold(d)).collect();
     let mut needles: Vec<String> = [
         "cast", "ast", "ord rin", "ing", "rust a", "xy", "é", "zzz", ", ",
     ]
@@ -823,6 +992,25 @@ fn check_substrings(idx: &Index, docs: &[String], rng: &mut Rng) -> f64 {
         let bounds: Vec<usize> = d.char_indices().map(|(i, _)| i).chain([d.len()]).collect();
         let (a, b) = (rng.below(bounds.len()), rng.below(bounds.len()));
         needles.push(d[bounds[a.min(b)]..bounds[a.max(b)]].to_string());
+    }
+    // two or three pieces cut from one text, in either order, against the independent matcher
+    for _ in 0..300 {
+        let d: Vec<char> = lower[rng.below(lower.len())].chars().collect();
+        let pieces: Vec<String> = (0..2 + rng.below(2))
+            .map(|_| {
+                let a = rng.below(d.len());
+                d[a..(a + 1 + rng.below(6)).min(d.len())].iter().collect()
+            })
+            .collect();
+        let pattern = pieces.join("*");
+        let want: BTreeSet<u32> = (0..lower.len() as u32)
+            .filter(|&i| oracle_wildcard(&lower[i as usize], &pattern))
+            .collect();
+        assert_eq!(
+            idx.wildcard(&pattern).1,
+            want,
+            "wildcard mismatch for {pattern:?}"
+        );
     }
     let (mut cands, mut hits) = (0, 0);
     for n in &needles {
@@ -903,6 +1091,7 @@ fn main() {
     single.add_segment(&docs);
 
     check_codec(&mut rng);
+    check_hostile_input();
     hand_built_bm25();
     let q_hits = check_queries(&single, &docs, &mut rng);
     let p_hits = check_phrases(&single, &docs, &mut rng);

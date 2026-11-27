@@ -1,0 +1,35 @@
+slug = "pack-the-positions"
+title = "Pack where each word is"
+mode = "write"
+level = "medium"
+stage = "store"
+order = 1
+status = "ready"
+tags = ["search engine", "binary format", "varint", "delta encoding", "untrusted input"]
+teaches = [
+  "Rising numbers are stored as gaps, and small gaps fit in one byte. A nested list is packed by packing each level.",
+  "A strict decoder checks what the format promises: pages that rise, positions that rise, no empty entry and no bytes left over.",
+  "A count read from the input is a claim. Reserve nothing for it.",
+]
+follow_up = "1) How would a reader jump to page 5 000 000 without unpacking all that comes before it? 2) What would a version byte buy you, and where would you put it? 3) Why do some formats store the number of bytes of each posting?"
+related = ["Y52", "F7", "F5"]
+
+[perf]
+count_allocs = true
+
+[[hints]]
+kind = "approach"
+text = "Write one function that appends a number and one that reads a number at a position. The list code is then two nested loops. The rule that only a first gap may be 0 appears twice, so give it one function."
+
+[[hints]]
+kind = "rust"
+text = "`bytes.get(at)` turns the end of the input into an `Option`. `checked_add` reports a sum that leaves `u32`. The fifth byte of a `u32` may only be 0x00 to 0x0F."
+
+[[hints]]
+kind = "edge"
+text = "A list of no postings is the single byte 0, and empty input is `Truncated`. A count of 4 294 967 295 with nothing after it must return at once. The first page and the first position may both be 0."
+
+[solution]
+explanation = "A number is written seven bits at a time, with the top bit saying that more follow. Pages and positions are stored as the gap from the one before. The decoder reads in the order of the format and returns the first thing that breaks it. That may be running out, or a fifth byte with too many bits. It may be a later gap of 0, a sum that overflows or a posting with no position. Last, it checks for bytes after the end. Its lists grow only as bytes are really read."
+time = "O(bytes)"
+space = "O(postings and positions)"

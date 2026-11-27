@@ -1,0 +1,32 @@
+slug = "which-songs-have-this-tune"
+title = "Which songs contain this tune?"
+mode = "write"
+level = "medium"
+stage = "find-it"
+order = 2
+status = "ready"
+tags = ["search", "inverted index", "positions", "phrase search"]
+teaches = [
+  "Keep for each item not only which song has it but where. A run of items is then a question about places that line up.",
+  "A tune starts at place s when its item number i sits at place s + i, for every i.",
+  "Any item of the tune can be the starting guess. Start from the one that occurs least often.",
+]
+follow_up = "1) How would you also find tunes with one wrong note? 2) Which part of your index grows fastest, and how could it be made smaller? 3) What would change if a tune could skip over up to two notes?"
+related = ["S3", "S4", "Y52"]
+
+[[hints]]
+kind = "approach"
+text = "Record more than which songs hold a note. If you know every place of every note, you can test a possible start without reading the whole song."
+
+[[hints]]
+kind = "rust"
+text = "A list of `(song, place)` pairs that you only push to, song after song, is already sorted, and tuples compare in order. `binary_search` works on it. `checked_sub` handles a start that would be before the song."
+
+[[hints]]
+kind = "edge"
+text = "Matches may overlap: in `1 1 1`, the tune `1 1` starts twice. A tune never runs from the end of one song into the next. The note that is rare may be anywhere in the tune, so the start is that place minus its offset."
+
+[solution]
+explanation = "For every note the index keeps the sorted list of `(song, place)` pairs where it occurs. To find a tune, take the note of the tune with the shortest list. Each of its pairs, moved back by the note's offset in the tune, is a possible start. The start is real when every other note is found at the start plus its own offset, which a binary search answers. `starts` does this through the counted lists, and never searches back before its last answer."
+time = "O(r x t log n), where r is how often the rarest note of the tune occurs and t is the tune's length"
+space = "O(all notes)"

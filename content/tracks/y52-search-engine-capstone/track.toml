@@ -1,0 +1,21 @@
+code = "Y52"
+name = "Search engine: capstone"
+section = "Y"
+tier = "sde3"
+order = 52
+summary = "Build a full-text search engine in seven steps: packed positions, batches, a query language, pieces of words, evaluation, ranking and merging. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "store"
+name = "Store and read"
+band = "hard"
+
+[[stages]]
+slug = "answer"
+name = "Answer"
+band = "hard"
+
+[[stages]]
+slug = "keep-up"
+name = "Keep it tidy"
+band = "hard"

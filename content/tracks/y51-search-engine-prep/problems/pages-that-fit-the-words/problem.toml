@@ -1,0 +1,32 @@
+slug = "pages-that-fit-the-words"
+title = "Which pages fit these words?"
+mode = "write"
+level = "medium"
+stage = "find-it"
+order = 1
+status = "ready"
+tags = ["search", "inverted index", "sorted lists", "set operations"]
+teaches = [
+  "Turn the question around. Instead of asking each page for its words, keep for each word the list of its pages.",
+  "Page numbers are handed out in order, so every list is sorted without any sorting.",
+  "Start from the shortest list and only look things up in the longer ones. The cost then follows the rare word, not the common one.",
+]
+follow_up = "1) When two lists have about the same length, is looking up still the best way to combine them? 2) How would you let a page be deleted? 3) What would you store to also answer which words appear next to each other?"
+related = ["S3", "S4", "Y10", "Y52"]
+
+[[hints]]
+kind = "approach"
+text = "Decide what you can work out once, when a page is added, so that a question never reads a page again. Then think about a question with one word on 3 pages and another on 100 000."
+
+[[hints]]
+kind = "rust"
+text = "A `HashMap<String, Vec<u32>>` can be filled with `entry(word).or_default()`. A sorted slice has `binary_search`. `min_by_key` picks the shortest of several slices."
+
+[[hints]]
+kind = "edge"
+text = "A word that is on a page five times must list that page once. A word on no page has an empty list, which empties `all` but does nothing in `none`. With `all` and `any` both empty, start from every page."
+
+[solution]
+explanation = "Each word maps to the sorted numbers of the pages that hold it. Pages arrive in number order, so a push keeps the list sorted, and comparing with the last number stops repeats. A question starts from the shortest list that every answer must be in, then keeps the pages that pass each other test by binary search. Only when no list is required does it join the `any` lists, or start from every page. `in_every_list` walks the shortest list. In each other list it finds every number by binary search, from where the last search ended."
+time = "O(s x w log n) when a required word is on s pages and the question has w words"
+space = "O(distinct (word, page) pairs)"

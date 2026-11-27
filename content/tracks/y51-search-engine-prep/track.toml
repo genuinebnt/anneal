@@ -1,0 +1,21 @@
+code = "Y51"
+name = "Search engine: preparation"
+section = "Y"
+tier = "sde3"
+order = 51
+summary = "Small exercises on the ideas a search engine needs, each on a different task."
+
+[[stages]]
+slug = "find-it"
+name = "Find the right ones"
+band = "medium"
+
+[[stages]]
+slug = "grow-it"
+name = "Add as you go"
+band = "hard"
+
+[[stages]]
+slug = "answer-well"
+name = "Answer well"
+band = "hard"

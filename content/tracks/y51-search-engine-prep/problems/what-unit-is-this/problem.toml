@@ -1,0 +1,32 @@
+slug = "what-unit-is-this"
+title = "What unit is this?"
+mode = "write"
+level = "medium"
+stage = "answer-well"
+order = 5
+status = "ready"
+tags = ["parsing", "precedence", "error positions", "input limits"]
+teaches = [
+  "Each strength of binding gets its own function, which calls the next tighter one.",
+  "Writing two things side by side can be an operator. The loop for it asks whether the next token can start another item.",
+  "A long flat chain is a loop and costs no stack. Only nesting costs stack, so nesting is what needs a limit.",
+]
+follow_up = "1) How would you add prefixes such as `km`, without reading `mol` as milli-ol? 2) How would you print a result back in the shortest form? 3) Which part of your parser would change if `/` bound as tightly as writing side by side?"
+related = ["Y14", "Y15", "Y52"]
+
+[[hints]]
+kind = "approach"
+text = "There are three strengths. Write one function for the loosest, one for the middle and one for the tightest. Each loose one calls the next tighter one in a loop. Brackets go back to the loosest."
+
+[[hints]]
+kind = "rust"
+text = "Turn the text into a `Vec<(Token, usize)>` first, with the character position of each token. `matches!(next, Some(Token::Name(_) | Token::One | Token::Open))` answers whether another item starts here. `checked_add` and `checked_mul` report overflow."
+
+[[hints]]
+kind = "edge"
+text = "After a `.` another item must follow. After the outermost level, anything left over is an error at its position, such as a stray `)`. Remove an entry when its power comes to 0. Give the nesting count back when a bracket closes."
+
+[solution]
+explanation = "A ratio is products separated by `/`, folded from the left. A product is factors side by side or joined by `.`. A factor is a name, `1` or a bracketed ratio, with an optional power. Each result is a map from name to power, combined with checked arithmetic as soon as both sides exist, so no tree is built. Only brackets recurse, and one counter limits them."
+time = "O(tokens x distinct names)"
+space = "O(tokens + distinct names)"

@@ -1,0 +1,32 @@
+slug = "read-a-query"
+title = "Read a query"
+mode = "write"
+level = "hard"
+stage = "store"
+order = 3
+status = "ready"
+tags = ["search engine", "parsing", "precedence", "error positions", "input limits"]
+teaches = [
+  "Three strengths make three functions: OR calls AND, which calls NOT, which reads an item.",
+  "Writing two items side by side means AND, so the AND loop asks what ends it rather than what continues it.",
+  "A list node for AND and OR keeps a long flat query shallow. Then only brackets and NOT make the tree deeper, and they have a limit.",
+]
+follow_up = "1) How would you add `title:rust` to search one field? 2) How would you report every mistake in a query instead of the first? 3) Search boxes often accept a broken query and guess. What rules would you use?"
+related = ["Y52", "Y14", "Y15"]
+
+[[hints]]
+kind = "approach"
+text = "Split the text into tokens with their positions first. Then write one function for OR, one for AND and one for NOT, and one that reads a single item. A bracket calls the OR function again."
+
+[[hints]]
+kind = "rust"
+text = "`text.chars().enumerate().peekable()` gives positions in characters, and `next_if` takes the next one only when it belongs to the word. `matches!(self.peek(), None | Some(Token::Close))` is part of the test that ends the AND loop."
+
+[[hints]]
+kind = "edge"
+text = "A quote may hold brackets, spaces and the word OR. `\"AND\"` in quotes is a plain word, and so is `and`. An AND of one item is that item itself. Give the nesting count back after the bracket closes and after a NOT has its operand: many side by side are fine. A chain of 200 000 words must not recurse."
+
+[solution]
+explanation = "The lexer returns brackets, quotes and bare words with their positions, and reports a missing closing quote. The parser has one function per strength. OR collects AND groups while it sees OR. AND collects items until the end, a closing bracket or OR, and skips one AND between them. NOT counts one level and calls itself. Brackets count one level too. Because AND and OR collect into a list, the depth of the tree depends only on those two counted things, so parsing, walking and dropping it cannot overflow the stack."
+time = "O(query)"
+space = "O(query)"

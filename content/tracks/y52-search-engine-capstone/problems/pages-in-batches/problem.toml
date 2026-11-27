@@ -1,0 +1,32 @@
+slug = "pages-in-batches"
+title = "Add pages in batches and find phrases"
+mode = "write"
+level = "hard"
+stage = "store"
+order = 2
+status = "ready"
+tags = ["search engine", "inverted index", "immutable batches", "phrase search"]
+teaches = [
+  "Each batch gets an index of its own, built once and never edited. A question asks each batch and joins the answers in order.",
+  "Page numbers are global, so a batch must know the number of its first page.",
+  "With positions in the postings, a phrase is a question about places that line up, and no text has to be read.",
+]
+follow_up = "1) What would you store to skip a batch that cannot hold the word? 2) Where does the memory go while a batch is being built? 3) How would you allow a phrase with a gap of at most one word?"
+related = ["Y52", "Y10"]
+
+[[hints]]
+kind = "approach"
+text = "A batch needs its first page number, the length of each of its pages, and for each word the packed postings. Build the unpacked lists page by page, then pack them all at the end."
+
+[[hints]]
+kind = "rust"
+text = "`(first..).zip(pages)` numbers the pages. `last_mut()` on a word's list tells you whether this page already has a posting. `partition_point` finds the batch that holds a page, and `binary_search_by_key` finds a page in a posting list."
+
+[[hints]]
+kind = "edge"
+text = "A page with no words still gets a number. The same word may stand twice in a phrase. A phrase never runs from one page into the next. `position + i` can pass `u32::MAX` only in theory, but `checked_add` costs nothing."
+
+[solution]
+explanation = "Adding pages builds one new batch: tokenize each page, add each word's position to that word's posting, and pack every list once. Questions walk the batches in order, so page numbers come out rising. The batch of a page is found by binary search on the first page numbers. A phrase takes the postings of each word. It keeps a page when, for some position p of the first word, each word i is at p + i. Binary search answers that."
+time = "add: O(words in the batch); phrase: O(postings of its words, unpacked, plus lookups)"
+space = "O(packed postings)"

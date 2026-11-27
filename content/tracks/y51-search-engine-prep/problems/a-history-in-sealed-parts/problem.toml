@@ -1,0 +1,36 @@
+slug = "a-history-in-sealed-parts"
+title = "A message history that only grows"
+mode = "write"
+level = "hard"
+stage = "grow-it"
+order = 3
+status = "ready"
+tags = ["immutable data", "merging", "Arc", "append only", "amortised cost"]
+teaches = [
+  "Data that never changes after it is written can be shared freely. A snapshot is then a few pointer copies.",
+  "New data goes into a new small part. Joining the newest parts when they are close in size keeps the number of parts small.",
+  "A total that covers the whole history must be worked out from the parts' totals, never from the parts' averages.",
+  "Joining parts must be invisible: every answer is the same as if all the messages had arrived at once.",
+]
+follow_up = "1) How many times can one message be copied under this rule when every batch holds one message? 2) How would you delete a message when parts never change? 3) A reader keeps a snapshot for an hour. What stays in memory because of it?"
+related = ["S7", "Y17", "Y52"]
+
+[perf]
+count_allocs = true
+
+[[hints]]
+kind = "approach"
+text = "A part is built once from a list of messages and never edited. It should know the number of its first message and anything it can total in advance. Joining two parts builds a new one."
+
+[[hints]]
+kind = "rust"
+text = "`Vec<Arc<Part>>` makes cloning the whole history cheap, because only the pointers are copied. `Vec::pop` gives you the two newest parts by value. `partition_point` finds the part that holds a message number."
+
+[[hints]]
+kind = "edge"
+text = "One new batch can set off several joins, one after another. An empty batch adds no part. When two parts are joined, the older messages and the older author lists come first."
+
+[solution]
+explanation = "Each part holds the number of its first message, its messages, the numbers of each author's messages and the total length. A new batch becomes a new part. While the part before the newest is less than twice as large, the two are replaced by one built from both. Every remaining part is then at least twice as large as the next, so there are only about log2(n) parts. Parts sit behind `Arc`, so a snapshot copies the short list of pointers and shares everything else."
+time = "append: O(b log n) amortised for batches of ordinary sizes; snapshot: O(log n)"
+space = "O(messages)"

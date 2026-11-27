@@ -1,0 +1,33 @@
+slug = "the-best-few-of-many"
+title = "The best few of a very long stream"
+mode = "write"
+level = "medium"
+stage = "answer-well"
+order = 4
+status = "ready"
+tags = ["priority queue", "ordering", "floating point", "top-k", "generics"]
+teaches = [
+  "To keep the best k, you need quick access to the worst one you hold. A heap that puts the worst on top gives that.",
+  "A float has no total order of its own. Choose one, keep NaN out when the value is made, and make equality agree with the order.",
+  "Code that works for any ordered item can be tested with an item that counts how often it is compared.",
+  "A number sent by a caller is not a size to reserve memory by.",
+]
+follow_up = "1) How would you merge the best lists of ten machines into one? 2) What breaks if two equal scores have no tie rule? 3) A sorted `Vec` also needs few comparisons. What does it cost that comparisons do not show?"
+related = ["S5", "Y10", "Y52"]
+
+[[hints]]
+kind = "approach"
+text = "Think about which one item decides the fate of a new offer once you hold `k` of them. Keep that item the cheapest one to find and to replace."
+
+[[hints]]
+kind = "rust"
+text = "`BinaryHeap` keeps its **largest** item on top. Wrap the item in `std::cmp::Reverse`, which turns its order round. `peek_mut` lets you replace the top. `into_sorted_vec` sorts from smallest to largest. For `Entry`, `f64::total_cmp` orders floats, and `then_with` adds a tie rule."
+
+[[hints]]
+kind = "edge"
+text = "`k` may be 0, or `usize::MAX`: do not reserve `k` places. An item equal to the worst of a full list is refused. With equal scores the smaller id is the better entry, so ids compare the other way round."
+
+[solution]
+explanation = "`Entry` orders by score with `total_cmp`, then by id the other way round, so that greater means better. NaN never becomes an entry. `Best` keeps a heap of `Reverse` items, which puts the worst kept item on top. While there is room, an offer is pushed. Once full, it replaces the top only when it is greater. So each offer costs a number of comparisons that grows with the logarithm of k."
+time = "O(log k) per offer, O(k log k) to sort at the end"
+space = "O(min(k, offers))"
