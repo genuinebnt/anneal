@@ -1888,7 +1888,6 @@ mod ch_4d_c6 {
 
 // @@ challenge 4d-c7 begin
 mod ch_4d_c7 {
-    use proptest::prelude::*;
 
     use bustub::concurrency::anomaly_lab::{dirty_read, lost_update, non_repeatable_read, phantom, possible, write_skew, Anomaly};
     use bustub::concurrency::lab_db::{LabDb, Level, Level::*};

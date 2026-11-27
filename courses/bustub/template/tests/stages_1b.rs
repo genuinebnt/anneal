@@ -1010,7 +1010,6 @@ mod ch_1b_c4 {
 
 // @@ challenge 1b-c5 begin
 mod ch_1b_c5 {
-    use proptest::prelude::*;
 
     use bustub::storage::disk::job_pool::JobPool;
     use std::sync::atomic::{AtomicUsize, Ordering};

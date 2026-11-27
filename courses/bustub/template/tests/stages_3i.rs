@@ -949,7 +949,6 @@ proptest! {
 
 // @@ challenge 3i-c1 begin
 mod ch_3i_c1 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::in_set::InSet;
@@ -1014,7 +1013,6 @@ mod ch_3i_c1 {
 
 // @@ challenge 3i-c2 begin
 mod ch_3i_c2 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::not_in::not_in;
@@ -1064,7 +1062,6 @@ mod ch_3i_c2 {
 
 // @@ challenge 3i-c3 begin
 mod ch_3i_c3 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::optimizer::case_fold::{fold_case, Case, Cond, Cond::*, Folded};
@@ -1157,7 +1154,6 @@ mod ch_3i_c3 {
 
 // @@ challenge 3i-c4 begin
 mod ch_3i_c4 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::expressions::like_expression::like_matches;
@@ -1230,7 +1226,6 @@ mod ch_3i_c4 {
 
 // @@ challenge 3i-c5 begin
 mod ch_3i_c5 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::analyze_times::{exclusive_times, slowest};
@@ -1335,7 +1330,6 @@ mod ch_3i_c5 {
 
 // @@ challenge 3i-c6 begin
 mod ch_3i_c6 {
-    use proptest::prelude::*;
 
     use super::*;
     use std::any::Any;

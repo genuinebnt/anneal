@@ -559,7 +559,6 @@ proptest! {
 
 // @@ challenge 4e-c1 begin
 mod ch_4e_c1 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::common::retry::{backoff_ms, is_retryable, run_with_retry};
@@ -629,7 +628,6 @@ mod ch_4e_c1 {
 
 // @@ challenge 4e-c2 begin
 mod ch_4e_c2 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::sql::split::split_statements;
@@ -688,7 +686,6 @@ mod ch_4e_c2 {
 
 // @@ challenge 4e-c3 begin
 mod ch_4e_c3 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::common::session_state::{step, Input, Input::*, Reply, State, State::*};
@@ -766,7 +763,6 @@ mod ch_4e_c3 {
 
 // @@ challenge 4e-c4 begin
 mod ch_4e_c4 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::common::idle_reaper::{expired, next_check_in, SessionInfo};
@@ -829,7 +825,6 @@ mod ch_4e_c4 {
 
 // @@ challenge 4e-c5 begin
 mod ch_4e_c5 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::common::session_pool::SessionPool;
@@ -918,7 +913,6 @@ mod ch_4e_c5 {
 
 // @@ challenge 4e-c6 begin
 mod ch_4e_c6 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::common::read_only::ReadOnlySession;

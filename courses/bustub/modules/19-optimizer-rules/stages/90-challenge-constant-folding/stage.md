@@ -2,7 +2,7 @@ A challenge: no walkthrough, no hints, no solution. Solve it with what this modu
 
 ## What to build
 
-`fold` in `src/optimizer/const_fold.rs`: simplify an expression tree over integer and boolean constants and column references, **without changing its value on any row**. Evaluate every subtree that has no column in it; apply the identities `x + 0`, `0 + x`, `x * 1`, `1 * x` -> `x`, `x * 0`, `0 * x` -> `0`, `true AND x` -> `x`, `false AND x` -> `false`, `false OR x` -> `x`, `true OR x` -> `true`, `NOT NOT x` -> `x`.
+`fold` in `src/optimizer/const_fold.rs`: simplify an expression tree over integer and boolean constants and column references, **without changing its value on any row**. Evaluate every subtree that has no column in it; apply the identities `x + 0`, `0 + x`, `x * 1`, `1 * x` -> `x`, `x * 0`, `0 * x` -> `0`, `true AND x` -> `x`, `false AND x` -> `false`, `false OR x` -> `x`, `true OR x` -> `true`, `NOT NOT x` -> `x`. "Without changing its value" includes failures: a subtree that overflows or mixes types fails before folding and must still fail after. So an identity that keeps `x` needs `x` to have the right type, and one that drops `x` (`* 0`, `false AND`, `true OR`) is allowed only when `x` cannot fail at all.
 
 ## Why
 

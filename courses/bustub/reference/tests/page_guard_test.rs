@@ -103,6 +103,7 @@ fn drop_test() {
 }
 
 #[test]
+#[allow(unused_assignments)] // the reassignments are the point: each drops the guard it replaces
 fn move_test() {
     let (bpm, _disk_manager) = new_bpm();
 

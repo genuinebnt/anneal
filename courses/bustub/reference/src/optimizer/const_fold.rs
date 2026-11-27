@@ -74,20 +74,48 @@ pub fn fold(e: &Expr) -> Expr {
         }
         go(e)
     };
+    // An identity may drop an operand only if that cannot hide a failure: `x + 0`, `x * 1`, `x AND TRUE`, `x OR FALSE` and
+    // `NOT NOT x` keep `x`, so `x` only has to have the right type; `x * 0`, `x AND FALSE` and `x OR TRUE` drop `x` entirely, so `x`
+    // must be unable to fail at all (no type error, no arithmetic that could overflow).
+    #[derive(PartialEq)]
+    enum Ty {
+        I,
+        B,
+    }
+    fn ty(e: &Expr) -> Option<Ty> {
+        match e {
+            Int(_) | Col(_) => Some(Ty::I),
+            Bool(_) => Some(Ty::B),
+            Add(a, b) | Mul(a, b) => (ty(a)? == Ty::I && ty(b)? == Ty::I).then_some(Ty::I),
+            Lt(a, b) => (ty(a)? == Ty::I && ty(b)? == Ty::I).then_some(Ty::B),
+            And(a, b) | Or(a, b) => (ty(a)? == Ty::B && ty(b)? == Ty::B).then_some(Ty::B),
+            Not(a) => (ty(a)? == Ty::B).then_some(Ty::B),
+        }
+    }
+    fn cannot_fail(e: &Expr) -> bool {
+        match e {
+            Int(_) | Bool(_) | Col(_) => true,
+            Add(..) | Mul(..) => false,
+            Lt(a, b) => ty(a) == Some(Ty::I) && ty(b) == Some(Ty::I) && cannot_fail(a) && cannot_fail(b),
+            And(a, b) | Or(a, b) => ty(a) == Some(Ty::B) && ty(b) == Some(Ty::B) && cannot_fail(a) && cannot_fail(b),
+            Not(a) => ty(a) == Some(Ty::B) && cannot_fail(a),
+        }
+    }
+    let is = |x: &Expr, t: Ty| ty(x) == Some(t);
     let out = match e {
         Int(_) | Bool(_) | Col(_) => return e.clone(),
         Add(a, b) => {
             let (a, b) = (fold(a), fold(b));
             match (&a, &b) {
-                (Int(0), x) | (x, Int(0)) => x.clone(),
+                (Int(0), x) | (x, Int(0)) if is(x, Ty::I) => x.clone(),
                 _ => Add(Box::new(a), Box::new(b)),
             }
         }
         Mul(a, b) => {
             let (a, b) = (fold(a), fold(b));
             match (&a, &b) {
-                (Int(1), x) | (x, Int(1)) => x.clone(),
-                (Int(0), _) | (_, Int(0)) => Int(0),
+                (Int(1), x) | (x, Int(1)) if is(x, Ty::I) => x.clone(),
+                (Int(0), x) | (x, Int(0)) if cannot_fail(x) && is(x, Ty::I) => Int(0),
                 _ => Mul(Box::new(a), Box::new(b)),
             }
         }
@@ -95,21 +123,21 @@ pub fn fold(e: &Expr) -> Expr {
         And(a, b) => {
             let (a, b) = (fold(a), fold(b));
             match (&a, &b) {
-                (Bool(true), x) | (x, Bool(true)) => x.clone(),
-                (Bool(false), _) | (_, Bool(false)) => Bool(false),
+                (Bool(true), x) | (x, Bool(true)) if is(x, Ty::B) => x.clone(),
+                (Bool(false), x) | (x, Bool(false)) if cannot_fail(x) && is(x, Ty::B) => Bool(false),
                 _ => And(Box::new(a), Box::new(b)),
             }
         }
         Or(a, b) => {
             let (a, b) = (fold(a), fold(b));
             match (&a, &b) {
-                (Bool(false), x) | (x, Bool(false)) => x.clone(),
-                (Bool(true), _) | (_, Bool(true)) => Bool(true),
+                (Bool(false), x) | (x, Bool(false)) if is(x, Ty::B) => x.clone(),
+                (Bool(true), x) | (x, Bool(true)) if cannot_fail(x) && is(x, Ty::B) => Bool(true),
                 _ => Or(Box::new(a), Box::new(b)),
             }
         }
         Not(a) => match fold(a) {
-            Not(inner) => *inner,
+            Not(inner) if is(&inner, Ty::B) => *inner,
             Bool(b) => Bool(!b),
             x => Not(Box::new(x)),
         },

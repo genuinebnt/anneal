@@ -6,7 +6,6 @@ mod pool;
 mod crash;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 
 use bustub::common::config::PageId;
 use bustub::common::rid::Rid;

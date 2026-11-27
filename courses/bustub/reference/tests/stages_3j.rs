@@ -834,7 +834,6 @@ proptest! {
 
 // @@ challenge 3j-c1 begin
 mod ch_3j_c1 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::hash_outer_join::{hash_join, JoinKind, Row};
@@ -946,7 +945,6 @@ mod ch_3j_c1 {
 
 // @@ challenge 3j-c2 begin
 mod ch_3j_c2 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::outer_join_counts::{partner_counts, Row};
@@ -1017,7 +1015,6 @@ mod ch_3j_c2 {
 
 // @@ challenge 3j-c3 begin
 mod ch_3j_c3 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::set_laws::*;
@@ -1090,7 +1087,6 @@ mod ch_3j_c3 {
 
 // @@ challenge 3j-c4 begin
 mod ch_3j_c4 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::merge_set_ops::{merge_set_op, Op};
@@ -1191,7 +1187,6 @@ mod ch_3j_c4 {
 
 // @@ challenge 3j-c5 begin
 mod ch_3j_c5 {
-    use proptest::prelude::*;
 
     use super::*;
     use bustub::execution::null_rejection::{eval, rejects_nulls, B, S};

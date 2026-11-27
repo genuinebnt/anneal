@@ -89,9 +89,6 @@ struct PageModel {
     deleted: bool,
 }
 
-fn pick(pages: &[PageModel], i: usize) -> Option<&PageModel> {
-    if pages.is_empty() { None } else { pages.get(i % pages.len()) }
-}
 fn pick_mut(pages: &mut [PageModel], i: usize) -> Option<&mut PageModel> {
     let n = pages.len();
     if n == 0 { None } else { pages.get_mut(i % n) }

@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use b_plus_tree_utils::*;
 use bustub::buffer::buffer_pool_manager::BufferPoolManager;
-use bustub::common::rid::Rid;
 use bustub::storage::disk::disk_manager_memory::DiskManagerUnlimitedMemory;
 
 fn new_bpm(frames: usize) -> BufferPoolManager {

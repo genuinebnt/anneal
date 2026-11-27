@@ -552,7 +552,6 @@ mod ch_0b_c3 {
 
     use bustub::primer::skiplist::SkipList;
     use bustub::primer::skiplist_extras::{floor, range_count};
-    use std::collections::BTreeSet;
 
     fn list_of(keys: &[i32]) -> SkipList<i32> {
         let l = SkipList::new();

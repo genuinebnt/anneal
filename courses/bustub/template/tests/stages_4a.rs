@@ -445,7 +445,7 @@ fn s4a_03_a_tuple_committed_at_or_before_the_read_timestamp_needs_no_logs() {
 fn s4a_03_a_tuple_the_transaction_wrote_itself_needs_no_logs() {
     let db = new_db();
     let table = maintable(&db);
-    let owner = begin(&db);
+    let _owner = begin(&db);
     let reader = begin(&db);
     let own = row_with_chain(&db, &table, &reader, reader.temp_ts(), 1, &[(0, 5)]);
     assert_eq!(collect(&db, &table, own, &reader).unwrap().len(), 0, "the newest version is its own");

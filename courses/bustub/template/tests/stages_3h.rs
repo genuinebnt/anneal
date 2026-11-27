@@ -677,11 +677,19 @@ mod ch_3h_c1 {
     fn s3h_c1_a_trap_must_not_be_folded_away() {
         // an overflow cannot be evaluated: it is left in the tree, not turned into a made-up value
         let e = Add(b(Int(i64::MAX)), b(Int(1)));
-        assert_eq!(fold(&e), e);
+        assert_eq!(fold(&e), e, "an overflowing subtree is left as it is");
+        // and no identity may erase it: `x * 0` and `x AND FALSE` drop x, so x must be unable to fail
+        let times_zero = Mul(b(e.clone()), b(Int(0)));
+        assert_eq!(eval(&fold(&times_zero), &[]), None, "(MAX + 1) * 0 still fails after folding: the overflow is not multiplied away");
+        let and_false = And(b(Lt(b(e.clone()), b(Int(0)))), b(Bool(false)));
+        assert_eq!(eval(&fold(&and_false), &[]), None, "(MAX + 1 < 0) AND FALSE still fails after folding");
+        let ill_typed = And(b(Int(3)), b(Bool(true)));
+        assert_eq!(eval(&fold(&ill_typed), &[]), None, "3 AND TRUE is a type error before and after folding");
     }
 
     fn arb_int(depth: u32) -> BoxedStrategy<Expr> {
-        let leaf = prop_oneof![(-3i64..4).prop_map(Int), (0usize..2).prop_map(Col)];
+        // the extremes make some subtrees overflow: folding must keep those failures, not erase them with an identity
+        let leaf = prop_oneof![8 => (-3i64..4).prop_map(Int), 4 => (0usize..2).prop_map(Col), 1 => prop_oneof![Just(Int(i64::MAX)), Just(Int(i64::MIN))]];
         if depth == 0 {
             return leaf.boxed();
         }

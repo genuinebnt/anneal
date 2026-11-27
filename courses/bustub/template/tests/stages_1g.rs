@@ -592,6 +592,7 @@ fn s1g_03_guards_moved_into_a_vec_keep_their_pages_pinned_until_dropped() {
 }
 
 #[test]
+#[allow(unused_assignments)] // the assignment is the point: it drops the guard it replaces
 fn s1g_03_assigning_a_guard_drops_the_one_it_replaces() {
     let (bpm, _) = pool(4);
     let (a, b) = (bpm.new_page(), bpm.new_page());
@@ -638,7 +639,6 @@ proptest! {
 
 // @@ challenge 1g-c1 begin
 mod ch_1g_c1 {
-    use proptest::prelude::*;
 
     use bustub::common::defer::Defer;
     use std::cell::RefCell;
@@ -892,7 +892,6 @@ mod ch_1g_c3 {
 
 // @@ challenge 1g-c4 begin
 mod ch_1g_c4 {
-    use proptest::prelude::*;
 
     use bustub::common::timed_latch::TimedLatch;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -966,7 +965,6 @@ mod ch_1g_c4 {
 
 // @@ challenge 1g-c5 begin
 mod ch_1g_c5 {
-    use proptest::prelude::*;
 
     use bustub::common::slot_pair::{Slots, TransferError};
     use std::sync::Arc;
