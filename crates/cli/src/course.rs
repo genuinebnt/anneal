@@ -2090,6 +2090,45 @@ fn tests_bullets(md: &str) -> Vec<usize> {
     blocks
 }
 
+/// The `> [!CHECK]` questions in `md` whose block has an odd number of `||` spoiler marks (outside inline code): the website then shows
+/// the answer in plain view. Returns the question of each.
+fn unpaired_check_spoilers(md: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let (mut fence, mut question, mut marks) = (false, None::<String>, 0usize);
+    let mut close = |question: &mut Option<String>, marks: &mut usize| {
+        if let Some(q) = question.take()
+            && *marks % 2 == 1
+        {
+            found.push(q);
+        }
+        *marks = 0;
+    };
+    for line in md.lines() {
+        if question.is_none() && line.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+        if fence {
+            continue;
+        }
+        if let Some(q) = line.strip_prefix("> [!CHECK]") {
+            close(&mut question, &mut marks);
+            question = Some(q.trim().to_owned());
+            continue;
+        }
+        if question.is_some() && !line.starts_with('>') {
+            close(&mut question, &mut marks);
+            continue;
+        }
+        if question.is_some() {
+            // `a || b` inside inline code is code, not a spoiler mark
+            let outside_code: String = line.split('`').step_by(2).collect();
+            marks += outside_code.matches("||").count();
+        }
+    }
+    close(&mut question, &mut marks);
+    found
+}
+
 fn lint(course_id: &str, courses: &Path, all: bool) -> anyhow::Result<ExitCode> {
     use anneal_content::course::Course as Def;
     let root = courses.join(course_id);
@@ -2102,6 +2141,10 @@ fn lint(course_id: &str, courses: &Path, all: bool) -> anyhow::Result<ExitCode> 
             println!("note  {}: {} stages (6 to 10 is the sweet spot; not a hard limit)", m.code, core_stages);
         }
         for st in &m.stages {
+            let page = std::iter::once(st.intro.as_str()).chain(st.sections.iter().map(|s| s.md.as_str())).chain(st.hints.iter().map(|h| h.md.as_str()));
+            for q in page.flat_map(unpaired_check_spoilers) {
+                problems.push(format!("{}: the check {q:?} has an unpaired `||` spoiler mark (the website would show its answer)", st.id));
+            }
             if st.kind == "boss" {
                 continue;
             }
@@ -2168,6 +2211,11 @@ fn lint(course_id: &str, courses: &Path, all: bool) -> anyhow::Result<ExitCode> 
                     }
                 }
             }
+        }
+    }
+    for k in &def.concepts {
+        for q in k.sections.iter().flat_map(|x| unpaired_check_spoilers(&x.md)) {
+            problems.push(format!("concept {}: the check {q:?} has an unpaired `||` spoiler mark (the website would show its answer)", k.id));
         }
     }
     for p in &problems {
@@ -2490,5 +2538,24 @@ mod learner_screens {
         assert_eq!(stage_test_names(&dir, &stage(&["stages_9z"])).len(), 3);
         assert!(stage_test_names(&dir, &stage(&["stages_missing"])).is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lint_tests {
+    use super::unpaired_check_spoilers;
+
+    #[test]
+    fn a_check_with_an_unpaired_spoiler_mark_is_found() {
+        let ok = "> [!CHECK] Which page goes?\n> ||Page 3.||\n>\n> - nudge\n\nText with `a || b` and || outside a check.\n";
+        assert!(unpaired_check_spoilers(ok).is_empty(), "paired marks, and marks outside a check, are fine");
+        let bad = "Intro.\n\n> [!CHECK] Which page goes?\n> ||Page 3, because it is the oldest.\n>\n> - nudge\n\n> [!CHECK] Second?\n> ||Fine.||\n";
+        assert_eq!(unpaired_check_spoilers(bad), ["Which page goes?"], "only the first check has a lone mark");
+        let code = "> [!CHECK] What does `x || y` give?\n> ||`true` when either is.||\n";
+        assert!(unpaired_check_spoilers(code).is_empty(), "`||` inside inline code is not a mark");
+        let fenced = "```text\n> [!CHECK] not a check\n> ||open\n```\n";
+        assert!(unpaired_check_spoilers(fenced).is_empty(), "a check inside a code fence is not a check");
+        let at_end = "> [!CHECK] Last?\n> ||the answer|";
+        assert_eq!(unpaired_check_spoilers(at_end).len(), 1, "a check at the end of the text is closed too");
     }
 }
