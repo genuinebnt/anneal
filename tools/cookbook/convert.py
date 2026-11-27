@@ -391,7 +391,7 @@ def write_page(out, subject, pid, fields, sections, sources, code=()):
 # drawings whose words run out of their box or off the drawing at the app's fonts: no stylesheet can move them
 DRAWING_FIXES = (
     ('<text x="520" y="62" class="cb-g-mut">inner: k keys, k+1 children; child i holds keys in [key_i, key_{i+1})</text>',
-     '<text x="592" y="46" class="cb-g-mut">inner: k keys, k+1 children;</text><text x="592" y="62" class="cb-g-mut">child i holds keys in [key_i, key_{i+1})</text>'),
+     '<text x="592" y="26" class="cb-g-mut">inner: k keys, k+1 children;</text><text x="592" y="42" class="cb-g-mut">child i holds keys in [key_i, key_{i+1})</text>'),
     *((f'<rect x="{x}" y="164" width="170" height="22" rx="3" class="cb-g-box"></rect>',
        f'<rect x="{x}" y="164" width="205" height="22" rx="3" class="cb-g-box"></rect>') for x in (60, 320, 580)),
 )

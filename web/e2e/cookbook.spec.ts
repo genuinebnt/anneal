@@ -347,3 +347,61 @@ test("A table the page wrote keeps its own box, and no guide block pushes a phon
         expect(await noSideScroll(page), id).toBeLessThanOrEqual(0);
     }
 });
+
+for (const id of ["backends-hir-mir-llvm-and-cranelift", "dsls-and-sql-parsing", "sql-front-end"]) {
+    test(`A ladder is one row or one column, and every arrow points from a stage to the next: ${id}`, async ({ page }) => {
+        await guide(page, id, 1440);
+        for (const width of [390, 600, 900, 1100, 1280, 1440, 1600, 1728, 1900, 2200, 2560]) {
+            await page.setViewportSize({ width, height: 900 });
+            const wrong = () => page.locator(".cb-g-ladder").first().evaluate((ladder) => {
+                const parts = [...ladder.children].map((e) => ({ r: e.getBoundingClientRect(), tag: e.tagName, turn: getComputedStyle(e).rotate }));
+                if (parts.length < 3 || parts.length % 2 === 0) return ["not stages with arrows between them"];
+                const row = Math.abs(parts[0]!.r.y - parts[parts.length - 1]!.r.y) < 2;
+                const bad: string[] = [];
+                parts.forEach((p, i) => {
+                    if (p.tag !== "I") return;
+                    const [from, to] = [parts[i - 1]!.r, parts[i + 1]!.r];
+                    const middle = { x: p.r.x + p.r.width / 2, y: p.r.y + p.r.height / 2 };
+                    const between = row
+                        ? p.turn === "none" && middle.x > from.right && middle.x < to.x && middle.y > from.y && middle.y < from.bottom && Math.abs(from.y - to.y) < 2
+                        : p.turn === "90deg" && middle.y > from.bottom && middle.y < to.y && Math.abs(from.x - to.x) < 2 && Math.abs(from.width - to.width) < 2;
+                    if (!between) bad.push(`arrow ${(i + 1) / 2} in a ${row ? "row" : "column"}`);
+                });
+                return bad;
+            });
+            await expect.poll(wrong, { message: `${width} wide` }).toEqual([]);
+            expect(await noSideScroll(page), `${width} wide`).toBeLessThanOrEqual(0);
+        }
+    });
+}
+
+for (const id of ["std-convert-from-into-asref", "std-fs-file-operations-usecases", "std-process-command-pipelines", "mem-functions", "std-time-instant-duration-systemtime", "std-smart-pointers-use-cases", "std-sync-primitives-use-cases", "chrono-dates-times-zones", "time-crate-dates-formatting", "serde-attributes-enum-representations"]) {
+    test(`On a phone nothing pushes the page sideways: ${id}`, async ({ page }) => {
+        await guide(page, id, 390);
+        await expect.poll(() => noSideScroll(page)).toBeLessThanOrEqual(0);
+        // the title, the line under it and every cheat sheet cell end inside the window
+        const out = await page.locator(".cb-head h1, .cb-head .cb-dek, .cb-topics li, .cb-g-cheat td").evaluateAll((all) => all.filter((e) => e.getBoundingClientRect().right > innerWidth + 1 || e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+        expect(out).toEqual([]);
+    });
+}
+
+test("A cheat sheet keeps an arrow in brackets with its words, and a titled note stands apart from what follows", async ({ page }) => {
+    await guide(page, "std-convert-from-into-asref", 1440);
+    await expect(page.locator(".cb-g-cheat tr", { hasText: "Infallible widening" }).locator("td")).toHaveText(["Infallible widening (u8 -> u32)", "From / Into"]);
+    await guide(page, "performance-data-layout-simd-threads-and-lock-free-structure", 1440);
+    const gaps = await page.locator(".cb-g-tip + p").evaluateAll((all) => all.map((p) => p.getBoundingClientRect().top - p.previousElementSibling!.getBoundingClientRect().bottom));
+    expect(gaps.length).toBeGreaterThan(0);
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(12);
+});
+
+test("No words in a drawing come out much under 12px on a desktop", async ({ page }) => {
+    for (const id of ["the-dbms-stack", "b-trees"]) {
+        await guide(page, id, 1440);
+        const smallest = await page.locator(".cb-g-fig svg").first().evaluate((svg) => {
+            const s = svg as SVGSVGElement;
+            const scale = s.getBoundingClientRect().width / s.viewBox.baseVal.width;
+            return Math.min(...[...s.querySelectorAll("text")].map((t) => parseFloat(getComputedStyle(t).fontSize) * scale));
+        });
+        expect(smallest, id).toBeGreaterThanOrEqual(11.8);
+    }
+});

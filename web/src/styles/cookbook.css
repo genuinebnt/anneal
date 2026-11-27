@@ -305,7 +305,7 @@ html.cb-noscroll{overflow:hidden}
 .cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.cb-view,.cb-out,.cb-methods,.cb-cmp,.cb-walk,.sd-code.sd-long,.sd-deeper[open]:has(.cb-cmp,.cb-walk,.cb-view,.sd-long)),
 .cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.cb-cmp,.cb-walk,.sd-code.sd-long){max-width:100%}
 .cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.sd-tbl,pre,.sd-steps-fig,.sd-deeper[open]:has(.sd-tbl,table)),
-.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,.cb-g-steps,table.cb-g-cheat){max-width:100%}
+.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,.cb-g-steps,.cb-g-deep,table.cb-g-cheat){max-width:100%}
 
 /* ---- beside the text ---- */
 .cb-art>.cb-margin{position:absolute;top:0;bottom:0;right:calc((100% - var(--frame)) / 2);width:var(--side);pointer-events:none;font-size:14px;line-height:1.6}

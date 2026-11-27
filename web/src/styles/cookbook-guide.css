@@ -26,6 +26,18 @@
 .cb-art .sd-md .cb-g-uses li,.cb-art .sd-md .cb-g-reading li,.cb-art .sd-md .cb-g-names li{margin:0}
 .cb-art .sd-md ul.cb-g-uses,.cb-art .sd-md ul.cb-g-reading,.cb-art .sd-md ul.cb-g-names{padding-left:0}
 .cb-art .sd-md table.cb-g-cheat{display:table;width:100%;max-width:none;table-layout:auto}
+/* a narrow article has no room for two columns of long names: each entry is a card, the want above the use */
+@container (max-width:559px){
+    .cb-art .sd-md table.cb-g-cheat,.cb-art .cb-g-cheat :is(tbody,tr,td){display:block;width:auto}
+    .cb-art .cb-g-cheat thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+    .cb-art .cb-g-cheat tr{margin-bottom:6px;padding:10px 14px;border-radius:10px;background:var(--panel)}
+    .cb-art .sd-md .cb-g-cheat td{width:auto;padding:0;background:none}
+    .cb-art .cb-g-cheat td+td{margin-top:4px}
+    .cb-art .sd-md .cb-g-cheat td code{overflow-wrap:anywhere}
+}
+
+/* names joined by slashes or colons, in the line under a title, have nowhere else to break */
+.cb-head :is(.cb-dek,.cb-topics li){min-width:0;max-width:100%;overflow-wrap:anywhere}
 
 /* ---- boxes that scroll sideways: no bar, and the edge fades while there is more (pages/cookbook/codeFades.ts) ---- */
 .cb-art :is(.cb-g-tt,.cb-g-pipe-wrap,.cb-g-fig-scroll){overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
@@ -59,15 +71,15 @@
 .cb-art .cb-g-pipe{display:grid;grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr) 18px minmax(0,1fr) 18px minmax(0,1fr) 18px minmax(0,1fr);gap:10px 2px;min-width:780px;padding:14px;line-height:1.5}
 .cb-art .cb-g-node{display:grid;align-content:start;gap:4px;min-width:0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--inset);overflow-wrap:anywhere}
 .cb-art .cb-g-node b{font-size:15.5px;font-weight:600;color:var(--fg)}
-.cb-art .cb-g-node span{font:500 12px/1.5 var(--mono);color:var(--mut)}
+.cb-art .cb-g-node span{font:500 calc(var(--fs) - 5px)/1.5 var(--mono);color:var(--mut)}
 .cb-art .cb-g-node.cb-g-opt{border-style:dashed;border-color:var(--dim)}
 .cb-art .cb-g-arrow{display:grid;place-items:center;font:14px var(--mono);color:var(--dim)}
-.cb-art .cb-g-probe{min-width:0;padding:10px 12px;border-radius:10px;background:color-mix(in oklab,var(--pc,var(--c)) 12%,var(--panel));font-size:14px;color:var(--fg);overflow-wrap:anywhere}
-.cb-art :is(.cb-g-probe,.cb-g-golden)>i{font:600 12px var(--mono);color:var(--pc,var(--c))}
+.cb-art .cb-g-probe{min-width:0;padding:10px 12px;border-radius:10px;background:color-mix(in oklab,var(--pc,var(--c)) 12%,var(--panel));font-size:calc(var(--fs) - 3.5px);color:var(--fg);overflow-wrap:anywhere}
+.cb-art :is(.cb-g-probe,.cb-g-golden)>i{font:600 calc(var(--fs) - 5px) var(--mono);color:var(--pc,var(--c))}
 .cb-art .cb-g-probe>i{display:block;margin-bottom:4px}
-.cb-art .cb-g-golden{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;padding:12px 14px;border:1px dashed var(--c);border-radius:10px;font-size:14px;color:var(--fg)}
+.cb-art .cb-g-golden{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;padding:12px 14px;border:1px dashed var(--c);border-radius:10px;font-size:calc(var(--fs) - 3.5px);color:var(--fg)}
 .cb-art .cb-g-golden>span{flex:1 1 280px;min-width:0}
-.cb-art :is(.cb-g-probe,.cb-g-golden) code{font-size:12.5px;padding:1px 4px;background:var(--inset);white-space:normal}
+.cb-art :is(.cb-g-probe,.cb-g-golden) code{font-size:calc(var(--fs) - 4.5px);padding:1px 4px;background:var(--inset);white-space:normal}
 /* in a row, the tests sit under the second to the fifth stage, in the order they are written */
 @container (min-width:760px){
     .cb-art :is(.cb-g-node,.cb-g-arrow){grid-row:1}
@@ -97,16 +109,22 @@
     .cb-art .cb-g-pipe>.cb-g-golden{order:14}
 }
 
-/* ---- a ladder of stages, each lowering into the next ---- */
-.cb-art .cb-g-ladder{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin:20px 0;line-height:1.5}
-.cb-art .cb-g-ladder>div{flex:1 1 150px;display:grid;align-content:start;gap:4px;min-width:0;padding:12px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);overflow-wrap:anywhere}
+/* ---- a ladder of stages, each lowering into the next. A wrapped row would leave arrows pointing at nothing, so there are
+   only two shapes: one row where every stage fits, else one column with the arrows pointing down. ---- */
+.cb-art .cb-g-ladder{display:flex;flex-direction:column;gap:4px;margin:20px 0;line-height:1.5}
+.cb-art .cb-g-ladder>div{display:grid;align-content:start;gap:4px 16px;min-width:0;padding:10px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);overflow-wrap:anywhere}
 .cb-art .cb-g-ladder b{font-size:15px;font-weight:600;color:var(--fg)}
-.cb-art .cb-g-ladder span{font-size:13.5px;color:var(--mut)}
-.cb-art .cb-g-ladder>i{align-self:center;font:14px var(--mono);font-style:normal;color:var(--dim)}
-@container (max-width:559px){
-    .cb-art .cb-g-ladder{flex-direction:column;gap:4px}
-    .cb-art .cb-g-ladder>div{flex:none}
-    .cb-art .cb-g-ladder>i{rotate:90deg}
+.cb-art .cb-g-ladder span{font-size:calc(var(--fs) - 3.5px);color:var(--mut)}
+.cb-art .cb-g-ladder>i{align-self:flex-start;width:18px;height:18px;margin-left:14px;font:14px/18px var(--mono);font-style:normal;text-align:center;color:var(--dim);rotate:90deg}
+/* in a column with room, each stage's words sit beside its name */
+@container (min-width:560px){
+    .cb-art .cb-g-ladder>div{grid-template-columns:minmax(0,200px) minmax(0,1fr);align-items:baseline}
+}
+/* seven stages, the longest ladder, fit in one row from here */
+@container (min-width:1100px){
+    .cb-art .cb-g-ladder{flex-direction:row;align-items:stretch}
+    .cb-art .cb-g-ladder>div{flex:1 1 0;grid-template-columns:minmax(0,1fr);align-content:start;align-items:start}
+    .cb-art .cb-g-ladder>i{flex:none;align-self:center;margin:0;rotate:none}
 }
 
 /* ---- one core with the tools around it ---- */
@@ -157,7 +175,7 @@
 .cb-art .sd-md p.cb-g-deep a:hover{border-color:var(--c)}
 
 /* ---- a topic with where it comes from ---- */
-.cb-art .cb-g-tip{display:grid;gap:8px;margin-top:24px}
+.cb-art .cb-g-tip{display:grid;gap:8px;margin:24px 0 18px}
 .cb-art .sd-md .cb-g-tip :is(h3,h4,p){margin:0}
 .cb-art .sd-md .cb-g-tip :is(ul,ol){margin:0;padding-left:22px}
 .cb-art .cb-g-src{display:inline-flex;flex-wrap:wrap;gap:4px;margin-left:8px;vertical-align:2px}
@@ -175,4 +193,10 @@
 .cb-art .cb-g-fig .cb-g-boxa{fill:color-mix(in oklab,var(--c) 18%,var(--panel));stroke:var(--c)}
 .cb-art .cb-g-fig .cb-g-ln{fill:none;stroke:var(--dim);stroke-width:1.25}
 .cb-art .cb-g-fig .cb-g-lna{fill:none;stroke:var(--c);stroke-width:1.5}
+/* the smallest words in a drawing would come out under 12px where it is drawn at about its own size: they are raised */
+.cb-art .cb-g-fig :is(text[font-size="11"],g[font-size="11"] text:not([font-size])){font-size:12.5px}
+/* this one is drawn wider than the others, so it shrinks more */
+.cb-art .sd-md .cb-g-fig svg[aria-label="DBMS layer diagram"] text{font-size:13.2px}
+.cb-art .cb-g-fig svg[aria-label="DBMS layer diagram"] text.cb-g-mut{letter-spacing:-.028em}
+.cb-art .cb-g-fig svg[aria-label="DBMS layer diagram"] text[x="430"]{translate:-10px 0}
 .cb-art .cb-g-figcap{padding:0 16px 14px;font-size:14.5px;line-height:1.6;color:var(--mut)}
