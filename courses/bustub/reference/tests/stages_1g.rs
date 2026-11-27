@@ -33,6 +33,24 @@ fn text(guard_data: &PageData, len: usize) -> String {
     String::from_utf8_lossy(&guard_data[..len]).into_owned()
 }
 
+/// Waits for what `thread` sends on `rx` when it is done. A timeout means it is stuck, and `stuck` says how; a thread that panicked
+/// instead (a `todo!`, a failed assert) has its panic passed on, so its own message is the one shown.
+fn finished<T, U>(rx: mpsc::Receiver<T>, thread: thread::JoinHandle<U>, stuck: &str) -> T {
+    match rx.recv_timeout(WAIT) {
+        Ok(value) => {
+            if let Err(panic) = thread.join() {
+                std::panic::resume_unwind(panic);
+            }
+            value
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("{stuck}"),
+        Err(mpsc::RecvTimeoutError::Disconnected) => match thread.join() {
+            Err(panic) => std::panic::resume_unwind(panic),
+            Ok(_) => panic!("the thread ended without reporting"),
+        },
+    }
+}
+
 // ---- 1g-01 · Guards that release themselves -------------------------------------------------------------------------------
 
 
@@ -438,8 +456,7 @@ fn s1g_02_flushing_while_holding_the_latch_does_not_deadlock() {
             tx.send(()).unwrap();
         })
     };
-    rx.recv_timeout(WAIT).expect("flush() hung: it must not ask for the latch the guard already holds");
-    t.join().unwrap();
+    finished(rx, t, "flush() hung: it must not ask for the latch the guard already holds");
 }
 
 
@@ -466,9 +483,8 @@ fn s1g_02_a_blocked_flush_does_not_block_the_rest_of_the_pool() {
         let flushed = flusher.join().unwrap();
         done_tx.send(flushed).unwrap();
     });
-    let flushed = done_rx.recv_timeout(WAIT).expect("deadlock: flush_page waits for a latch while holding the pool's lock");
+    let flushed = finished(done_rx, worker, "deadlock: flush_page waits for a latch while holding the pool's lock");
     assert!(flushed, "a blocked flush does not block the rest of the pool: expected `flushed`");
-    worker.join().unwrap();
 }
 
 #[test]
@@ -484,6 +500,70 @@ fn s1g_02_flush_page_still_writes_the_latest_bytes() {
     disk.read_page(page, &mut buf).unwrap();
     assert_eq!(&buf[..3], b"abc", "flush page still writes the latest bytes");
     assert_eq!(bpm.get_pin_count(page), Some(0), "flush_page leaves the pin count where it found it");
+}
+
+/// A disk that records, for page 0, whether a write ever carried an older version (the first 8 bytes) than one already written.
+struct VersionDisk {
+    pages: std::sync::Mutex<std::collections::HashMap<i32, Box<PageData>>>,
+    newest: std::sync::atomic::AtomicU64,
+    went_back: std::sync::atomic::AtomicU64,
+}
+
+impl DiskIo for VersionDisk {
+    fn read_page(&self, id: bustub::common::config::PageId, buf: &mut PageData) -> std::io::Result<()> {
+        match self.pages.lock().unwrap().get(&id.0) {
+            Some(p) => buf.copy_from_slice(&**p),
+            None => buf.fill(0),
+        }
+        Ok(())
+    }
+    fn write_page(&self, id: bustub::common::config::PageId, data: &PageData) -> std::io::Result<()> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let v = u64::from_le_bytes(data[..8].try_into().unwrap());
+        if v < self.newest.fetch_max(v, SeqCst) {
+            self.went_back.fetch_add(1, SeqCst);
+        }
+        self.pages.lock().unwrap().insert(id.0, Box::new(*data));
+        Ok(())
+    }
+    fn delete_page(&self, _id: bustub::common::config::PageId) {}
+}
+
+#[test]
+fn s1g_02_flush_page_never_writes_an_older_version_after_a_newer_one() {
+    // Two threads flush a page while a writer keeps changing it and flushing through its guard. If flush_page lets go of the
+    // latch before its write is done, a newer version can reach the disk first and the older copy then overwrites it, with the
+    // page already marked clean: an update that eviction would lose.
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let disk = Arc::new(VersionDisk { pages: Default::default(), newest: AtomicU64::new(0), went_back: AtomicU64::new(0) });
+        let bpm = Arc::new(BufferPoolManager::new(4, disk.clone()));
+        let page = bpm.new_page();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flushers: Vec<_> = (0..2)
+            .map(|_| {
+                let (bpm, stop) = (bpm.clone(), stop.clone());
+                thread::spawn(move || {
+                    while !stop.load(SeqCst) {
+                        bpm.flush_page(page);
+                    }
+                })
+            })
+            .collect();
+        for v in 1..=20_000u64 {
+            let mut guard = bpm.write_page(page);
+            guard.get_data_mut()[..8].copy_from_slice(&v.to_le_bytes());
+            guard.flush();
+        }
+        stop.store(true, SeqCst);
+        for f in flushers {
+            f.join().unwrap();
+        }
+        let _ = tx.send(disk.went_back.load(SeqCst));
+    });
+    let went_back = rx.recv_timeout(Duration::from_secs(60)).expect("the writer and two flushers finish (a deadlock, or a panic in the pool?)");
+    assert_eq!(went_back, 0, "the disk received an older version of the page after a newer one {went_back} times: flush_page must hold the latch until its write is done");
 }
 
 #[test]

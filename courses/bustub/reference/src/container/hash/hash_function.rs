@@ -24,7 +24,7 @@ impl<K: FixedSize> HashFunction<K> {
         let mut bytes = vec![0u8; K::SIZE];
         key.encode(&mut bytes);
         murmur_hash3_x64_128(&bytes, 0)[0]
-        //~ todo!("2b-02: encode the key to its bytes, hash them with murmur_hash3_x64_128 (seed 0), keep the first half")
+        //~ todo!("2b-01: the first 64 bits of the MurmurHash3 (seed 0) of the key's encoded bytes")
         // @end
     }
 }

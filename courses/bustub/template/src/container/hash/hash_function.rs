@@ -20,6 +20,6 @@ impl<K: FixedSize> HashFunction<K> {
 
     /// The first 64 bits of the key's MurmurHash3.
     pub fn get_hash(&self, key: &K) -> u64 {
-        todo!("2b-02: encode the key to its bytes, hash them with murmur_hash3_x64_128 (seed 0), keep the first half")
+        todo!("2b-01: the first 64 bits of the MurmurHash3 (seed 0) of the key's encoded bytes")
     }
 }

@@ -42,6 +42,7 @@ How the guard writes the bytes (a pool method you add, the disk scheduler direct
 - `read_page` and `write_page` return a guard when there is room and panic when nothing can be evicted.
 - A write guard can flush its page; a clean guard still writes; a read guard can flush too; flushing while holding the latch does not hang.
 - A blocked `flush_page` does not block the rest of the pool; `flush_page` still writes the latest bytes; a flushed page is not left pinned.
+- Flushes racing a writer never send the disk an older version of the page after a newer one.
 
 ## Hints
 
@@ -51,7 +52,7 @@ The bytes (the guard has them) and the page id (the guard has it) and a way to w
 
 ### Restructure `flush_page`
 
-Today (from 1f-03) it probably looks up the frame, takes the latch and writes, all under the pool's lock. Rewrite as: lock, find the frame, pin it, unlock; latch, copy; unlatch; write; unpin. What marks the page clean, and when?
+Today (from 1f-03) it probably looks up the frame, takes the latch and writes, all under the pool's lock. The lock has to go before you wait for a latch; the pin is what keeps the frame yours in the meantime. Then ask how long the read latch must stay held: picture two flushes with a writer between them, and work out which bytes the disk holds last if the first flush lets go of the latch before its write is done. What marks the page clean, and when?
 
 ### The test hangs
 

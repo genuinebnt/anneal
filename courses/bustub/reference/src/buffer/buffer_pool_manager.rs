@@ -209,9 +209,11 @@ impl BufferPoolManager {
             inner.meta[frame.0].dirty = false;
             frame
         };
-        let mut copy = Box::new([0u8; BUSTUB_PAGE_SIZE]);
-        copy.copy_from_slice(&**self.frames[frame.0].read().unwrap());
-        self.write_page_data(page_id, &copy);
+        // Hold the read latch until the write is done: released earlier, a newer version could reach the disk first and this
+        // older copy would then overwrite it, with the page already marked clean.
+        let latch = self.frames[frame.0].read().unwrap();
+        self.write_page_data(page_id, &latch);
+        drop(latch);
         self.unpin_page(page_id, false);
         true
         //~ let mut inner = self.inner.lock().unwrap();
