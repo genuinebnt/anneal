@@ -1,5 +1,6 @@
 code = "0b"
 project = 5
+optional = true
 title = "A skip list"
 summary = "An ordered set as a skip list: nodes with random heights, the search that remembers the last node on every level, insert, erase, and a reader-writer lock. The generator is a port of std::mt19937 so that the seed-pinned node heights of BusTub's test hold. BusTub Project 0 (the skip list)."
 lectures = []

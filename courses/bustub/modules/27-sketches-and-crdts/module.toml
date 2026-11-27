@@ -1,5 +1,6 @@
 code = "0d"
 project = 5
+optional = true
 title = "Sketches and replicated sets"
 summary = "Three small structures that trade exactness for space or coordination: a count-min sketch (frequency estimates), HyperLogLog and its Presto-style variant (distinct counts), and an observed-remove set with a driver that simulates replicas syncing over an unreliable network. BusTub Project 0 (count-min sketch, HyperLogLog, ORSet)."
 lectures = []

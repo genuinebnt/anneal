@@ -1,5 +1,6 @@
 code = "0a"
 project = 5
+optional = true
 title = "A persistent trie"
 summary = "A trie that never changes: get, put and remove return new versions that share every untouched node, and a thread-safe store that lets readers keep reading while one writer publishes the next version. BusTub Project 0 (the trie part)."
 lectures = []

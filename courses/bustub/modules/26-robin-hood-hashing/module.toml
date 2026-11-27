@@ -1,5 +1,6 @@
 code = "0c"
 project = 5
+optional = true
 title = "Robin Hood hashing"
 summary = "A fixed-capacity hash set with linear probing, Robin Hood displacement and tombstones, behind a reader-writer lock: home buckets and probe distances, insert and lookup, removal and tombstone reuse, and a model-checked random workload. BusTub Project 0 (the Robin Hood hash set)."
 lectures = []

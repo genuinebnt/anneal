@@ -1,5 +1,5 @@
 from _c import C
-M3J = "28-outer-joins-and-set-operations"
+M3J = "19c-outer-joins-and-set-operations"
 CH = []
 
 CH.append(C("3j-c1", M3J, "90-challenge-a-hash-outer-join", "build", "Challenge: a hash outer join", "medium", "stages_3j::s3j_c1",
