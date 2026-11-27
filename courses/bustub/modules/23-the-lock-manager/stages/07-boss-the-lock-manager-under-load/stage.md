@@ -1,5 +1,12 @@
 The last stage is the lock manager used the way a database uses it: many transactions at once, taking table and row locks in random order, deadlocking, being aborted and retrying. There is nothing new to write. The tests run workloads and check what a correct lock manager guarantees.
 
+> [!CHECK] If a transfer wrote account a before it had locked b, and was then aborted at `lock_row(b)` as a deadlock victim, what would the bank test report?
+> ||The debit of a stays and the retried transfer debits it again, so money disappears and the "no money lost" assertion fails. A lock manager only orders access; taking back an aborted transaction's writes needs undo, which is module 4c.||
+>
+> - What does the retry do again?
+> - What would take the first write back?
+> - Which assertion checks the totals?
+
 ## The task
 
 Make the tests of this stage pass. They are workloads, not unit tests:

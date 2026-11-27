@@ -151,6 +151,10 @@ impl LockManager {
         // @begin 4d-03
         let mut st = self.state.lock().unwrap();
         let q = st.queues.entry(resource).or_default();
+        // asking again for the mode it already holds takes nothing from anybody: true, as `lock` would answer at once
+        if q.holders.holders().iter().any(|&(t, m)| t == txn && m == mode) {
+            return Ok(true);
+        }
         let others_ok = q.holders.holders().iter().all(|&(t, m)| t == txn || compatible(m, mode));
         if !others_ok || q.waiting.iter().any(|w| !compatible(w.mode, mode)) {
             if q.holders.is_empty() && q.waiting.is_empty() {
@@ -383,16 +387,22 @@ impl LockManager {
     // ---- deadlocks (4d-06) -------------------------------------------------------------------------------------------------------------
 
     /// Looks for deadlocks among the waiting requests and breaks each cycle by choosing its youngest transaction as the victim: its waiting
-    /// `lock` call returns `Deadlock`. Returns the victims, in increasing order. A request waits for the holders it is incompatible with.
+    /// `lock` call returns `Deadlock`. Returns the victims, in increasing order. A request waits for the holders it is incompatible with,
+    /// and, since the queue is fair, for every earlier waiting request it is incompatible with.
     pub fn detect_deadlocks(&self) -> Vec<TxnId> {
         // @begin 4d-06
         let mut st = self.state.lock().unwrap();
         let mut graph = WaitsForGraph::new();
         for q in st.queues.values() {
-            for w in &q.waiting {
+            for (i, w) in q.waiting.iter().enumerate() {
                 for (holder, held) in q.holders.holders() {
                     if holder != w.txn && !compatible(w.mode, held) {
                         graph.add_edge(w.txn, holder);
+                    }
+                }
+                for earlier in &q.waiting[..i] {
+                    if earlier.txn != w.txn && !compatible(w.mode, earlier.mode) {
+                        graph.add_edge(w.txn, earlier.txn);
                     }
                 }
             }

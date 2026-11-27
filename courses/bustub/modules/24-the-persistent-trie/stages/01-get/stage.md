@@ -5,7 +5,7 @@ A trie stores a string key as a path: one node per character, from the root. A *
 In `src/primer/trie.rs`:
 
 - `Trie::get::<T>(&self, key) -> Option<&T>`: walk from the root along the characters of `key` (each node's `children` map); at the end the node must have a `value`; downcast it to `T` (`downcast_ref`).
-- `Trie::get_shared::<T>(&self, key) -> Option<Arc<T>>`: the same walk, but return an owner of the value (`Arc::downcast`) so that the caller can keep it after the trie is gone (the store of stage 4 needs it).
+- `Trie::get_shared::<T>(&self, key) -> Option<Arc<T>>`: the same walk, but return an owner of the value (`Arc::downcast`) so that the caller can keep it after the trie is gone (the store of stage 0a-03 needs it).
 
 Stage 1 comes before `put`, so the tests build their tries by hand from the given `TrieNode` fields and `Trie::from_root`.
 

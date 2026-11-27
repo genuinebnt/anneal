@@ -298,6 +298,25 @@ proptest! {
 // ---- 4d-03: waiting for a lock -----------------------------------------------------------------------------------------------------------
 
 #[test]
+fn s4d_03_try_lock_of_a_mode_already_held_is_true_even_with_a_writer_waiting() {
+    finish_within("try_lock of a held mode", || {
+        let m = Arc::new(LockManager::new());
+        let a = table(1);
+        m.lock(1, a, Shared).unwrap();
+        let writer = {
+            let m = Arc::clone(&m);
+            thread::spawn(move || m.lock(2, a, Exclusive))
+        };
+        while m.waiting(a) != 1 {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(m.try_lock(1, a, Shared), Ok(true), "a transaction that holds S already has what it asks for: try_lock agrees with lock");
+        m.unlock(1, a).unwrap();
+        assert!(writer.join().unwrap().is_ok(), "the waiting writer gets the lock once S is released");
+    });
+}
+
+#[test]
 fn s4d_03_a_free_lock_is_granted_at_once_and_shows_its_holder() {
     let m = LockManager::new();
     assert_eq!(m.lock(1, table(1), Shared), Ok(()));
@@ -995,6 +1014,45 @@ fn s4d_06_two_separate_deadlocks_are_both_broken_in_one_pass() {
 }
 
 #[test]
+fn s4d_06_a_deadlock_through_queue_order_is_found() {
+    // T1 holds S(A) and T3 holds X(B). T2 asks X(A) and waits for T1. T3 asks S(A): compatible with the holder T1, but the queue is
+    // fair, so it waits behind T2's X. T1 asks S(B) and waits for T3. T1 -> T3 -> T2 -> T1 is a deadlock with no cycle among holders.
+    finish_within("a deadlock through queue order", || {
+        let m = Arc::new(LockManager::new());
+        let (a, b) = (table(1), table(2));
+        m.lock(1, a, Shared).unwrap();
+        m.lock(3, b, Exclusive).unwrap();
+        let until = |n: usize, r: Resource| {
+            while m.waiting(r) != n {
+                thread::sleep(Duration::from_millis(2));
+            }
+        };
+        let t2 = {
+            let m = Arc::clone(&m);
+            thread::spawn(move || m.lock(2, a, Exclusive))
+        };
+        until(1, a);
+        let t3 = {
+            let m = Arc::clone(&m);
+            thread::spawn(move || m.lock(3, a, Shared))
+        };
+        until(2, a);
+        let t1 = {
+            let m = Arc::clone(&m);
+            thread::spawn(move || m.lock(1, b, Shared))
+        };
+        until(1, b);
+        assert_eq!(m.detect_deadlocks(), vec![3], "a request also waits for the earlier waiters it conflicts with: T3 is behind T2, and the youngest on the cycle is the victim");
+        assert_eq!(kind(t3.join().unwrap()), LockErrorKind::Deadlock, "the victim's waiting lock call returns Deadlock");
+        m.unlock(3, b).unwrap();
+        assert!(t1.join().unwrap().is_ok(), "once the victim lets go, T1 gets S(B)");
+        m.unlock(1, a).unwrap();
+        m.unlock(1, b).unwrap();
+        assert!(t2.join().unwrap().is_ok(), "and T2 gets X(A) after T1");
+    });
+}
+
+#[test]
 fn s4d_06_the_detector_thread_breaks_a_deadlock_by_itself() {
     finish_within("detector thread", || {
         let m = Arc::new(LockManager::new());
@@ -1269,15 +1327,17 @@ fn s4d_07_two_writers_are_never_inside_the_same_row_at_once() {
 fn s4d_07_readers_share_and_a_table_scan_excludes_row_writers() {
     finish_within("readers and a scan", || {
         let m = Arc::new(LockManager::new());
-        // three transactions read rows at the same time under IS and S
+        // three transactions read the same row at the same time under IS and S: each waits at the barrier while it holds its S lock,
+        // so the barrier opens only if all three hold it together (a manager that treated S like X would time out here)
+        let together = Arc::new(std::sync::Barrier::new(3));
         let readers: Vec<_> = (1..=3i64)
             .map(|id| {
-                let m = Arc::clone(&m);
+                let (m, together) = (Arc::clone(&m), Arc::clone(&together));
                 thread::spawn(move || {
                     let t = LockTxn::new(id, LockIsolation::RepeatableRead);
                     m.lock_table(&t, IntentionShared, 1).unwrap();
                     m.lock_row(&t, Shared, 1, rid(1)).unwrap();
-                    thread::sleep(Duration::from_millis(30));
+                    together.wait();
                     m.release_all(&t);
                 })
             })

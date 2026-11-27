@@ -1,5 +1,12 @@
 Now the lock manager waits. `LockManager::lock` takes a lock on a table or a row for a transaction and **blocks** until it can have it. The interesting part is not the waiting but the order: requests are granted in the order they arrived, and a reader that would fit with the current holders still waits behind a writer that is queued ahead of it, so a stream of readers can never starve a writer.
 
+> [!CHECK] T1 holds S. T2 asks for X, then T3 for S, then T4 for IS. Who waits, and in what order are they granted?
+> ||All three wait: T2 because of T1's S, and T3 and T4 because they are queued behind T2's X (the queue is fair). When T1 unlocks, T2 is granted alone. When T2 unlocks, T3 and T4 are granted together.||
+>
+> - Ask two questions for each waiter: the holders, and the requests ahead of it.
+> - What is ahead of T4?
+> - When T2 leaves, are T3 and T4 compatible with each other?
+
 ## The task
 
 In `src/concurrency/lock_manager.rs`:

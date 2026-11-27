@@ -1,5 +1,12 @@
 Before a lock can make anybody wait it has to know who holds it. This stage builds that bookkeeping for **one** thing (a table or a row): the transactions that hold it and in which mode, and the rule every later stage rests on: **the holders of a lock are always compatible with each other**. No threads yet, no waiting: a request is granted now or refused now.
 
+> [!CHECK] Holders: T1 with S and T2 with S. T1 calls `try_acquire(X)`, then T2 calls `try_acquire(IS)`. Predict both results and the holder list after each.
+> ||T1 gets `Ok(false)`: T2's S blocks the upgrade, and T1's own S does not count against it. T2 gets `Err(IncompatibleUpgrade)`: IS is weaker than S, so it is not an upgrade. The holders stay `[(1, S), (2, S)]` both times.||
+>
+> - Which holders must X be compatible with?
+> - Is IS stronger than S?
+> - Does a refusal change anything?
+
 ## The task
 
 In `src/concurrency/lock_queue.rs`, `LockQueue`:

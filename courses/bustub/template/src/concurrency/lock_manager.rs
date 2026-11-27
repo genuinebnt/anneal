@@ -130,7 +130,8 @@ impl LockManager {
     // ---- deadlocks (4d-06) -------------------------------------------------------------------------------------------------------------
 
     /// Looks for deadlocks among the waiting requests and breaks each cycle by choosing its youngest transaction as the victim: its waiting
-    /// `lock` call returns `Deadlock`. Returns the victims, in increasing order. A request waits for the holders it is incompatible with.
+    /// `lock` call returns `Deadlock`. Returns the victims, in increasing order. A request waits for the holders it is incompatible with,
+    /// and, since the queue is fair, for every earlier waiting request it is incompatible with.
     pub fn detect_deadlocks(&self) -> Vec<TxnId> {
         todo!("4d-06: build the waits-for graph from the waiting requests, break each cycle at its youngest transaction, wake the victims")
     }

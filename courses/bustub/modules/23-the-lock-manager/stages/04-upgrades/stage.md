@@ -1,5 +1,12 @@
 A transaction that read a row and now wants to change it holds S and wants X. It must not give up its read lock first (somebody could change the row in between) and it must not wait behind everyone who queued in the meantime (it already holds a lock on the thing). So an **upgrade** replaces the lock it holds, goes ahead of the waiting requests, and waits only for the *other holders* to leave. And only one transaction per lock may be upgrading at a time: two transactions that each hold S and each wait to upgrade would wait for each other for ever.
 
+> [!CHECK] T1 and T2 both hold S. T1 asks to upgrade to X. Whom does it wait for? Then T2 asks to upgrade to X: what happens, and why refuse instead of queueing it?
+> ||T1 waits only for T2's S. T2 gets `UpgradeConflict` at once, and T1's upgrade still goes through when T2 lets go. Queueing T2 would create a two-cycle (each waits for the other's S) that only the deadlock detector could break, by aborting someone.||
+>
+> - Which holders conflict with T1's X?
+> - Draw the waits-for edges if T2 were queued.
+> - What does each need from the other?
+
 ## The task
 
 Extend `LockManager::lock` in `src/concurrency/lock_manager.rs`:

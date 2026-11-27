@@ -1,5 +1,12 @@
 Until now the manager took any request. A real database has rules, and they are what the word **isolation** means. This stage adds the transaction's view: a `LockTxn` has an isolation level and a phase (growing, shrinking, committed, aborted), and `lock_table`, `lock_row`, `unlock_table`, `unlock_row` and `release_all` enforce what that level allows. A request that breaks a rule is refused with a reason, and the transaction is **aborted**.
 
+> [!CHECK] A read-committed transaction locks table 1 X and table 2 S, unlocks table 2, unlocks table 1, then asks for S on table 3 and IX on table 4. Give its phase after each step and each result.
+> ||It stays Growing after releasing the S lock (under read committed, S locks may be released early) and becomes Shrinking when it releases the X lock. S on table 3 is still allowed (read committed may take S and IS while shrinking). IX on table 4 fails with `LockOnShrinking`, and the transaction becomes Aborted.||
+>
+> - Which releases start the shrinking phase under read committed?
+> - What may read committed still ask for while shrinking?
+> - What does a violation do to the transaction's state?
+
 ## The task
 
 In `src/concurrency/lock_manager.rs`:

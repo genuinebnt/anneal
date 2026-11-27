@@ -1,5 +1,12 @@
 A database that only knows "locked" and "unlocked" makes readers queue behind each other. This module builds the other answer, a lock manager with several **modes**, and this first stage is its vocabulary: five modes, which of them can be held on the same thing at the same time, and which can replace which. Everything later (queues, upgrades, isolation levels) is a question put to this table.
 
+> [!CHECK] T1 holds SIX on `orders`. Which of IS, IX, S, SIX and X can T2 get on the table, and why does IX conflict although both only "intend" to write rows?
+> ||Only IS. SIX is S on the whole table plus IX. T2's IX would write rows that T1's S part reads, and T2's S would read rows that T1's IX part may be writing. IS is fine: the rows T2 reads are locked at row level, where T1's row X locks are checked.||
+>
+> - Split SIX into its two parts.
+> - Check T2's mode against each part.
+> - Where are T1's row writes caught?
+
 ## The task
 
 In `src/concurrency/lock_mode.rs`:
