@@ -1,0 +1,8 @@
+id = "2c-04"
+title = "Scanning the leaves"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_2c::s2c_04"]
+learn = ["an iterator that remembers a position, not a latch", "walking the leaf chain", "begin, begin_at and end"]
+concepts = ["range-scans-and-the-leaf-chain"]
+concepts_optional = ["iterators-and-closures", "raii-guards-and-lifetimes", "lifetimes-in-structs", "model-based-testing", "errors-2c"]

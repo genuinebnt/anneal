@@ -1,9 +1,9 @@
 code = "2d"
 title = "B+ tree tombstones"
-summary = "A tombstone buffer in every leaf page: deletes mark instead of shift, the oldest tombstone is removed for real when the buffer is full, inserts bring deleted keys back, scans skip them, and splits, borrows and merges carry them along. BusTub Project 2, the lazy-delete leaderboard feature."
-lectures = ["indexes2", "indexconcurrency"]
-bustub = ["src/include/storage/page/b_plus_tree_leaf_page.h", "src/storage/page/b_plus_tree_leaf_page.cpp", "src/include/storage/index/b_plus_tree_debug.h", "test/storage/b_plus_tree_tombstone_test.cpp", "test/storage/b_plus_tree_delete_test.cpp", "test/storage/b_plus_tree_concurrent_test.cpp"]
-files = ["tests/b_plus_tree_tombstone_test.rs"]
+summary = "A tombstone buffer in every leaf page: deletes mark instead of shift, the oldest tombstone is removed for real when the buffer is full, inserts bring deleted keys back, scans skip them, splits, borrows and merges carry them along, and a full leaf reclaims a dead pair's slot before it splits. Single-threaded; module 2e shares the tree between threads. BusTub Project 2, the lazy-delete leaderboard feature."
+lectures = ["indexes2"]
+bustub = ["src/include/storage/page/b_plus_tree_leaf_page.h", "src/storage/page/b_plus_tree_leaf_page.cpp", "src/include/storage/index/b_plus_tree_debug.h", "test/storage/b_plus_tree_tombstone_test.cpp", "test/storage/b_plus_tree_delete_test.cpp"]
+files = ["tests/b_plus_tree_tombstone_test.rs", "tests/b_plus_tree_tombstone_variants_test.rs"]
 
 [[resources]]
 kind = "docs"

@@ -44,9 +44,11 @@ impl<B: AsRef<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usize> BPlusTreeLe
         BPlusTreePage::new(self.page.as_ref()).max_size()
     }
 
+    // @begin 2c-05
     pub fn min_size(&self) -> u32 {
         BPlusTreePage::new(self.page.as_ref()).min_size()
     }
+    // @end
 
     /// The next leaf to the right, or `None` for the last leaf.
     pub fn next_page_id(&self) -> Option<PageId> {
@@ -85,13 +87,16 @@ impl<B: AsRef<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usize> BPlusTreeLe
     /// The value stored for `key`, if there is a live (not tombstoned) pair for it.
     pub fn lookup(&self, key: &K, cmp: &impl KeyComparator<K>) -> Option<V> {
         let at = self.find(key, cmp)?;
+        // @begin 2d-01
         if self.is_deleted_at(at) {
             return None;
         }
+        // @end
         Some(self.value_at(at))
     }
 
-    // ---- tombstones (module 2d) ---------------------------------------------------------------------------------------------
+    // @begin 2d-01
+    // ---- tombstones ---------------------------------------------------------------------------------------------------------
 
     /// How many tombstones the buffer holds now (always 0 without tombstones).
     pub fn num_tombstones(&self) -> u32 {
@@ -123,13 +128,10 @@ impl<B: AsRef<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usize> BPlusTreeLe
         self.tombstones().iter().any(|t| bytes(t) == mine)
     }
 
-    /// Is the pair for `key` deleted but still in the page?
-    pub fn is_tombstoned(&self, key: &K, cmp: &impl KeyComparator<K>) -> bool {
-        self.tombstones().iter().any(|t| cmp.compare(t, key) == Ordering::Equal)
-    }
+    // @end
 }
 
-impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usize> BPlusTreeLeafPage<B, K, V, TOMBS> {
+impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize + Clone, V: FixedSize + Clone, const TOMBS: usize> BPlusTreeLeafPage<B, K, V, TOMBS> {
     /// Formats a fresh page: a leaf with no pairs, no tombstones and no next leaf, holding at most `max_size` (not more than fits).
     pub fn init(&mut self, max_size: u32) {
         assert!(max_size as usize <= Self::capacity(), "{max_size} pairs do not fit in a leaf page");
@@ -138,9 +140,11 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
         header.set_size(0);
         header.set_max_size(max_size);
         self.set_next_page_id(None);
+        // @begin 2d-01
         if TOMBS > 0 {
             write_u32(self.page.as_mut(), NUM_TOMBSTONES_OFFSET, 0);
         }
+        // @end
     }
 
     pub fn set_size(&mut self, size: u32) {
@@ -156,14 +160,11 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
     }
 
     /// Stores the pair in slot `index`. It does not change the size.
-    pub fn set_entry_at(&mut self, index: u32, key: &K, value: &V)
-    where
-        K: Clone,
-        V: Clone,
-    {
+    pub fn set_entry_at(&mut self, index: u32, key: &K, value: &V) {
         self.entries_mut().set(index as usize, &(key.clone(), value.clone()));
     }
 
+    // @begin 2d-01
     /// Replaces the whole tombstone buffer (oldest first). Panics if there are more than `TOMBS`.
     pub fn set_tombstones(&mut self, keys: &[K]) {
         assert!(keys.len() <= TOMBS, "{} tombstones do not fit in a buffer of {TOMBS}", keys.len());
@@ -177,10 +178,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
     }
 
     /// Notes `key` as the newest tombstone. Panics if the buffer is full: make room first (`remove_oldest_tombstone`).
-    pub fn add_tombstone(&mut self, key: &K)
-    where
-        K: Clone,
-    {
+    pub fn add_tombstone(&mut self, key: &K) {
         let mut keys = self.tombstones();
         assert!(keys.len() < TOMBS, "the tombstone buffer is full");
         keys.push(key.clone());
@@ -188,32 +186,28 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
     }
 
     /// Forgets `key`'s tombstone, if it has one. `true` if it had.
-    pub fn remove_tombstone(&mut self, key: &K, cmp: &impl KeyComparator<K>) -> bool
-    where
-        K: Clone,
-    {
+    pub fn remove_tombstone(&mut self, key: &K, cmp: &impl KeyComparator<K>) -> bool {
         let mut keys = self.tombstones();
         let Some(at) = keys.iter().position(|t| cmp.compare(t, key) == Ordering::Equal) else { return false };
         keys.remove(at);
         self.set_tombstones(&keys);
         true
     }
+    // @end
 
     /// Adds the pair in key order. `false` (and nothing changes) if a live pair for `key` is already in the page. A *tombstoned* pair for
     /// the same key is brought back to life with the new value (its tombstone is dropped); no slot is used. Panics if the page has no
     /// room (a tree splits a leaf the moment it reaches `max_size`, so it always has room for one more).
-    pub fn insert(&mut self, key: &K, value: &V, cmp: &impl KeyComparator<K>) -> bool
-    where
-        K: Clone,
-        V: Clone,
-    {
+    pub fn insert(&mut self, key: &K, value: &V, cmp: &impl KeyComparator<K>) -> bool {
         let size = self.size();
         let at = self.lower_bound(key, cmp);
         if at < size && cmp.compare(&self.key_at(at), key) == Ordering::Equal {
+            // @begin 2d-01
             if self.remove_tombstone(key, cmp) {
                 self.set_entry_at(at, key, value);
                 return true;
             }
+            // @end
             return false;
         }
         assert!((size as usize) < Self::capacity(), "the leaf is full");
@@ -222,11 +216,9 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
         true
     }
 
+    // @begin 2c-05
     /// Physically removes the pair for `key` (and its tombstone, if it has one), keeping the order. `false` if there is none.
-    pub fn remove(&mut self, key: &K, cmp: &impl KeyComparator<K>) -> bool
-    where
-        K: Clone,
-    {
+    pub fn remove(&mut self, key: &K, cmp: &impl KeyComparator<K>) -> bool {
         let size = self.size();
         let at = self.lower_bound(key, cmp);
         if at >= size || cmp.compare(&self.key_at(at), key) != Ordering::Equal {
@@ -237,23 +229,21 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
     }
 
     /// Physically removes the pair in slot `index`, keeping the order, and its tombstone if it had one.
-    pub fn remove_at(&mut self, index: u32)
-    where
-        K: Clone,
-    {
+    pub fn remove_at(&mut self, index: u32) {
         let size = self.size();
         assert!(index < size, "slot {index} is past the page's size");
+        // @begin 2d-01
         let key = self.key_at(index);
         self.drop_tombstone_of(&key);
+        // @end
         self.entries_mut().remove_at(index as usize, size as usize);
         self.set_size(size - 1);
     }
+    // @end
 
+    // @begin 2d-01
     /// Drops `key` from the tombstone buffer by byte comparison of the stored key (the key is physically in the page, so it matches).
-    fn drop_tombstone_of(&mut self, key: &K)
-    where
-        K: Clone,
-    {
+    fn drop_tombstone_of(&mut self, key: &K) {
         if TOMBS == 0 {
             return;
         }
@@ -269,24 +259,21 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
             self.set_tombstones(&keys);
         }
     }
+    // @end
 
+    // @begin 2c-05
     /// Adds the pair at the front, shifting the others right. Used when a leaf borrows from its left neighbour.
-    pub fn insert_at_front(&mut self, key: &K, value: &V)
-    where
-        K: Clone,
-        V: Clone,
-    {
+    pub fn insert_at_front(&mut self, key: &K, value: &V) {
         let size = self.size();
         self.entries_mut().insert_at(0, size as usize, &(key.clone(), value.clone()));
         self.set_size(size + 1);
     }
+    // @end
 
+    // @begin 2d-01
     /// Deletes `key` logically: the pair stays in the page and its key becomes the newest tombstone. If the buffer is full, the oldest
     /// tombstoned pair is removed for real first. `false` if there is no live pair for `key`. Only for `TOMBS > 0`.
-    pub fn remove_logically(&mut self, key: &K, cmp: &impl KeyComparator<K>) -> bool
-    where
-        K: Clone,
-    {
+    pub fn remove_logically(&mut self, key: &K, cmp: &impl KeyComparator<K>) -> bool {
         assert!(TOMBS > 0, "a leaf without a tombstone buffer deletes for real");
         let Some(at) = self.find(key, cmp) else { return false };
         if self.is_deleted_at(at) {
@@ -299,18 +286,18 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize, V: FixedSize, const TOMBS: usiz
         self.add_tombstone(key);
         true
     }
+    // @end
 
+    // @begin 2d-02
     /// Really removes every tombstoned pair (and empties the buffer). Returns how many pairs went.
-    pub fn purge_tombstones(&mut self, cmp: &impl KeyComparator<K>) -> usize
-    where
-        K: Clone,
-    {
+    pub fn purge_tombstones(&mut self, cmp: &impl KeyComparator<K>) -> usize {
         let keys = self.tombstones();
         for key in &keys {
             self.remove(key, cmp);
         }
         keys.len()
     }
+    // @end
 }
-//~ // TODO(2c-01): your page type goes here. The tree module (module 2c) names it, and what it stores and how is up to you.
+//~ // TODO(2c-01): your leaf page type goes here: the pairs in key order and the id of the next leaf, laid out as you choose.
 // @end

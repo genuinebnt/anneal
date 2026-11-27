@@ -9,7 +9,6 @@
 //! path (`Context::write_set`) until a child that cannot split or underflow is reached ("safe"), which lets them let go of everything above it;
 //! and most writes try an optimistic path first that write-latches only the leaf.
 
-use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use super::index_iterator::IndexIterator;
@@ -19,7 +18,8 @@ use crate::common::config::PageId;
 use crate::storage::index::fixed_size::FixedSize;
 use crate::storage::index::generic_key::KeyComparator;
 
-// TODO(2c-01): your imports go here (your page types and the guards).
+// TODO(2c-01): your imports go here (your header and leaf page types, and the guards).
+// TODO(2c-02): the imports for your internal page type.
 
 // TODO(2c-01): private types of yours go here (a write operation needs to remember the guards it holds).
 
@@ -58,7 +58,7 @@ where
 
     /// As many children as fit in an internal page.
     pub fn default_internal_max_size() -> u32 {
-        todo!("2c-01: how many children fit in one of your internal pages")
+        todo!("2c-02: how many children fit in one of your internal pages")
     }
 
     /// The name the tree was created with.
@@ -114,12 +114,12 @@ where
 
     /// Adds the pair. `false` (and nothing changes) if the key is already in the tree.
     pub fn insert(&self, key: &K, value: &V) -> bool {
-        todo!("2c-01: latch the header; an empty tree gets a root leaf; otherwise latch down to the leaf (descend_for_write) and insert there")
+        todo!("2c-01: latch the header; an empty tree gets a root leaf; otherwise latch the root leaf and insert there (false for a duplicate)")
     }
 
-    // TODO(2c-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2c-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2e-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
     // TODO(2c-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
@@ -129,45 +129,51 @@ where
 
     /// Removes the pair with this key, if there is one.
     pub fn remove(&self, key: &K) {
-        todo!("2c-02: removes the key from its leaf; an emptied root leaf makes the tree empty, and a leaf below its minimum size is rebalanced")
+        todo!("2c-05: removes the key from its leaf; an emptied root leaf makes the tree empty, and a leaf below its minimum size is rebalanced")
     }
+
+    // TODO(2e-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
     // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
-
-    // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
     // ------------------------------------------------------------------------------------------------------------------------
     // Optimistic paths: assume nothing above the leaf changes
     // ------------------------------------------------------------------------------------------------------------------------
 
-    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2e-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2e-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    // TODO(2e-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
     // ------------------------------------------------------------------------------------------------------------------------
     // Scans
     // ------------------------------------------------------------------------------------------------------------------------
 
     /// An iterator at the smallest key.
-    pub fn begin(&self) -> IndexIterator<'a, K, V, TOMBS> {
-        todo!("2c-01: the leftmost leaf, slot 0; an empty tree has no leaf, so its begin is its end")
+    pub fn begin(&self) -> IndexIterator<'a, K, V, TOMBS>
+    where
+        C: Clone + 'a,
+    {
+        todo!("2c-04: the leftmost leaf, slot 0; an empty tree has no leaf, so its begin is its end")
     }
 
     /// An iterator at the first key that is not less than `key`.
-    pub fn begin_at(&self, key: &K) -> IndexIterator<'a, K, V, TOMBS> {
-        todo!("2c-01: the leaf for the key, at the first slot whose key is not less than it (IndexIterator::at moves on if that is past the leaf's end)")
+    pub fn begin_at(&self, key: &K) -> IndexIterator<'a, K, V, TOMBS>
+    where
+        C: Clone + 'a,
+    {
+        todo!("2c-04: the leaf for the key, at the first slot whose key is not less than it (moving on if that is past the leaf's end)")
     }
 
     /// The iterator past the last pair.
     pub fn end(&self) -> IndexIterator<'a, K, V, TOMBS> {
-        todo!("2c-01: IndexIterator::end")
+        todo!("2c-04: the iterator that is past the last pair")
     }
 }

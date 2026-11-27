@@ -7,7 +7,6 @@ pub mod index;
 pub mod index_iterator;
 pub mod int_comparator;
 pub mod kmerge;
-pub mod leaf_reclaim;
 pub mod live_counts;
 pub mod live_iter;
 pub mod node_split;

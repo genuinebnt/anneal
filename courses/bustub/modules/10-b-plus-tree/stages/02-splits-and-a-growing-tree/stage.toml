@@ -1,8 +1,0 @@
-id = "2c-02"
-title = "Splits and a growing tree"
-kind = "build"
-difficulty = "hard"
-tests = ["stages_2c::s2c_02"]
-learn = ["splitting a full leaf and a full internal page", "copying a separator up and moving a key up", "growing a new root; the tree stays balanced"]
-concepts = ["splitting-and-promoting"]
-concepts_optional = ["b-plus-tree-anatomy", "routing-with-separator-keys", "latch-crabbing-and-safe-nodes", "checking-invariants", "model-based-testing", "errors-2c"]

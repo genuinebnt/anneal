@@ -51,14 +51,16 @@ impl<B: AsRef<[u8]>> BPlusTreePage<B> {
         read_u32(self.page.as_ref(), MAX_SIZE_OFFSET)
     }
 
+    // @begin 2c-05
     /// The fewest entries a page that is not the root may have. A leaf: `max_size / 2`. An internal page: `(max_size + 1) / 2`, which
-    /// is `ceil(max_size / 2)` children. (BusTub's `GetMinSize`; the root is exempt, see the delete stages.)
+    /// is `ceil(max_size / 2)` children. The root is exempt.
     pub fn min_size(&self) -> u32 {
         match self.page_type() {
             IndexPageType::Leaf => self.max_size() / 2,
             _ => self.max_size().div_ceil(2),
         }
     }
+    // @end
 }
 
 impl<B: AsRef<[u8]> + AsMut<[u8]>> BPlusTreePage<B> {
@@ -70,15 +72,9 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> BPlusTreePage<B> {
         write_u32(self.page.as_mut(), SIZE_OFFSET, size);
     }
 
-    /// Adds `amount` (which may be negative) to the size. Panics if that would leave a negative size.
-    pub fn change_size_by(&mut self, amount: i32) {
-        let size = self.size().checked_add_signed(amount).expect("a page's size cannot go below zero");
-        self.set_size(size);
-    }
-
     pub fn set_max_size(&mut self, max_size: u32) {
         write_u32(self.page.as_mut(), MAX_SIZE_OFFSET, max_size);
     }
 }
-//~ // TODO(2c-01): your page type goes here. The tree module (module 2c) names it, and what it stores and how is up to you.
+//~ // TODO(2c-01): what every page of your tree shares (a kind tag, a size) goes here, if you want a shared part at all.
 // @end

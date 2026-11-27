@@ -141,7 +141,8 @@ fn the_standard_binary_search_reports_found_or_the_insertion_point() {
 
 ### In the exercises
 
-- **2c-01, 2c-02:** `child_for` routes with a binary search over the separator keys; a leaf's `lower_bound` finds the first slot not less than the key, and the same searches find where a pair or a separator is inserted.
+- **2c-01:** a leaf's lower bound finds the first slot not less than the key, for a lookup and for the place of a new pair.
+- **2c-02, 2c-03:** an internal page routes with a binary search over its separator keys, and the same search finds where a new separator goes after a split.
 
 ### Where it is used
 

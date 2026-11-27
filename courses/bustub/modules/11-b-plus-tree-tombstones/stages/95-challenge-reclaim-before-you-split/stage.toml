@@ -1,8 +1,0 @@
-id = "2d-c5"
-title = "Challenge: reclaim before you split"
-kind = "challenge"
-difficulty = "medium"
-tests = ["stages_2d::s2d_c5"]
-learn = ["using tombstones as free space", "when an insert should split a leaf and when it should clean it"]
-concepts = []
-concepts_optional = ["tombstones-and-lazy-deletion", "slot-allocation-and-invariants", "model-based-testing"]

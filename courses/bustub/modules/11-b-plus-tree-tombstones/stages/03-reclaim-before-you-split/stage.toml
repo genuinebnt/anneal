@@ -1,0 +1,9 @@
+id = "2d-03"
+title = "Reclaim before you split"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_2d::s2d_03"]
+renamed_from = ["2d-c5"]
+learn = ["using a leaf's dead pairs as free space", "deciding when an insert cleans a leaf and when it splits it", "an invariant that removes a code path: a leaf with tombstones never splits"]
+concepts = ["tombstones-and-lazy-deletion"]
+concepts_optional = ["slot-allocation-and-invariants", "splitting-and-promoting", "model-based-testing", "errors-2d"]

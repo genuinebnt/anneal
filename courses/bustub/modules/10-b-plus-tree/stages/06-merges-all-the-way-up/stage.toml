@@ -1,0 +1,8 @@
+id = "2c-06"
+title = "Merges all the way up"
+kind = "build"
+difficulty = "hard"
+tests = ["stages_2c::s2c_06"]
+learn = ["borrowing and merging internal pages: the separator rotates through the parent", "propagating a repair up the tree", "the tree shrinks one level at a time, at the root"]
+concepts = ["underflow-borrow-and-merge"]
+concepts_optional = ["routing-with-separator-keys", "splitting-and-promoting", "checking-invariants", "model-based-testing", "the-root-and-the-header-page", "b-plus-tree-anatomy", "errors-2c"]

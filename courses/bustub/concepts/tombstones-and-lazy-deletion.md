@@ -182,6 +182,7 @@ fn a_tombstone_hides_older_data_until_compaction_drops_both() {
 ### In the exercises
 
 - **2d-01, 2d-02:** the buffer (oldest first, bounded by `TOMBS`) as part of your leaf page, `remove` as a logical delete, `insert` with the "back to life" arm, the scan skipping tombstones; and what moving pairs between pages (split, borrow, merge) must do with their tombstones.
+- **2d-03:** a full leaf reclaims its dead pairs, oldest first, before it splits: the compaction every lazy-delete design ends up needing.
 - **Boss:** BusTub's four tombstone tests check exactly these rules, in this order.
 
 ### Where it is used

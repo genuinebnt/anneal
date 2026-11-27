@@ -1,8 +1,0 @@
-id = "2c-05"
-title = "Latching and the fast path"
-kind = "build"
-difficulty = "hard"
-tests = ["stages_2c::s2c_05"]
-learn = ["latch crabbing: hold a parent until the child is safe", "an optimistic fast path that write-latches only the leaf", "proving it with latch counts and threads"]
-concepts = ["latch-crabbing-and-safe-nodes"]
-concepts_optional = ["optimistic-latching", "deadlock-and-lock-ordering", "testing-concurrent-code-with-loom-and-miri", "reader-writer-latches", "errors-2c"]

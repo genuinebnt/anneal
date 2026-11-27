@@ -327,7 +327,9 @@ fn any_arrival_order_gives_a_valid_tree_of_the_same_keys() {
 
 ### In the exercises
 
-- **2c-02:** the leaf split (the first key of the right page is copied up), the internal split (`keep`, `split_off`, the middle key moves up), and `insert_into_parent` when the parent has room or the root split.
+- **2c-02:** the leaf split (the first key of the right page is copied up), the parent that gets the new child when it has room, and the new root when the root split.
+- **2c-03:** the internal split (`keep`, `split_off`, the middle key moves up) and the climb to the next parent.
+- **2d-03:** when a full leaf with tombstones may reclaim instead of splitting.
 - **Structure checker:** `check` is the idea behind `check_structure` in the tests: same depth, sizes within bounds, keys in order.
 
 ### Where it is used

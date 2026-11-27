@@ -149,7 +149,7 @@ fuzz_target!(|data: &[u8]| {
 
 ### In the exercises
 
-- **2b-02 to 2b-04** and **2d-03** ask for a `verify_integrity` / `check_structure` function that is itself the oracle for a random test: a checker you write, called after every operation.
+- **2b-02 to 2b-04** and **2d-04** ask for a `verify_integrity` / `check_structure` function that is itself the oracle for a random test: a checker you write, called after every operation.
 - The model-based loop in the *model-based testing* article is the *agreement with a model* row, with a hand-written generator and a manual shrink.
 
 ### Where it is used
