@@ -49,7 +49,8 @@
 .ft-sum{margin-top:12px;padding-top:12px;border-top:1px solid var(--line2);display:flex;justify-content:space-between;gap:10px;font:500 11px var(--mono);color:var(--dim)}
 .ft-sum b{color:var(--fg)}
 .ft-chk{display:flex;align-items:center;gap:8px;margin-top:12px;font:500 11px var(--mono);color:var(--mut);cursor:pointer}.ft-chk input{accent-color:var(--acc)}
-/* the fold button sits in the card's top corner; folded, the card is one line: the time, what it counts, Start and Open */
+/* the fold button sits in the card's top corner; folded, the card is one line: the time over what it counts, Start and Open.
+   The text is the only part that gives way, so the two buttons never cover each other in a narrow pane. */
 .ft-unfold{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;color:var(--mut)}
 .ft-unfold:hover:not(:disabled){background:var(--raise);color:var(--fg)}
 .ft-unfold:disabled{opacity:.4}
@@ -59,10 +60,14 @@
 .ft:not(.ft-fold):has(>.ft-unfold)>.ft-h{padding-right:32px}
 .rx-ws .pane.r .ft.ft-fold{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 12px}
 .ft-fold>.ft-h,.ft-fold>.ft-dots,.ft-fold>.ft-set,.ft-fold>.ft-sum,.ft-fold .ft-btns{display:none}
-.ft-fold>.ft-body{order:-1;flex:1;gap:10px;min-width:0}
-.ft-fold .ft-ring{width:auto;height:auto;background:none;border-radius:0;min-width:0}
-.ft-fold .ft-ring span,.rx-ws .pane.r .ft-fold .ft-ring span{width:auto;height:auto;display:flex;align-items:baseline;gap:8px;background:none;text-align:left}
-.ft-fold .ft-ring b{font-size:15px}.ft-fold .ft-ring small{margin:0;overflow:hidden;text-overflow:ellipsis}
-.ft-fold .ft-ctl{flex:none;margin-left:auto}
+.rx-ws .pane.r .ft-fold>.ft-body{order:-1;flex:1;gap:8px;min-width:0}
+.ft-fold .ft-ring{display:block;place-items:normal;flex:1 1 0;width:auto;height:auto;background:none;border-radius:0;min-width:0}
+.ft-fold .ft-ring::after{display:none}
+.ft-fold .ft-ring span,.rx-ws .pane.r .ft-fold .ft-ring span{display:block;width:auto;height:auto;min-width:0;border-radius:0;background:none;text-align:left}
+.ft-fold .ft-ring b{display:block;font-size:15px;line-height:18px}.ft-fold .ft-ring small{margin:0;line-height:14px;overflow:hidden;text-overflow:ellipsis}
+.ft-fold .ft-ctl{flex:none}
 .ft-fold .ft-go{width:auto;height:32px;padding:0 12px}
-@media (max-width:900px){.ft-unfold{width:44px;height:44px}.ft-fold .ft-go{height:44px}}
+.ft-fold>.ft-unfold{flex:none}
+/* on a phone the card is above the tests, not after them, so Start is there when the Tests pane opens */
+@media (max-width:900px){.ft-unfold{width:44px;height:44px}.ft-fold .ft-go{height:44px}
+  .rx-ws .pane.r>.tabs{order:-2}.rx-ws .pane.r>.ft{order:-1;margin-top:8px}}

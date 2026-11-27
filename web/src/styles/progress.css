@@ -64,7 +64,7 @@
 
 /* readiness by pattern and data structure */
 .rdy{display:inline-flex;align-items:center;gap:10px;justify-content:flex-end}
-.rdy-bar{display:block;width:84px;height:6px;border-radius:3px;background:var(--line2);overflow:hidden}
+.rdy-bar{display:block;width:84px;height:6px;border-radius:3px;background:var(--track);overflow:hidden}
 .rdy-bar b{display:block;height:100%;border-radius:3px;min-width:0}
 .rdy>span{min-width:38px;text-align:right}
 

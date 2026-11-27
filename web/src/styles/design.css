@@ -568,8 +568,11 @@ a.tr:hover{background:var(--sel)}
 @media (max-width:760px){.hd-pal .hd-main{grid-template-columns:1fr}.hd-pal .hd-prev{display:none}}
 
 /* ---------- shared scale (2026-11): one gutter, two page-title sizes, one breadcrumb, one segmented bar ---------- */
-:root{--gutter:20px;--t-home:clamp(34px,3.8vw,56px);--t-page:clamp(28px,3vw,46px);--track:color-mix(in oklab,var(--fg) 44%,var(--panel))}
+:root{--gutter:20px;--t-home:clamp(34px,3.8vw,56px);--t-page:clamp(28px,3vw,46px);--track:color-mix(in oklab,var(--fg) 22%,var(--panel))}
 @media (max-width:900px){:root{--gutter:16px}}
+
+/* the System design home is a landing page like the other areas' */
+.ly-page.bk-sd .ly-h1{font-size:var(--t-home)}
 
 /* the breadcrumb (components/Crumbs.tsx). --crumb sets the colour of its steps; every step has the same height, so they share a line */
 .ly-crumb{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;min-width:0;margin:0;font:600 11px/24px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--crumb,var(--acc))}
@@ -578,11 +581,10 @@ a.tr:hover{background:var(--sel)}
 .ly-crumb i{font-style:normal;color:var(--dim)}
 .ly-crumb [aria-current="page"]{color:var(--mut)}
 @media (max-width:900px){.ly-crumb{line-height:28px}.ly-crumb a,.ly-crumb a.active{min-height:28px;min-width:24px}}
-/* in the workspace bar it stays on one line and is cut short; on a phone it wraps (workspace.css) */
+/* in the workspace bar it stays on one line and is cut short, on a phone too (workspace.css) */
 .subbar .ly-crumb.crumb{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;--crumb:var(--mut)}
-@media (max-width:900px){.rx-ws .subbar .ly-crumb.crumb{white-space:normal;line-height:28px}.rx-ws .subbar .ly-crumb.crumb a{min-height:28px;line-height:28px}}
 
-/* a bar with one slice per item (components/SegmentBar.tsx); an empty slice keeps 3:1 against its card in both themes */
+/* a bar with one slice per item (components/SegmentBar.tsx). --track is the one colour of an empty slice or track */
 .seg-bar{display:flex;gap:2px;height:6px;min-width:0}
 .seg-bar>b{flex:1;min-width:0;border-radius:2px;background:var(--track)}
 .seg-bar>b[data-state="done"]{background:var(--seg,var(--grn))}

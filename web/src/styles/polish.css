@@ -70,10 +70,14 @@
 .sb-bar u{display:block;height:100%;background:var(--grn)}
 .sb-spark{width:28px;height:10px;fill:var(--acc);opacity:.85}
 @keyframes sb-run{to{transform:translateX(-12.5%)}}
-@media (prefers-reduced-motion:reduce){.sb-track{animation:none;width:100%}.sb-run:not(:first-child){display:none}.sb-run{flex:1 1 auto;flex-wrap:wrap;row-gap:4px}.sb{height:auto;min-height:30px;padding:6px 0}}
-html[data-motion="reduce"] .sb-track{animation:none;width:100%}html[data-motion="reduce"] .sb-run:not(:first-child){display:none}html[data-motion="reduce"] .sb-run{flex:1 1 auto;flex-wrap:wrap;row-gap:4px}html[data-motion="reduce"] .sb{height:auto;min-height:30px;padding:6px 0}
-html.has-sb body{padding-bottom:var(--sb-h,30px)}
-@media (max-width:900px){.sb{display:none}html.has-sb body{padding-bottom:0}}
+/* with motion reduced the bar is one still row. The numbers come most important first; one that does not fit whole wraps
+   to a second line, which the bar's height hides */
+@media (prefers-reduced-motion:reduce){.sb::before,.sb::after{display:none}.sb-track{animation:none;width:100%}.sb-run:not(:first-child){display:none}.sb-run{flex:1 1 auto;min-width:0;flex-wrap:wrap;align-content:flex-start;height:29px;overflow:hidden}.sb-i{height:29px;flex:none}}
+html[data-motion="reduce"] .sb::before,html[data-motion="reduce"] .sb::after{display:none}html[data-motion="reduce"] .sb-track{animation:none;width:100%}html[data-motion="reduce"] .sb-run:not(:first-child){display:none}html[data-motion="reduce"] .sb-run{flex:1 1 auto;min-width:0;flex-wrap:wrap;align-content:flex-start;height:29px;overflow:hidden}html[data-motion="reduce"] .sb-i{height:29px;flex:none}
+/* --sb-h: the room the bar takes, for what sticks to the bottom of a page */
+html.has-sb{--sb-h:30px}
+html.has-sb body{padding-bottom:var(--sb-h)}
+@media (max-width:900px){.sb{display:none}html.has-sb{--sb-h:0px}html.has-sb body{padding-bottom:0}}
 
 /* course map: one row per project, a label that does not wrap, nodes that fill as stages pass */
 .k-root .k-map{padding:18px 20px;border-radius:var(--r-card)}

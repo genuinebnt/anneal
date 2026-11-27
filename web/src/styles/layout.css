@@ -7,7 +7,7 @@
 .ly-head{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:16px}
 .ly-ttl{display:grid;gap:6px;min-width:0}
 .ly-h1{margin:0;font-size:var(--t-page);line-height:1.12;letter-spacing:-.03em;text-wrap:balance}
-.ly-sub{margin:0;color:var(--mut);max-width:70ch;font-size:14px}
+.ly-sub{margin:0;color:var(--mut);max-width:70ch;font-size:14px;text-wrap:balance}
 .ly-tiles{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
 
 /* summary tiles */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { isRustSection, PLANNED, sectionOf } from "../curriculum";
@@ -85,15 +85,6 @@ export function StatsBar({ area }: { area: AreaId }) {
         return out;
     }, [area, dsa.data, progress.data, tracks.data, course.data, sd.data, showIdeas]);
 
-    // the bar grows when its numbers wrap (motion reduced), and the page keeps that much room under it
-    const watch = useRef<ResizeObserver | null>(null);
-    const measure = useCallback((el: HTMLDivElement | null) => {
-        watch.current?.disconnect();
-        if (!el) return void document.documentElement.style.removeProperty("--sb-h");
-        watch.current = new ResizeObserver(() => document.documentElement.style.setProperty("--sb-h", `${el.offsetHeight}px`));
-        watch.current.observe(el);
-    }, []);
-
     if (hidden || items.length === 0) return null;
     const render = (copy: number) =>
         items.map((it) => (
@@ -118,7 +109,7 @@ export function StatsBar({ area }: { area: AreaId }) {
             </span>
         ));
     return (
-        <div className="sb" ref={measure} role="region" aria-label="Your numbers" style={{ "--sb-n": items.length } as React.CSSProperties}>
+        <div className="sb" role="region" aria-label="Your numbers" style={{ "--sb-n": items.length } as React.CSSProperties}>
             <div className="sb-track">
                 {[0, 1, 2, 3, 4, 5, 6, 7].map((k) => (
                     <div className="sb-run" key={k} aria-hidden={k > 0}>

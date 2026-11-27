@@ -118,7 +118,7 @@ export function PatternShell({ code, tab, left, right, mini, children }: { code:
                     )}
                     {pattern && (
                         <button className="ps-reset" aria-expanded={resetOpen} onClick={() => setResetOpen(!resetOpen)} title="Forget your progress on this pattern">
-                            Reset progress
+                            Reset<span className="ps-word"> progress</span>
                         </button>
                     )}
                     <span className="hintkeys">

@@ -18,11 +18,11 @@ import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
 type AreaId = "dsa" | "rust" | "courses" | "sd" | "cb";
 
-const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses" | "/sd" | "/cookbook"; color: string }[] = [
+const AREAS: { id: AreaId; label: string; short?: string; to: "/dsa" | "/rust" | "/courses" | "/sd" | "/cookbook"; color: string }[] = [
     { id: "dsa", label: "DSA", to: "/dsa", color: "var(--acc)" },
     { id: "rust", label: "Rust", to: "/rust", color: "var(--vio)" },
     { id: "courses", label: "Courses", to: "/courses", color: "var(--grn)" },
-    { id: "sd", label: "System design", to: "/sd", color: "var(--warn)" },
+    { id: "sd", label: "System design", short: "Design", to: "/sd", color: "var(--warn)" },
     { id: "cb", label: "Cookbook", to: "/cookbook", color: "var(--mac)" },
 ];
 
@@ -319,9 +319,9 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
             {stats && !compact && current !== "cb" && <StatsBar area={current} />}
             <nav className="hd-dock" ref={dock} aria-label="Areas">
                 {AREAS.map((a) => (
-                    <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined} title={areaTitle(a.label, counts[a.id])}>
+                    <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined} aria-label={a.label} title={areaTitle(a.label, counts[a.id])}>
                         <AreaIcon id={a.id} />
-                        {a.label}
+                        {a.short ?? a.label}
                         <DockBar {...counts[a.id]} />
                     </Link>
                 ))}

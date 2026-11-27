@@ -518,7 +518,7 @@ export function TrackPage({ slug }: { slug: string }) {
           </Link>
         )}
         <button className="ps-reset" aria-expanded={resetOpen} onClick={() => setResetOpen(!resetOpen)} title="Forget your progress on this track">
-          Reset progress
+          Reset<span className="ps-word"> progress</span>
         </button>
         {written.length > 1 && (
           <span className="hintkeys">

@@ -41,7 +41,7 @@
 .s-root .s-pills{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
 .s-root .s-pill{font:500 11px var(--mono);padding:3px 9px;border-radius:4px;background:var(--raise);color:var(--mut)}
 .s-root .s-pill.s-g{color:var(--grn);background:color-mix(in oklab,var(--grn) 14%,transparent)}
-.s-root .s-meter{height:5px;border-radius:3px;background:var(--line2);overflow:hidden;margin:6px 0 16px}
+.s-root .s-meter{height:5px;border-radius:3px;background:var(--track);overflow:hidden;margin:6px 0 16px}
 .s-root .s-meter i{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,var(--s-ac),oklch(0.8 0.12 330));transition:width 1.1s var(--ease) .3s}
 .s-root .s-ml{display:flex;justify-content:space-between;font:500 10.5px var(--mono);letter-spacing:.14em;color:var(--dim)}
 .s-root .s-ml b{color:var(--s-ac);font-weight:500}

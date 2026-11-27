@@ -116,7 +116,6 @@
     /* the breadcrumb gets a row to itself, so it is not squeezed out by the clock and its neighbours */
     .rx-ws .subbar{flex-wrap:wrap;height:auto;overflow:hidden;gap:6px 10px;padding:8px 14px}
     .rx-ws .subbar .crumb{flex:1 0 100%}
-    .rx-ws .subbar .sx-crumb{white-space:normal;line-height:1.4}
     .rx-ws .subbar .wtitle{flex:1 1 100%;min-width:0;white-space:normal}
     .rx-ws .subbar .subpills{flex:1 1 100%}
     .rx-ws .subbar .sbr{margin-left:0;width:100%;gap:10px;justify-content:space-between}
@@ -153,8 +152,34 @@
 .rx-ws .subbar .wpager>a,.rx-ws .subbar .wpager>.wp-off{display:grid;place-items:center;min-width:24px;min-height:24px}
 @media (max-width:900px){
     .rx-ws .ws>.pane.r{overflow:clip}
-    .rx-ws .pane.r .acts{position:sticky;bottom:var(--dock-h,0px);z-index:6;background:var(--panel)}
     /* C18: the previous and next arrows are big enough to press */
     .rx-ws .subbar .wpager{gap:0!important}
     .rx-ws .subbar .wpager>a,.rx-ws .subbar .wpager>.wp-off{display:grid;place-items:center;min-width:44px;min-height:44px;font-size:20px}
+    /* the arrows and the crumb's links are taller than their rows: the extra height reaches into the gaps around them,
+       so the header is no taller for it */
+    .rx-ws .subbar{row-gap:4px;padding-block:6px}
+    .rx-ws .subbar .sbr{flex-wrap:nowrap;gap:8px}
+    .rx-ws .subbar .wpager{margin:-7px 0 -7px -12px}
+    /* one line: the least useful step is cut first (the stage; in a series, the series name, so the part number stays) */
+    .rx-ws .subbar .ly-crumb.crumb{display:flex;flex-wrap:nowrap;gap:0 6px;overflow:hidden;white-space:nowrap;line-height:28px;letter-spacing:.06em;padding-block:6px;margin-block:-6px}
+    .rx-ws .subbar .ly-crumb.crumb>i{flex:none;margin-block:-6px}
+    .rx-ws .subbar .ly-crumb.crumb>span{flex:0 1 auto;min-width:24px;margin-block:-6px;overflow:hidden;text-overflow:ellipsis}
+    .rx-ws .subbar .ly-crumb.crumb>span:first-of-type{flex-shrink:0}
+    .rx-ws .subbar .ly-crumb.crumb>span:last-of-type{flex-shrink:1000}
+    .rx-ws .subbar .ly-crumb.sx-crumb>span:last-of-type{flex-shrink:0}
+    .rx-ws .subbar .ly-crumb.crumb a{display:block;min-height:28px;line-height:28px;overflow:hidden;text-overflow:ellipsis}
+}
+/* Submit stays above the bottom bar while the tests scroll, but not on a short screen (a phone on its side), where the
+   header, the bar and a fixed button leave almost nothing to read: there it ends the page */
+@media (max-width:900px) and (min-height:501px){.rx-ws .pane.r .acts{position:sticky;bottom:var(--dock-h,0px);z-index:6;background:var(--panel)}}
+@media (max-width:360px){
+    /* the narrowest phones: pager, clock and layout buttons still share the row */
+    .rx-ws .subbar{padding-inline:8px}
+    .rx-ws .subbar .sbr{gap:4px}
+    .rx-ws .subbar .wpager{margin-left:-4px}
+    .rx-ws .subbar .wpager>a,.rx-ws .subbar .wpager>.wp-off{min-width:36px}
+    /* the clock's dot goes: past the budget its time still turns red, and so does its border */
+    .rx-ws .clock{gap:4px;padding:5px 4px;font-size:11.5px}
+    .rx-ws .clock>.dot{display:none}
+    .rx-ws .lay button{width:24px}
 }

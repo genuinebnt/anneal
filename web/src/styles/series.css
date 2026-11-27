@@ -51,8 +51,8 @@
 .sx-need>li{border-top:1px solid var(--line2)}
 .sx-need summary{display:grid;grid-template-columns:12px minmax(0,1fr) minmax(0,max-content);gap:4px 8px;align-items:baseline;min-height:36px;padding:8px 0;cursor:pointer;color:var(--fg);line-height:20px;list-style:none}
 .sx-need summary::-webkit-details-marker{display:none}
-.sx-need summary::before{content:"▸";color:var(--mut)}
-.sx-need details[open]>summary::before{content:"▾"}
+.sx-need summary::before{content:"";align-self:start;justify-self:center;width:6px;height:6px;margin-top:6px;border:solid var(--mut);border-width:1.5px 1.5px 0 0;transform:rotate(45deg)}
+.sx-need details[open]>summary::before{margin-top:5px;transform:rotate(135deg)}
 .sx-need summary>small{max-width:18ch;text-align:right;font-size:12.5px;color:var(--mut)}
 .sx-need ul{margin:2px 0 10px;padding:0 0 0 36px;display:grid;gap:8px;color:var(--mut);line-height:1.45}
 .sx-need li small{display:block;font-size:12px;color:var(--dim)}

@@ -201,5 +201,7 @@ a.tcard:hover,.tcard:not(.planned):hover{transform:translateY(-3px);box-shadow:0
 .ps-fchips{display:flex;gap:6px;flex-wrap:wrap}
 .ps-next>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .ps-next{max-width:min(340px,100%)}
-@media (max-width:900px){.ps-next{flex:1 1 100%;max-width:100%}}
+@media (max-width:900px){.ps-acts{flex-wrap:nowrap}.ps-next{flex:1 1 0;min-width:0;max-width:100%}.ps-reset{flex:none;padding:0 8px}.ps-acts .hintkeys{flex:none}}
 .seg button{white-space:nowrap}
+/* on a phone the button says Reset, so the next problem's title has room; its name is still Reset progress */
+@media (max-width:480px){.ps-reset .ps-word{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}

@@ -17,6 +17,12 @@ readiness list. The phone bar shows the area icons with a thin progress bar unde
 rules. Also: the series switch reads "Switch series: …", and two problem titles lost their `(W…)` tags.
 Left: merging the other pill, tab, button, next-up card and stat-tile families; the course and header breadcrumbs.
 
+A second commit fixes what an independent review found in the first: the folded focus timer fits a narrow pane (and sits
+above the tests on a phone); the phone problem header is a one-line breadcrumb and one row of controls, no taller than
+before round two; Submit is not fixed on short screens; the calendar no longer scrolls sideways at 901; with motion
+reduced the bottom numbers are one row. One empty-segment colour (`--track`, deliberately under 3:1; each bar also
+says its count in text). The phone bar says "Design" (its name stays "System design").
+
 ## Series: a problem in two series (local, not committed; 2026-11-27)
 
 The series being read is now in the address (`?series=`), so shared problems no longer send a reader to another series
