@@ -1,0 +1,31 @@
+slug = "a-value-inside-a-value"
+title = "A value inside a value, arriving in pieces"
+mode = "write"
+level = "medium"
+stage = "messages"
+order = 1
+status = "ready"
+tags = ["recursive descent", "incremental parsing", "untrusted input", "limits"]
+teaches = [
+  "A recursive parser for a stream passes \"need more\" up through every level.",
+  "\"Never\" can be known long before the end; refuse at the first byte that proves it.",
+  "Recursion on untrusted input needs a depth limit checked before going deeper.",
+]
+follow_up = "1) This format is a subset of bencode, which BitTorrent uses. It adds dictionaries with sorted keys: what must the decoder check? 2) Each call parses from the start. Design a decoder that keeps its place between calls. What does it have to store for open lists? 3) Return values that borrow from the buffer. What changes for the caller?"
+
+[[hints]]
+kind = "approach"
+text = "Write one function that reads a value starting at a position, with the number of lists already open. It returns the same three outcomes as `decode`, and lists call it for each item."
+
+[[hints]]
+kind = "rust"
+text = "`let Some(x) = inner()? else { return Ok(None) };` passes both other outcomes upwards. A helper that reads digits can take a closure that judges the number after each digit."
+
+[[hints]]
+kind = "edge"
+text = "Is `i-0` already hopeless? Is `1` when `max_bytes` is 0? Compare a declared length with the bytes you have left, not by adding it to a position."
+
+[solution]
+explanation = "One function parses a value at a position and returns `None` as soon as bytes run out. Numbers are judged digit by digit, so a limit or an impossible number is reported at once. The depth check comes before the recursive call, which also bounds the stack."
+time = "O(bytes) per call"
+space = "O(depth) stack plus the value"

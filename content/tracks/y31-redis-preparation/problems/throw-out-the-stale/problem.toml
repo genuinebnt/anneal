@@ -1,0 +1,31 @@
+slug = "throw-out-the-stale"
+title = "Throw out what has gone stale"
+mode = "write"
+level = "medium"
+stage = "data"
+order = 3
+status = "ready"
+tags = ["random sampling", "swap_remove", "index map", "expiry"]
+teaches = [
+  "A Vec plus a map from key to index gives constant-time insert, delete and uniform random choice.",
+  "Sampling repeats while it finds enough garbage, so the effort follows how much there is.",
+  "Passing the randomness in makes a random algorithm testable.",
+]
+follow_up = "1) After a sweep stops, what share of the sessions would you expect to be ended? Why does the quarter threshold bound it? 2) Compare with a heap ordered by end time. When is each the better choice? 3) Why must a real server also bound the time one sweep takes?"
+
+[[hints]]
+kind = "approach"
+text = "Which collection can give you its i-th element at once? What breaks about that when you remove from its middle, and how can you remove without shifting?"
+
+[[hints]]
+kind = "rust"
+text = "`Vec::swap_remove(i)` moves the last element into the hole in O(1). A `HashMap<String, usize>` remembers where each id sits; fix the entry of the element that moved."
+
+[[hints]]
+kind = "edge"
+text = "Remove the map entry first, then check whether an element moved into index `i` at all. The threshold compares with the looks the round planned, even if it ended early."
+
+[solution]
+explanation = "The sessions sit in a Vec in no particular order, with a map from id to position. A random index is then a uniform random session, and `swap_remove` keeps the indexes dense. The sweep repeats while more than a quarter of a round's looks found something."
+time = "O(1) per look and per change"
+space = "O(sessions)"

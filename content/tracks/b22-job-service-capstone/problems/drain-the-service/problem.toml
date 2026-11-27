@@ -1,0 +1,43 @@
+slug = "drain-the-service"
+title = "Shut the service down"
+mode = "write"
+level = "hard"
+stage = "production"
+order = 7
+status = "ready"
+tags = ["graceful shutdown", "race conditions", "watch", "cancel safety", "503"]
+teaches = [
+  "The closed flag is checked under the lock that creates jobs, so every accepted job is one the shutdown knows about.",
+  "Waiting for a count in the store, instead of joining the task set, lets many callers wait and lets any of them give up.",
+  "Closing the door to new work need not close it to retries, reads and cancels.",
+]
+follow_up = "1) Where would a deadline go, and what should happen to the jobs it cuts off? 2) What does a load balancer need to see before shutdown starts? 3) How would the process learn of SIGTERM?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower", "futures"]
+
+[[hints]]
+kind = "approach"
+text = "Decide what \"closed\" means for each kind of request. Then decide what the shutdown waits for, and make sure that waiting for it changes nothing."
+
+[[hints]]
+kind = "rust"
+text = "A `closed` flag in the same struct as the jobs; a `watch::Sender<usize>` counting jobs that are not final, changed where jobs are created and finished; `wait_for(|n| *n == 0)`."
+
+[[hints]]
+kind = "edge"
+text = "The retry check comes before the closed check. Close on the first poll of `shutdown`. Do not move the JoinSet out of the service: dropping it aborts every job."
+
+[solution]
+explanation = "close sets a flag under the store lock. submit answers retries first, then refuses new keys if closed, all under that lock, so no job can appear after the count was found to be zero. The store keeps the number of unfinished jobs in a watch channel, and shutdown only waits for it to reach zero before counting outcomes."
+time = "O(jobs) for the report"
+space = "O(1) extra"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "similar"
+page = "graceful-shutdown"
+note = "Stop, drain, exit."

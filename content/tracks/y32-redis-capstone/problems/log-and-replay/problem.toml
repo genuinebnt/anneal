@@ -1,0 +1,31 @@
+slug = "log-and-replay"
+title = "Capstone 8: log every change and replay it"
+mode = "write"
+level = "hard"
+stage = "keep-and-serve"
+order = 8
+status = "ready"
+tags = ["append-only file", "effect logging", "crash recovery", "torn writes", "atomic transactions"]
+teaches = [
+  "Log effects, not requests: a relative time or a blocking pop cannot be replayed as it was asked.",
+  "Whatever the server decided on its own, such as an expiry, must be written down in order.",
+  "A torn end is expected after a crash; damage in the middle is not, and must not be silently cut off.",
+]
+follow_up = "1) What does a failed `fsync` mean for data already written, and why does the log stop for good? 2) A flipped bit that still parses goes unnoticed. What would a checksum per record cost? 3) With `Never`, what exactly can a power cut lose?"
+
+[[hints]]
+kind = "approach"
+text = "Let each command say what to record when it differs from what was sent. Record expiry at the single place where it happens. Wrap `EXEC` by remembering how long the log was before it ran."
+
+[[hints]]
+kind = "rust"
+text = "A flag that a command sets when it pushes its own record keeps the default simple. For replay, `parse_command` already tells you need-more from error, and `Vec::insert` can place `MULTI` after the fact."
+
+[[hints]]
+kind = "edge"
+text = "A lazy removal must not count as the command having changed something, or a `GET` gets logged. What time should replay pretend it is, so that no deadline has passed?"
+
+[solution]
+explanation = "The engine records rewritten forms where a command depends on time, and a removal wherever expiry happens, so the log is a deterministic script. Replay runs it at time 0, where nothing has expired, and keeps only whole records and whole transactions."
+time = "O(record) per write; O(log) to open"
+space = "O(data + unwritten records)"

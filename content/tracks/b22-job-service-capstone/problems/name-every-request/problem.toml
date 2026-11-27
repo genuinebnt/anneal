@@ -1,0 +1,48 @@
+slug = "name-every-request"
+title = "Name every request and log it"
+mode = "write"
+level = "hard"
+stage = "production"
+order = 8
+status = "ready"
+tags = ["axum", "middleware", "x-request-id", "tracing", "spans"]
+teaches = [
+  "A request id ties a client's complaint to your log lines. Accept the caller's only if it is safe to repeat.",
+  "One layer around the router covers every route and both fallbacks.",
+  "Instrumenting the future puts everything the handler logs inside the request's span.",
+]
+follow_up = "1) How would the id reach the logs of the background job it created? 2) Should an incoming id from the open internet be trusted at all? 3) What would you add to follow a request across services?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower", "futures", "tracing", "tracing-subscriber"]
+
+[[hints]]
+kind = "approach"
+text = "Write one middleware: choose the id, run the rest of the stack inside a span that carries it, log the result, add the header."
+
+[[hints]]
+kind = "rust"
+text = "`axum::middleware::from_fn` with `Router::layer`; `tracing::info_span!`; `Instrument::instrument`; `HeaderValue::from_str`. A `static AtomicU64` is unique across the whole process."
+
+[[hints]]
+kind = "edge"
+text = "`route_layer` would miss unknown paths. Log the path without the query. The response body must pass through untouched, so that event streams still flow."
+
+[solution]
+explanation = "The middleware takes the x-request-id header if it is 1 to 64 visible ASCII characters, else it makes one from a process-wide counter. It runs the rest of the stack inside a request span, logs the status inside that span and sets the header on whatever response came back, without reading the body."
+time = "O(1) per request"
+space = "O(1)"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "similar"
+page = "axum-middleware"
+note = "A from_fn layer for correlation ids."
+
+[[cookbook]]
+level = "related"
+page = "tracing-spans-subscriber-layers"
+note = "Spans, subscribers and layers."

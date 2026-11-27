@@ -1,0 +1,44 @@
+slug = "one-piece-of-work"
+title = "Run one piece of work and say how it ended"
+mode = "write"
+level = "hard"
+stage = "background"
+order = 4
+status = "ready"
+tags = ["tokio", "select!", "JoinError", "panic isolation", "cancellation", "AbortHandle", "watch"]
+teaches = [
+  "A panic in a spawned task stops only that task. It comes back to whoever joins it, as a JoinError that carries the payload.",
+  "Aborting a task only asks. The future is dropped later, so code that must know it is gone has to wait for the join.",
+  "Dropping a JoinHandle lets the task run on. Dropping a JoinSet aborts it.",
+  "A closed channel is not a signal. Waiting on one that can no longer send needs its own branch.",
+]
+follow_up = "1) Work that never reaches an await cannot be aborted. What would you do for CPU-bound work? 2) How would you give cancelled work a short time to clean up first? 3) What does `futures::FutureExt::catch_unwind` offer instead of a separate task, and what does it not?"
+related = ["B1", "C4"]
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Put the work somewhere a panic cannot reach you from. Then wait for three things at once, and make sure that every way out leaves nothing running."
+
+[[hints]]
+kind = "rust"
+text = "`JoinSet` (or any handle that aborts on drop), `tokio::select!` with `biased;`, `JoinError::into_panic()` and `downcast` on the `Box<dyn Any + Send>`. `watch::Receiver::wait_for` returns `Err` when the sender is gone; `std::future::pending()` never finishes."
+
+[[hints]]
+kind = "edge"
+text = "Check the channel's current value before spawning. After cancelling or timing out, await the shutdown of the task before returning."
+
+[solution]
+explanation = "An already cancelled call returns before anything is spawned. The work runs in a JoinSet of one, so a panic arrives as a JoinError and dropping supervise aborts it. The select waits for cancellation, the result and the time limit. The cancel branch turns a dropped sender into a future that never resolves. For the two early endings, shutdown aborts and then waits until the future is gone."
+time = "O(1) beyond the work"
+space = "O(1)"
+
+[[cookbook]]
+level = "similar"
+page = "structured-concurrency-cancellation"
+note = "Cancellation, grace periods and abort over groups of tasks."
+
+[[cookbook]]
+level = "related"
+page = "select-cancel"
+note = "What select! does to the branches that lose."

@@ -1,0 +1,31 @@
+slug = "write-down-what-happened"
+title = "Come back the same after a restart"
+mode = "write"
+level = "medium"
+stage = "disk"
+order = 7
+status = "ready"
+tags = ["effect log", "event sourcing", "deterministic replay", "atomic units"]
+teaches = [
+  "Log the effects, so replay needs no clock, no dice and no old code paths.",
+  "Whatever the system does on its own, such as a lapse, is a change and must be logged.",
+  "Boundary markers make a group of changes replay all or nothing.",
+]
+follow_up = "1) Logging requests with the dice's answers and the time is the other design. Compare them when the code changes between writing and replaying. 2) Add snapshots: what must a snapshot record about the log? 3) Event sourcing keeps every change for ever. What does that buy, and what does it cost?"
+
+[[hints]]
+kind = "approach"
+text = "Make every change to the hall go through one function that applies an effect. `run` decides which effects to make; `replay` only applies the ones it reads."
+
+[[hints]]
+kind = "rust"
+text = "If `apply` returns `false` when an effect does not fit, replay can use it to find bad logs, and `run` can use the very same code. Collect a unit's changes first, apply them when its `End` arrives."
+
+[[hints]]
+kind = "edge"
+text = "Count the changes before you decide whether to wrap them. Lapses count. `used` moves only when a unit is complete."
+
+[solution]
+explanation = "All changes go through one `apply`, shared by the live system and replay, so the two cannot drift apart. The live system makes the random and timed decisions and records only their results; replay holds back a unit's changes until its end marker."
+time = "O(seats) per run, O(log) per replay"
+space = "O(seats)"

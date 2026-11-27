@@ -1,0 +1,48 @@
+slug = "refuse-bad-jobs"
+title = "Refuse a bad job and say why"
+mode = "write"
+level = "medium"
+stage = "api"
+order = 1
+status = "ready"
+tags = ["axum", "serde", "deny_unknown_fields", "validation", "IntoResponse", "error design"]
+teaches = [
+  "One error enum and one IntoResponse impl give every failure of an API the same shape, with a code that clients can rely on.",
+  "serde decides whether the body fits the types; validation decides whether the values make sense. They fail differently.",
+  "Collecting every problem costs a Vec and saves the client several round trips.",
+]
+follow_up = "1) How would you tell a client which line and column of its JSON is wrong without exposing serde's wording? 2) When is rejecting unknown fields the wrong choice?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Do it in two layers. First turn bytes into a `Spec` or fail. Then look at every field and collect what is wrong with each."
+
+[[hints]]
+kind = "rust"
+text = "`#[serde(deny_unknown_fields)]` and `#[serde(default = \"function_name\")]`; `serde_json::from_slice`. In `IntoResponse`, one `match` can pick (status, code) and `(StatusCode, Json(value))` is a response."
+
+[[hints]]
+kind = "edge"
+text = "Check the fields in the order of the table. Blank means empty after trimming, but the stored source is not trimmed. `details` is an empty array, not null, for every other error."
+
+[solution]
+explanation = "ApiError carries only what a message or details need. One method maps each variant to status and code, and IntoResponse builds the single body shape. parse_spec lets serde enforce types, required fields, defaults and unknown fields, then collects validation problems in field order."
+time = "O(size of the body)"
+space = "O(size of the body)"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "similar"
+page = "axum-errors"
+note = "One error type with one JSON shape."
+
+[[cookbook]]
+level = "similar"
+page = "backend-request-validation-extractors"
+note = "Strict decoding, then every field error collected."

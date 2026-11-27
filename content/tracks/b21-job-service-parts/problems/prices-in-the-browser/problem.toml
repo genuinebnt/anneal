@@ -1,0 +1,38 @@
+slug = "prices-in-the-browser"
+title = "Live prices in the browser"
+mode = "write"
+level = "medium"
+stage = "promises"
+order = 5
+status = "ready"
+tags = ["axum", "Server-Sent Events", "Sse", "KeepAlive", "broadcast", "Lagged", "Query"]
+teaches = [
+  "A response body can be a stream. axum turns a Stream of events into Server-Sent Events and keeps a quiet connection alive.",
+  "Subscribe before returning the response. Subscribing when the body is first read loses whatever happened in between.",
+  "A bounded broadcast channel protects the server from a slow client. The client is then told what it lost; the stream does not just stop.",
+]
+follow_up = "1) How would a client resume after reconnecting, and what would the server need to keep? 2) What stops a thousand idle streams from blocking a shutdown? 3) When would WebSockets be the better choice?"
+related = ["B1", "C4"]
+crates = ["axum", "tokio", "serde", "serde_json", "tower", "futures"]
+
+[[hints]]
+kind = "approach"
+text = "Think of the response as a function that produces the next event each time the connection is ready for one. Decide what it does for each possible result of waiting on the feed."
+
+[[hints]]
+kind = "rust"
+text = "`axum::response::sse::{Sse, Event, KeepAlive}` and `Sse::new(stream).keep_alive(..)`; `futures::stream::unfold` builds the stream; `Query<T>` with a serde struct reads `?symbol=`. `broadcast::Receiver::recv` returns `Err(RecvError::Lagged(n))` or `Err(RecvError::Closed)`."
+
+[[hints]]
+kind = "edge"
+text = "Call `subscribe()` in the handler itself. `Lagged` is not the end of the stream. `subscribe()` returns `None` after the close, which is an empty stream."
+
+[solution]
+explanation = "The handler subscribes before it returns, then builds an unfold stream over the receiver. A quote becomes an event with a name, an id and JSON data; a quote for another symbol is skipped inside the loop. Lagged becomes a missed event and Closed ends the stream. axum writes the wire format and KeepAlive adds comments while nothing is sent."
+time = "O(1) per quote per client"
+space = "O(buffer) per client"
+
+[[cookbook]]
+level = "similar"
+page = "axum-sse-replay"
+note = "SSE with axum over a fixed log, with Last-Event-ID."

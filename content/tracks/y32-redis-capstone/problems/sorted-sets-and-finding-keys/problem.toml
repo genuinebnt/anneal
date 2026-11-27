@@ -1,0 +1,31 @@
+slug = "sorted-sets-and-finding-keys"
+title = "Capstone 4: sorted sets and finding keys"
+mode = "write"
+level = "hard"
+stage = "protocol-and-data"
+order = 4
+status = "ready"
+tags = ["sorted set", "order statistics", "glob", "cursor pagination", "BTreeMap range"]
+teaches = [
+  "Two questions about scores become one: how many members come before this point?",
+  "A cursor that names the last key seen survives inserts and deletes; a position does not.",
+  "Floats need decisions before they can be ordered: NaN, -0 and infinity.",
+]
+follow_up = "1) Add `ZRANGEBYSCORE .. LIMIT offset count`. What must stay O(log n)? 2) Your `SCAN` leans on an ordered map. Redis uses a hash table and reverses the bits of its cursor: what does that guarantee, and what does it give up? 3) Why is `KEYS` dangerous on a busy single-threaded server?"
+
+[[hints]]
+kind = "approach"
+text = "For a score range, find the place where it starts and the place where it ends. For `SCAN`, ask what the cursor can name that stays meaningful when other keys vanish."
+
+[[hints]]
+kind = "rust"
+text = "`Ranked::count_while` takes a test on the score that holds for a prefix of the order. `BTreeMap::range((Bound::Excluded(last), Bound::Unbounded))` continues after a key. Keys are bytes, so encode the cursor, for example in hex."
+
+[[hints]]
+kind = "edge"
+text = "A `-0` score must compare equal to `0` in the order. An excluded `max` below an included `min` must not give a negative count."
+
+[solution]
+explanation = "A range by score is two counts of a prefix, and their difference is its size. The scan cursor encodes the last key examined, so the next call starts just after it in the ordered map, whatever changed in between."
+time = "O(log n + m) per sorted-set command; O(count · log n) per SCAN"
+space = "O(data)"

@@ -1,0 +1,31 @@
+slug = "snapshots-and-rewrite"
+title = "Capstone 9: snapshots and log rewrite"
+mode = "write"
+level = "hard"
+stage = "keep-and-serve"
+order = 9
+status = "ready"
+tags = ["snapshot", "binary format", "CRC-32", "atomic rename", "log compaction"]
+teaches = [
+  "Publish a file by writing it aside, syncing it and renaming it: readers see old or new, never half.",
+  "A rewrite is a snapshot plus the tail written since, and each write must be in exactly one of them.",
+  "A checksum finds accidents; only bounds checks and validation make a decoder safe.",
+]
+follow_up = "1) `begin_rewrite` holds the core still while it serialises. Redis forks instead. What would a copy-on-write structure give you here? 2) The tail is kept in memory and in the old log. When could it grow too large? 3) Why must the directory itself be synced after a rename on a real file system?"
+
+[[hints]]
+kind = "approach"
+text = "One helper publishes a file: remove the temporary one, append, sync, rename. The rewrite remembers the bytes of every write since it began, and the snapshot helper covers the seed too."
+
+[[hints]]
+kind = "rust"
+text = "Give the decoder a reader type whose only way to get bytes is a bounds-checked `take`. `Option<Vec<u8>>` for the tail says whether a rewrite runs. `take()` it at the start of finish, so every exit ends the rewrite."
+
+[[hints]]
+kind = "edge"
+text = "`append` adds to whatever the temporary file already holds. A non-empty but partial log wins over the snapshot at the next start, so the seed must appear all at once. Remember to sync before you rename."
+
+[solution]
+explanation = "The rewrite takes the compact form at the start and collects what is written afterwards; finishing publishes the two together with one rename, so every write is in exactly one place. Recovery seeds the log the same way, which keeps a crash during the first start harmless."
+time = "O(data) per snapshot or rewrite"
+space = "O(data + tail)"

@@ -1,0 +1,31 @@
+slug = "hold-requests-until-something-arrives"
+title = "Hold requests until something arrives"
+mode = "write"
+level = "hard"
+stage = "waiting"
+order = 6
+status = "ready"
+tags = ["wait queues", "FIFO fairness", "multiple indexes", "deadlines"]
+teaches = [
+  "A request that cannot be answered yet is data: store what it waits for and what to give back.",
+  "When one record sits in several indexes, remove it through one function that cleans them all.",
+  "An ordered set keyed by (deadline, arrival) fires timers in order and can cancel any of them.",
+]
+follow_up = "1) Redis uses linked lists for these queues. What makes removal from the middle O(1) there, and how would you do that safely in Rust? 2) Replace the deadline set with a binary heap and lazy deletion. What can grow, and when do you clean it up? 3) What makes first-come-first-served fair here, and when could someone still starve?"
+
+[[hints]]
+kind = "approach"
+text = "Keep one record per waiter, and index it three ways: by id, by each wanted item in arrival order, and by deadline. Give every park a rising number, so that arrival order is something you can sort by."
+
+[[hints]]
+kind = "rust"
+text = "`BTreeMap<u64, u64>` from arrival number to id is a queue that can remove from the middle. `BTreeSet<(deadline, arrival, id)>` gives the earliest with `first()`. Make `wake` and `expire` call `cancel`."
+
+[[hints]]
+kind = "edge"
+text = "An item named twice must not leave a second entry behind. Drop an item's queue once it empties. A `cancel` must also remove the deadline."
+
+[solution]
+explanation = "Every waiter sits in a map by id, in one ordered queue per wanted item, and in an ordered set of deadlines. All three ways of leaving go through `cancel`, so no index can keep a stale entry."
+time = "O(w log n) per waiter with w wanted items"
+space = "O(total wanted items)"

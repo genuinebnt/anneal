@@ -1,0 +1,31 @@
+slug = "transactions"
+title = "Capstone 5: transactions"
+mode = "write"
+level = "hard"
+stage = "many-clients"
+order = 5
+status = "ready"
+tags = ["transactions", "optimistic concurrency", "WATCH", "state machine", "sans-IO"]
+teaches = [
+  "A core that takes commands and returns deliveries has no sockets, so every interleaving of clients can be tested.",
+  "Optimistic transactions do not lock: they watch, and give up when something moved.",
+  "Index watchers by key, so a write pays only for those who care.",
+]
+follow_up = "1) Redis does not roll back a command that fails inside EXEC. What would rollback need? 2) How could a client retry a failed EXEC without starving under heavy contention? 3) Compare WATCH with the first-committer-wins rule of snapshot isolation."
+
+[[hints]]
+kind = "approach"
+text = "Keep per client an optional queue, a spoiled flag, the watched keys and a stale flag. Keep a second map from key to watching clients. After every command, drain the engine's changed keys and mark their watchers."
+
+[[hints]]
+kind = "rust"
+text = "`Option<Vec<Args>>` says whether a transaction is open. `std::mem::take` empties `changed` while you update clients. `check_command` knows the engine's commands, so give your own commands their arity first."
+
+[[hints]]
+kind = "edge"
+text = "Before `EXEC` decides, make each watched key expire if it is due. Do the same when a key is watched, before you register the watch. Remove the watch before the queued commands run."
+
+[solution]
+explanation = "Each client's state is a small record, and a key-to-watchers index turns the engine's list of changed keys into stale flags. EXEC first expires watched keys that are due, then checks the flags, ends the watches and runs the queue without interruption, since the core runs one command at a time."
+time = "O(watchers of the changed keys) per command"
+space = "O(clients + queued commands + watches)"

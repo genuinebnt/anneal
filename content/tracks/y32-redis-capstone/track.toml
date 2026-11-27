@@ -1,0 +1,21 @@
+code = "Y32"
+name = "Mini Redis capstone"
+section = "Y"
+tier = "sde3"
+order = 32
+summary = "Build a small Redis in ten steps: the protocol, five kinds of value, expiry, transactions, blocking pops, publish and subscribe, persistence and a TCP server. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "protocol-and-data"
+name = "Protocol and data"
+band = "medium"
+
+[[stages]]
+slug = "many-clients"
+name = "Many clients"
+band = "hard"
+
+[[stages]]
+slug = "keep-and-serve"
+name = "Keep it and serve it"
+band = "hard"

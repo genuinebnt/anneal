@@ -1,0 +1,44 @@
+slug = "cancel-a-job"
+title = "Cancel a job"
+mode = "write"
+level = "hard"
+stage = "workers"
+order = 5
+status = "ready"
+tags = ["tokio", "watch", "select!", "cancellation", "abort", "state machine"]
+teaches = [
+  "A cancel is a request. The store records it, and whoever runs the job carries it out.",
+  "Waiting for a slot must also listen for the cancel, or a queued job cannot be cancelled until its turn.",
+  "The slot is free only when the aborted work is gone, which means waiting for the abort.",
+  "Deciding the final status where the cancel flag lives makes an accepted cancel impossible to lose.",
+]
+follow_up = "1) What should DELETE of a job mean, and how does it differ from cancel? 2) The work writes a file. Who removes the half-written one after an abort?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Give each job a flag that can be waited for. The worker waits for it at both places where it waits for anything else. The store consults it whenever it is about to change the job."
+
+[[hints]]
+kind = "rust"
+text = "A `watch::Sender<bool>` per job; `wait_for`; `tokio::select!` with `biased;` so that the cancel is looked at first; `JoinSet::shutdown().await` aborts and waits."
+
+[[hints]]
+kind = "edge"
+text = "Once accepted, start must refuse and finish must record cancelled, whatever outcome it is given. A queued job cancelled before its worker first runs must never reach the work."
+
+[solution]
+explanation = "cancel sets a per-job watch flag under the store lock and returns. The worker selects over the flag and the permit, then over the flag and the child, both biased towards the flag. start refuses a flagged job and finish turns any outcome into cancelled, so there is no gap in which a late result can win. The child is shut down, not just aborted, before the permit is released."
+time = "O(1) per cancel besides the lookup"
+space = "O(jobs)"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "related"
+page = "select-cancel"
+note = "What select! does to the branches that lose."

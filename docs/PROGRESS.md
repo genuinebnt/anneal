@@ -22,6 +22,12 @@ above the tests on a phone); the phone problem header is a one-line breadcrumb a
 before round two; Submit is not fixed on short screens; the calendar no longer scrolls sideways at 901; with motion
 reduced the bottom numbers are one row. One empty-segment colour (`--track`, deliberately under 3:1; each bar also
 says its count in text). The phone bar says "Design" (its name stays "System design").
+## Cookbook job service: bug fixes (local, not committed; 2026-11-27)
+
+Fixed `job_service_axum`: the `after=u64::MAX` overflow, the shutdown and cancel races, an abort that was not awaited,
+retries refused while closing, and non-JSON error responses. Edge checks are at the end of its `main`. Its SSE route is
+still replay-only, and the page now says so. The b22 references, from step 3 on, now give `job_not_found` for `%FF`,
+with hidden tests. Open: a body over 2 MB still gets axum's plain-text 413 in the b22 references.
 
 ## Series: a problem in two series (local, not committed; 2026-11-27)
 

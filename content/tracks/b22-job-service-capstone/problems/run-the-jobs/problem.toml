@@ -1,0 +1,43 @@
+slug = "run-the-jobs"
+title = "Run the jobs, a few at a time"
+mode = "write"
+level = "hard"
+stage = "workers"
+order = 4
+status = "ready"
+tags = ["tokio", "Semaphore", "JoinSet", "panic isolation", "spawn"]
+teaches = [
+  "One task per job plus a semaphore gives a limit with a queue, and the queue is fair.",
+  "A permit held in a variable goes back on every way out of the function.",
+  "Running the work in a child task turns its panic into a value the worker can record.",
+]
+follow_up = "1) What happens to jobs if the process dies now? 2) When would you rather have a fixed set of workers reading a queue? 3) What if the work were CPU-bound and never awaited?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "For each new job start a task that waits for a slot, marks the job running, runs the work and records the ending. Make sure that nothing the work does can skip the last part."
+
+[[hints]]
+kind = "rust"
+text = "`Arc<Semaphore>` with `acquire_owned`; a `JoinSet` for the workers (reap with `try_join_next`) and one for the child; `JoinError::try_into_panic` gives the payload. The closure type can be stored as `Arc<dyn Fn(Spec) -> Pin<Box<dyn Future<..> + Send>> + Send + Sync>`."
+
+[[hints]]
+kind = "edge"
+text = "Call `work(spec)` inside the child task, because the call itself may panic. Spawn a worker only when the store says the job is new."
+
+[solution]
+explanation = "submit stores the job and, only for a new one, spawns a worker. The worker acquires a permit, which queues jobs in order, marks the job running, then runs the work in a child task. The join result becomes the outcome, a panic included. Finished workers are reaped at the next spawn."
+time = "O(log n) per job besides the work"
+space = "O(unfinished jobs) tasks"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "similar"
+page = "joinset-semaphore"
+note = "A JoinSet and a Semaphore with a checked limit."

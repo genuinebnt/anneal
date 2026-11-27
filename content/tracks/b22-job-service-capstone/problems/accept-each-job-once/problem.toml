@@ -1,0 +1,43 @@
+slug = "accept-each-job-once"
+title = "Keep the jobs and accept each once"
+mode = "write"
+level = "medium"
+stage = "api"
+order = 2
+status = "ready"
+tags = ["state machine", "Mutex", "idempotency", "logical clock", "event log"]
+teaches = [
+  "Change a status in one function that also stamps the time and writes the history. Then the three cannot disagree.",
+  "Looking up an idempotency key and creating the job happen under one lock, so two retries that race make one job.",
+  "A counter used as a clock makes every test of time exact.",
+]
+follow_up = "1) What would have to be written to disk, and in what order, for a restart to keep these promises? 2) Which of these operations would need to be one SQL transaction?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Write down which changes of status are allowed before writing code. Then give the changes one common path."
+
+[[hints]]
+kind = "rust"
+text = "Put jobs, keys and the clock in one struct behind one `Arc<Mutex<..>>`. A `BTreeMap<u64, _>` keeps jobs in id order, which a later step needs."
+
+[[hints]]
+kind = "edge"
+text = "A refused or repeated call must not move the clock or use an id. Store the spec with the key, so that a reuse with another spec can be told apart."
+
+[solution]
+explanation = "The jobs, the key map and the clock share one lock. submit answers from the key map or creates the job inside that lock. start and finish check the current status and then use the same record method, which sets status and time and appends the history entry."
+time = "O(log n) per call, O(history) to read events"
+space = "O(jobs)"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "related"
+page = "idempotency-dedup-leader-fencing-store"
+note = "Idempotency keys with a request fingerprint, and what they cannot promise."

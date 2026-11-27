@@ -1,0 +1,21 @@
+code = "B22"
+name = "Job service capstone"
+section = "B"
+tier = "core"
+order = 22
+summary = "Build a job service over HTTP in eight steps: accept each job once, run a few at a time, cancel, stream progress and shut down cleanly. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "api"
+name = "The API"
+band = "medium"
+
+[[stages]]
+slug = "workers"
+name = "The workers"
+band = "hard"
+
+[[stages]]
+slug = "production"
+name = "Fit for production"
+band = "hard"

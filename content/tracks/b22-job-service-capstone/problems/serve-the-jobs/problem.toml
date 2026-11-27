@@ -1,0 +1,48 @@
+slug = "serve-the-jobs"
+title = "Post a job, read it and page through jobs"
+mode = "write"
+level = "medium"
+stage = "api"
+order = 3
+status = "ready"
+tags = ["axum", "extractors", "Location header", "cursor pagination", "Query"]
+teaches = [
+  "The HTTP layer translates: extractors in, one store call, a response out.",
+  "Asking the store for one job more than the page shows whether another page exists.",
+  "An excluded lower bound says \"after this id\" without any arithmetic that could overflow.",
+]
+follow_up = "1) Which of these handlers hold the store's lock, and for how long? 2) How would you add filtering by status without breaking the cursor?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Write the three handlers around the store you have. Add one private method to the store for reading a page."
+
+[[hints]]
+kind = "rust"
+text = "Extractors: `State`, `HeaderMap`, `Bytes` (last), `Path<String>` taken as `Result<Path<String>, PathRejection>` (axum answers a failed extractor in plain text), `Query<HashMap<String, String>>`. `Router::fallback` and `method_not_allowed_fallback` give unknown requests your error shape."
+
+[[hints]]
+kind = "edge"
+text = "`after` may be `u64::MAX`. Parse the numbers yourself, so that bad ones use your error. A path segment that is not a number is an unknown job."
+
+[solution]
+explanation = "Handlers return Result with ApiError, so the question mark does the error replies. The key is read first, then the body. The list takes limit plus one rows from the range after the cursor, which both fills the page and decides next_after."
+time = "O(log n + limit) for a page"
+space = "O(limit)"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "similar"
+page = "axum-router-state"
+note = "Routes, shared state and driving a router without a socket."
+
+[[cookbook]]
+level = "similar"
+page = "rest-api-patterns"
+note = "Cursor pagination inside a larger REST example."

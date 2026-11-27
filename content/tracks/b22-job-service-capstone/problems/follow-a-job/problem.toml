@@ -1,0 +1,43 @@
+slug = "follow-a-job"
+title = "Watch a job as it happens"
+mode = "write"
+level = "hard"
+stage = "workers"
+order = 6
+status = "ready"
+tags = ["Server-Sent Events", "Stream", "replay and follow", "Last-Event-ID", "watch"]
+teaches = [
+  "Replay and live updates are one loop: read what is new after my position, otherwise wait for a signal.",
+  "The follower must mark the signal as seen before it reads, or an entry written in between is never announced.",
+  "A stream with a clear end lets clients and shutdowns finish.",
+]
+follow_up = "1) How many wake-ups does one status change cost with a thousand followers? 2) How would followers survive a restart of the service?"
+related = ["B1", "B21"]
+crates = ["axum", "tokio", "serde", "serde_json", "thiserror", "tower", "futures"]
+
+[[hints]]
+kind = "approach"
+text = "Treat the job's history as the only source of truth. The follower remembers the last id it sent and needs only to be told when to look again."
+
+[[hints]]
+kind = "rust"
+text = "`futures::stream::unfold` over (store, signal, last id, entries ready to send); a `watch::Sender<()>` per job, signalled where history is written; `axum::response::sse::{Sse, Event, KeepAlive}`."
+
+[[hints]]
+kind = "edge"
+text = "End the stream when the job is final and nothing is left. Read \"is it final\" and the new entries under the same lock."
+
+[solution]
+explanation = "Every history entry is written in record, which also signals the job's watch channel. The events handler builds an unfold stream that marks the signal seen, reads the entries after its position and the final flag under one lock, sends them, and otherwise waits or ends. axum frames them as SSE and KeepAlive covers quiet periods."
+time = "O(history) per follower"
+space = "O(history) per job"
+
+[[cookbook]]
+level = "similar"
+page = "job-service-axum"
+note = "The whole Cookbook job service. Its contract differs from this one, and several of its choices fail these tests."
+
+[[cookbook]]
+level = "similar"
+page = "axum-sse-replay"
+note = "Replay after Last-Event-ID, without following."

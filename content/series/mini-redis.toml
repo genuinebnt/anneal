@@ -1,0 +1,874 @@
+# The series "From bytes on a socket to a mini Redis": an order over problems, not a track. It copies and moves nothing.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). No page here is exact: the Cookbook
+# mini Redis is one file with another interface. Minutes are estimates; nobody has been timed.
+
+[series]
+id = "mini-redis"
+title = "From bytes on a socket to a mini Redis"
+summary = "Small parts give you what the capstone needs. Then you build a small Redis, one step at a time."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a mini Redis"
+capstone_summary = "Its wire protocol, five kinds of value, expiry, transactions, blocking pops, publish and subscribe, a log with snapshots, and a TCP server."
+capstone_note = "From step 2 on, each starter contains reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step. It gives away those steps, and several parts of the series; each step names them. It is a teaching server, not Redis: one database, about 60 commands, RESP2 only."
+capstone_cookbook = "mini-redis"
+
+[[stage]]
+id = "messages"
+name = "Messages in pieces"
+
+[[stage]]
+id = "data"
+name = "Data a server keeps"
+
+[[stage]]
+id = "waiting"
+name = "Waiting and telling"
+
+[[stage]]
+id = "disk"
+name = "A log you can replay"
+
+[[stage]]
+id = "network"
+name = "Over the network"
+
+[[part]]
+number = 1
+id = "b4-length-prefixed-codec"
+stage = "messages"
+status = "existing"
+minutes = 45
+blurb = "Get whole messages out of bytes that arrive in any size"
+new_idea = "A stream has no boundaries: say \"need more\", take whole messages only"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "l3-binary-frame-parser", why = "optional warm-up on byte slices", reveals_method = false, hidden = true },
+]
+used_again = ["b7-requests-in-pieces", "y32-speak-the-protocol"]
+real_uses = "tokio_util codecs, Kafka, gRPC and database wire protocols."
+know_first = "Slices, Vec and enums"
+cookbook = [
+    { level = "similar", page = "tcp-framed-server", note = "Length-prefixed frames over TCP. read_full gathers partial reads, and parse_len refuses a large length before the payload is allocated.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "b7-requests-in-pieces"
+stage = "messages"
+status = "existing"
+minutes = 60
+blurb = "Read requests that arrive in halves, or several at once"
+new_idea = "Finding where a text message ends, when its head says how long its body is"
+reuses = "need-more and consume-once from part 1"
+required = ["b4-length-prefixed-codec"]
+helpful = []
+used_again = ["y31-a-value-inside-a-value", "b7-talk-over-a-connection"]
+real_uses = "HTTP/1.1, Redis RESP, SMTP, language server protocol."
+cookbook = [
+    { level = "similar", page = "http1-parser", note = "A fuller HTTP/1.1 parser with the same three outcomes. It parses nothing after a request without keep-alive.", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "y31-a-value-inside-a-value"
+stage = "messages"
+status = "new"
+minutes = 75
+blurb = "Read data with lists inside lists, from a sender you do not trust"
+new_idea = "Recursion on a partial input: pass \"need more\" up, and say \"never\" at the first byte that proves it"
+reuses = "the three outcomes of part 2"
+required = ["b7-requests-in-pieces"]
+helpful = []
+used_again = ["y32-speak-the-protocol"]
+real_uses = "BitTorrent's bencode, RESP, CBOR, any nested wire format."
+cookbook = [
+    { level = "similar", page = "resp-protocol", note = "An incremental parser for another nested format with limits; take_line to parse_inline were read. It reports some errors later than this task asks.", source = "examples/networking/resp_protocol.rs", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "f3-generational-slab"
+stage = "data"
+status = "existing"
+minutes = 60
+blurb = "Keep many linked things in one block of memory"
+new_idea = "Slots addressed by index, reused through a free list"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y31-who-is-in-40th-place"]
+real_uses = "Entity stores, connection tables, graph and tree nodes."
+know_first = "Option, and why two &mut to one Vec are refused"
+cookbook = []
+
+[[part]]
+number = 5
+id = "y31-who-is-in-40th-place"
+stage = "data"
+status = "new"
+minutes = 120
+blurb = "Answer questions about places in a ranking that keeps changing"
+new_idea = "A skip list whose links count what they jump over"
+reuses = "index links and a free list from part 4"
+required = ["f3-generational-slab"]
+helpful = [
+    { id = "s4-btreemap-ranges", why = "what an ordered map gives, and what it lacks", reveals_method = false, hidden = true },
+]
+used_again = ["y32-sorted-sets-and-finding-keys"]
+real_uses = "Leaderboards, Redis sorted sets, order statistics in query engines."
+cookbook = [
+    { level = "similar", page = "skiplist", note = "An arena skip list without counts, so it cannot answer ranks. The struct and its helpers were read.", source = "examples/data_structures/skiplist.rs", hidden = true },
+    { level = "similar", page = "mini-redis", note = "SkipList keeps spans on its links and does rank and select. It shows the whole method.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "y31-which-names-fit"
+stage = "data"
+status = "new"
+minutes = 60
+blurb = "Decide which names fit a pattern, however nasty the pattern"
+new_idea = "Only the latest star is ever worth trying again"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y32-sorted-sets-and-finding-keys", "y32-publish-and-subscribe"]
+real_uses = "KEYS and SCAN in Redis, shell globs, ignore files, route filters."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Glob compiles the pattern first. Same rules in most places; it shows the method.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "s4-btreemap-ranges"
+stage = "data"
+status = "existing"
+minutes = 30
+blurb = "Ask an ordered map for a stretch of its keys (a shorter part than usual)"
+new_idea = "BTreeMap::range with inclusive and exclusive bounds"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y32-sorted-sets-and-finding-keys"]
+real_uses = "Time ranges, indexes, resumable listings."
+cookbook = []
+
+[[part]]
+number = 8
+id = "y31-throw-out-the-stale"
+stage = "data"
+status = "new"
+minutes = 60
+blurb = "Free what nobody will ever ask for again, a little at a time"
+new_idea = "Constant-time random choice from a changing set, and sampling that works harder when it pays"
+reuses = "the index bookkeeping idea of part 4"
+required = []
+helpful = []
+used_again = ["y32-keys-that-expire"]
+real_uses = "Redis active expiry, cache cleanup, load balancers that pick at random."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Expires and active_expire_cycle. They show the whole method.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "y12-mvcc-snapshot-isolation"
+stage = "waiting"
+status = "existing"
+minutes = 90
+blurb = "Let transactions overlap, and refuse the one that would lose an update"
+new_idea = "A commit fails if something it depends on changed since it began"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y32-transactions"]
+real_uses = "PostgreSQL, optimistic locking in web APIs, Redis WATCH."
+know_first = "HashMap and BTreeMap"
+cookbook = []
+
+[[part]]
+number = 10
+id = "y31-hold-requests-until-something-arrives"
+stage = "waiting"
+status = "new"
+minutes = 90
+blurb = "Keep requests that cannot be answered yet, and answer them fairly"
+new_idea = "One waiting record in several indexes, removed through one door"
+reuses = "an ordered map as in part 7"
+required = []
+helpful = [
+    { id = "s4-btreemap-ranges", why = "first and last of an ordered map", reveals_method = false, hidden = true },
+]
+used_again = ["y32-blocking-pops"]
+real_uses = "Blocking queue pops, long polling, lock wait queues, connection pools."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "bpop, block, unblock and serve_waiters. Mixed in with the server; they show the method.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "y31-tell-everyone-without-waiting"
+stage = "waiting"
+status = "new"
+minutes = 60
+blurb = "Send news to many readers when one of them has stopped reading"
+new_idea = "A bounded queue per reader, and a policy for the one that falls behind"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "c2-bounded-channel", why = "what full and disconnected mean for a channel", reveals_method = true, hidden = true },
+]
+used_again = ["y32-publish-and-subscribe", "y32-serve-it-over-tcp"]
+real_uses = "Pub/sub brokers, live dashboards, chat servers, change feeds."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "c_publish uses try_send into bounded queues and disconnects on overflow.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 12
+id = "y9-kv-store-wal"
+stage = "disk"
+status = "existing"
+minutes = 75
+blurb = "Keep data through a crash, with a log that may end half-way"
+new_idea = "Replaying a log whose last record is torn"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y31-write-down-what-happened", "y32-log-and-replay"]
+real_uses = "Bitcask, Redis AOF, the write-ahead log of every database."
+cookbook = [
+    { level = "similar", page = "wal-append-log", note = "A log over a real file with the same torn-end rule. Read in full. It takes a tail of zeros as empty records.", source = "examples/os_and_storage/wal_append_log.rs", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "y31-write-down-what-happened"
+stage = "disk"
+status = "new"
+minutes = 75
+blurb = "Rebuild a system that rolled dice and watched the clock"
+new_idea = "Log effects rather than requests, grouped so that a group replays whole"
+reuses = "the torn end of part 12"
+required = ["y9-kv-store-wal"]
+helpful = []
+used_again = ["y32-log-and-replay"]
+real_uses = "Redis AOF rewriting of commands, database redo logs, event sourcing."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "propagate, delete_expired and c_exec record rewritten commands. They show the idea.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 14
+id = "l5-const-fn-crc-table"
+stage = "disk"
+status = "existing"
+minutes = 45
+blurb = "Compute a short number that changes when the bytes do"
+new_idea = "A cyclic redundancy check, bit by bit and by table"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y18-records-and-frames", "y32-snapshots-and-rewrite"]
+real_uses = "Ethernet, gzip, database pages and logs."
+cookbook = []
+
+[[part]]
+number = 15
+id = "y18-records-and-frames"
+stage = "disk"
+title = "Records that survive damage"
+status = "existing"
+minutes = 60
+blurb = "Decode records from a file that may be damaged"
+new_idea = "One bounds-checked path for every read, and a torn end told apart from corruption"
+reuses = "the checksum of part 14"
+required = ["l5-const-fn-crc-table"]
+helpful = []
+used_again = ["y32-snapshots-and-rewrite"]
+real_uses = "The log and table formats of storage engines."
+know_first = "This is also step 1 of the key-value store capstone, and its statement says so"
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "The Cookbook store's record and frame code. It shows the method; it accepts some records this step refuses.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[part]]
+number = 16
+id = "y31-shrink-a-log-while-it-is-written"
+stage = "disk"
+status = "new"
+minutes = 90
+blurb = "Compact a log without stopping the writes, whatever fails"
+new_idea = "A snapshot plus the tail written since, published by one rename"
+reuses = "replaying lines as in part 12"
+required = ["y9-kv-store-wal"]
+helpful = [
+    { id = "y17-save-without-tearing", why = "publishing a file safely, in more depth", reveals_method = true, hidden = true },
+    { id = "y17-after-the-power-cut", why = "what a power cut can leave behind", reveals_method = false, hidden = true },
+]
+used_again = ["y32-snapshots-and-rewrite"]
+real_uses = "Redis AOF rewrite, Kafka log compaction, manifest swaps in storage engines."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "start_rewrite and bg_done. The same two halves, on a background thread.", source = "examples/capstones/mini_redis.rs", hidden = true },
+    { level = "similar", page = "file-locking-atomic-replace", note = "Its atomic replace overwrites one file by the same steps; that part was read. The locks are another subject.", source = "examples/os_and_storage/file_locking_atomic_replace.rs", hidden = true },
+]
+
+[[part]]
+number = 17
+id = "c4-bounded-fan-out"
+stage = "network"
+status = "existing"
+minutes = 60
+blurb = "Run many async jobs, only so many at a time"
+new_idea = "Spawned tasks in a JoinSet, refilled as they finish"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y31-one-owner-one-sync", "y32-serve-it-over-tcp"]
+real_uses = "Crawlers, batch uploads, servers that keep track of their connection tasks."
+know_first = "async fn, .await and what a Tokio task is"
+cookbook = []
+
+[[part]]
+number = 18
+id = "c4-fix-cancel-safe-reader"
+stage = "network"
+status = "existing"
+minutes = 45
+blurb = "Find out why bytes vanish when two things are waited for at once"
+new_idea = "A future that select! drops must not have taken anything"
+reuses = "need-more from part 1"
+required = ["b4-length-prefixed-codec"]
+helpful = []
+used_again = ["y31-answer-while-still-listening"]
+real_uses = "Every Tokio connection loop with more than one branch."
+cookbook = []
+
+[[part]]
+number = 19
+id = "y31-one-owner-one-sync"
+stage = "network"
+status = "new"
+minutes = 75
+blurb = "Confirm many changes with few slow saves"
+new_idea = "One task owns the data; whatever is already waiting shares one commit"
+reuses = "oneshot replies; spawned tasks from part 17"
+required = []
+helpful = [
+    { id = "c5-oneshot-channel", why = "what is inside a oneshot channel", reveals_method = false, hidden = true },
+]
+used_again = ["y32-serve-it-over-tcp"]
+real_uses = "Group commit in databases, Redis's single thread, actor services."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Engine::run drains its channel, flushes once, then sends the replies.", source = "examples/capstones/mini_redis.rs", hidden = true },
+    { level = "related", page = "actor-model", note = "An actor that owns its state, with a mailbox and oneshot replies; the page's description was read, not the code. It does not batch.", hidden = true },
+]
+
+[[part]]
+number = 20
+id = "y31-answer-while-still-listening"
+stage = "network"
+status = "new"
+minutes = 120
+blurb = "Serve a connection that may leave, flood or stall at any moment"
+new_idea = "Wait on several things at once, stop reading to push back, and make every wait cancellable"
+reuses = "cancel safety from part 18; oneshot replies from part 19"
+required = ["c4-fix-cancel-safe-reader"]
+helpful = []
+used_again = ["y32-serve-it-over-tcp"]
+real_uses = "Database and cache servers, proxies, websocket handlers."
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "conn_loop. It reads while a reply is pending and can be killed during a write.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[part]]
+number = 21
+id = "c4-drain-with-deadline"
+stage = "network"
+status = "existing"
+minutes = 60
+blurb = "Stop a worker without losing what it has accepted"
+new_idea = "Cancellation with one deadline for the whole drain"
+reuses = "select! from part 18"
+required = ["c4-fix-cancel-safe-reader"]
+helpful = []
+used_again = ["y32-serve-it-over-tcp"]
+real_uses = "Rolling deploys, job runners, server shutdown."
+cookbook = [
+    { level = "related", page = "graceful-shutdown", note = "Async: a stop signal, then close the job channel and drain it. No sockets and no time limit.", hidden = true },
+]
+
+[[part]]
+number = 22
+id = "b7-talk-over-a-connection"
+stage = "network"
+status = "existing"
+minutes = 90
+blurb = "Exchange complete messages over a real connection"
+new_idea = "A socket is a stream: loop on reads, write all of it, and close without losing the last reply"
+reuses = "need-more from part 1"
+required = ["b7-requests-in-pieces"]
+helpful = []
+used_again = ["y32-serve-it-over-tcp"]
+real_uses = "Any TCP service or client."
+know_first = "This part uses std's blocking sockets. Tokio's are used the same way, with .await"
+cookbook = [
+    { level = "related", page = "std-net-tcp-udp-ip-addr", note = "A std::net lookup page. Its bounded line reader is folded, and it does not drain unread input before closing.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "lingering_close and the read loop of serve_connection.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "y32-speak-the-protocol"
+title = "Speak the protocol"
+minutes = 90
+blurb = "Read and write the messages Redis clients use"
+new_idea = "RESP2: nested frames and inline commands, with every error at its earliest byte"
+prepared_by = ["b4-length-prefixed-codec", "b7-requests-in-pieces", "y31-a-value-inside-a-value"]
+required = []
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Section 1. It reports some errors later than this step asks.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y32-values-and-commands"
+title = "Values and commands"
+minutes = 120
+blurb = "Run commands on keys that hold five kinds of thing"
+new_idea = "One keyspace of typed values, with one door for the wrong kind"
+prepared_by = ["s4-btreemap-ranges"]
+required = ["y32-speak-the-protocol"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Sections 4 to 6. More commands than this step, and a table of function pointers.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y32-keys-that-expire"
+title = "Keys that expire"
+minutes = 90
+blurb = "Make keys vanish on time"
+new_idea = "Lazy expiry on every path, with sampling for the rest"
+prepared_by = ["y31-throw-out-the-stale"]
+required = ["y32-values-and-commands"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "The expiry code of section 5.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y32-sorted-sets-and-finding-keys"
+title = "Sorted sets and finding keys"
+minutes = 90
+blurb = "Add rankings, and a way to find keys without stopping the world"
+new_idea = "Score ranges as two counts, and a cursor that survives changes"
+prepared_by = ["y31-who-is-in-40th-place", "y31-which-names-fit", "s4-btreemap-ranges"]
+required = ["y32-keys-that-expire"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Sections 2, 3 and 6.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y32-transactions"
+title = "Transactions"
+minutes = 90
+blurb = "Make several commands happen as one, or not at all"
+new_idea = "A core with many clients: queued commands and watched keys"
+prepared_by = ["y12-mvcc-snapshot-isolation"]
+required = ["y32-sorted-sets-and-finding-keys"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "The transaction code of section 6.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y32-blocking-pops"
+title = "Blocking pops"
+minutes = 120
+blurb = "Let a client wait for work that has not arrived"
+new_idea = "Parked requests with held commands, resumed in a fixed order"
+prepared_by = ["y31-hold-requests-until-something-arrives"]
+required = ["y32-transactions"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "bpop to settle. Its order differs from this step: it serves blocked clients only after the pushing pipeline batch has finished.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y32-publish-and-subscribe"
+title = "Publish and subscribe"
+minutes = 75
+blurb = "Let clients talk to each other through channels"
+new_idea = "A connection mode, and fan-out indexed by name"
+prepared_by = ["y31-tell-everyone-without-waiting", "y31-which-names-fit"]
+required = ["y32-blocking-pops"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "The pub/sub code of section 6.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "y32-log-and-replay"
+title = "Log every change and replay it"
+minutes = 105
+blurb = "Come back from a restart with every confirmed change"
+new_idea = "Redis's records: commands rewritten so that replay needs no clock"
+prepared_by = ["y9-kv-store-wal", "y31-write-down-what-happened"]
+required = ["y32-publish-and-subscribe"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Section 7. During replay it switches expiry off with a flag instead of this step's method.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 9
+id = "y32-snapshots-and-rewrite"
+title = "Snapshots and log rewrite"
+minutes = 120
+blurb = "Keep the files small and safe"
+new_idea = "A checked binary snapshot, an online rewrite and a safe first start"
+prepared_by = ["l5-const-fn-crc-table", "y18-records-and-frames", "y31-shrink-a-log-while-it-is-written"]
+required = ["y32-log-and-replay"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Section 7. Its snapshot format, files and interfaces differ from this step, and it has no power-cut tests; its disk-failure checks only make syncs and one append fail.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[capstone]]
+step = 10
+id = "y32-serve-it-over-tcp"
+title = "Serve it over TCP"
+minutes = 120
+blurb = "Put the whole server on the network"
+new_idea = "One owner task, replies after the log, bounded pushes and a clean stop"
+prepared_by = ["c4-bounded-fan-out", "c4-fix-cancel-safe-reader", "y31-one-owner-one-sync", "y31-answer-while-still-listening", "c4-drain-with-deadline", "b7-talk-over-a-connection"]
+required = ["y32-snapshots-and-rewrite"]
+cookbook = [
+    { level = "similar", page = "mini-redis", note = "Sections 8 and 9. It runs the data on its own thread rather than a task.", source = "examples/capstones/mini_redis.rs", hidden = true },
+]
+
+[[revisit]]
+part = "b7-requests-in-pieces"
+after = "y31-a-value-inside-a-value"
+how = "Solve part 2 again from a blank starter."
+
+[[revisit]]
+part = "y31-a-value-inside-a-value"
+before = "y32-speak-the-protocol"
+how = "Write your parser again from memory before capstone step 1."
+minutes = 40
+
+[[revisit]]
+part = "y31-throw-out-the-stale"
+after = "y31-tell-everyone-without-waiting"
+how = "Solve part 8 again from a blank starter."
+
+[[revisit]]
+part = "y31-hold-requests-until-something-arrives"
+before = "y32-blocking-pops"
+how = "Solve part 10 again from a blank starter before capstone step 6."
+
+[[revisit]]
+part = "y31-shrink-a-log-while-it-is-written"
+before = "y32-snapshots-and-rewrite"
+how = "Solve part 16 again from a blank starter before capstone step 9."
+
+[[revisit]]
+part = "y31-answer-while-still-listening"
+before = "y32-serve-it-over-tcp"
+how = "Solve part 20 again from a blank starter before capstone step 10."
+
+[[connection]]
+idea = "Handling incomplete input"
+learn = ["b4-length-prefixed-codec"]
+again = ["b7-requests-in-pieces", "y31-a-value-inside-a-value", "b7-talk-over-a-connection"]
+apply = ["y32-speak-the-protocol", "y32-log-and-replay", "y32-serve-it-over-tcp"]
+
+[[connection]]
+idea = "Limits on what a stranger controls"
+learn = ["b4-length-prefixed-codec"]
+again = ["y31-a-value-inside-a-value", "y31-which-names-fit", "y18-records-and-frames"]
+apply = ["y32-speak-the-protocol", "y32-snapshots-and-rewrite"]
+
+[[connection]]
+idea = "Two indexes that must agree"
+learn = ["f3-generational-slab"]
+again = ["y31-who-is-in-40th-place", "y31-throw-out-the-stale", "y31-hold-requests-until-something-arrives", "y31-tell-everyone-without-waiting"]
+apply = ["y32-sorted-sets-and-finding-keys", "y32-blocking-pops", "y32-publish-and-subscribe"]
+
+[[connection]]
+idea = "Passing in time and chance"
+learn = ["y31-throw-out-the-stale"]
+again = ["y31-hold-requests-until-something-arrives", "y31-write-down-what-happened"]
+apply = ["y32-keys-that-expire", "y32-blocking-pops", "y32-serve-it-over-tcp"]
+
+[[connection]]
+idea = "Giving up when something changed"
+learn = ["y12-mvcc-snapshot-isolation"]
+again = []
+apply = ["y32-transactions"]
+
+[[connection]]
+idea = "A slow reader must cost bounded memory"
+learn = ["y31-tell-everyone-without-waiting"]
+again = ["y31-answer-while-still-listening"]
+apply = ["y32-serve-it-over-tcp"]
+
+[[connection]]
+idea = "A log that outlives a crash"
+learn = ["y9-kv-store-wal"]
+again = ["y31-write-down-what-happened", "y31-shrink-a-log-while-it-is-written"]
+apply = ["y32-log-and-replay", "y32-snapshots-and-rewrite"]
+
+[[connection]]
+idea = "Do not say done before it is saved"
+learn = ["y9-kv-store-wal"]
+again = ["y31-one-owner-one-sync"]
+apply = ["y32-log-and-replay", "y32-serve-it-over-tcp"]
+
+[[connection]]
+idea = "Waiting on several things at once"
+learn = ["c4-fix-cancel-safe-reader"]
+again = ["y31-answer-while-still-listening", "c4-drain-with-deadline"]
+apply = ["y32-serve-it-over-tcp"]
+
+[[readiness]]
+group = "Protocol"
+concept = "Need more bytes against never; consume a message once"
+parts = ["b4-length-prefixed-codec", "b7-requests-in-pieces"]
+steps = [1, 8, 10]
+
+[[readiness]]
+group = "Protocol"
+concept = "Recursive parsing with depth and size limits, no allocation from a declared count"
+parts = ["y31-a-value-inside-a-value"]
+steps = [1]
+
+[[readiness]]
+group = "Protocol"
+concept = "The RESP2 frames, inline commands, and cleaning line ends from replies"
+parts = []
+steps = [1]
+note = "Given in full by step 1."
+
+[[readiness]]
+group = "Keyspace"
+concept = "Enums with match, HashMap, VecDeque, BTreeMap, BTreeSet and their set operations"
+parts = []
+steps = [2]
+note = "Assumed Rust; step 2's hints name the methods. A short macro for typed accessors is optional."
+
+[[readiness]]
+group = "Keyspace"
+concept = "Checked and saturating integer arithmetic on untrusted numbers"
+parts = ["y31-a-value-inside-a-value"]
+steps = [2, 3, 6]
+
+[[readiness]]
+group = "Keyspace"
+concept = "BTreeMap::range with Bound, to continue after a key"
+parts = ["s4-btreemap-ranges"]
+steps = [4]
+
+[[readiness]]
+group = "Keyspace"
+concept = "A cursor made from the last key, hex encoded"
+parts = ["s4-btreemap-ranges"]
+steps = [4]
+note = "The idea of the cursor is new in step 4; its hints cover it."
+
+[[readiness]]
+group = "Expiry"
+concept = "Constant-time random choice (Vec, swap_remove, position map) and sampled sweeping"
+parts = ["y31-throw-out-the-stale"]
+steps = [3]
+
+[[readiness]]
+group = "Expiry"
+concept = "Time and randomness passed in, so tests control them"
+parts = ["y31-throw-out-the-stale", "y31-write-down-what-happened"]
+steps = [3, 6, 8, 10]
+
+[[readiness]]
+group = "Data structures"
+concept = "An index-linked arena with a free list"
+parts = ["f3-generational-slab"]
+steps = [4]
+
+[[readiness]]
+group = "Data structures"
+concept = "A skip list with link spans: rank, select and counting before a point"
+parts = ["y31-who-is-in-40th-place"]
+steps = [4]
+
+[[readiness]]
+group = "Data structures"
+concept = "Glob matching without exponential backtracking"
+parts = ["y31-which-names-fit"]
+steps = [4, 7]
+
+[[readiness]]
+group = "Data structures"
+concept = "f64 scores: parsing, NaN, -0, infinity and formatting"
+parts = []
+steps = [4]
+note = "Explained in step 4."
+
+[[readiness]]
+group = "Clients"
+concept = "Optimistic concurrency: refuse a commit if something changed"
+parts = ["y12-mvcc-snapshot-isolation"]
+steps = [5]
+
+[[readiness]]
+group = "Clients"
+concept = "A core that takes commands and returns deliveries, with per-client state"
+parts = []
+steps = [5]
+note = "New in step 5, which specifies it."
+
+[[readiness]]
+group = "Clients"
+concept = "Waiters on several keys, FIFO per key, deadlines in order"
+parts = ["y31-hold-requests-until-something-arrives"]
+steps = [6]
+
+[[readiness]]
+group = "Clients"
+concept = "Resuming held work from queues without recursion"
+parts = ["y31-hold-requests-until-something-arrives"]
+steps = [6]
+note = "The held commands and their order are new in step 6."
+
+[[readiness]]
+group = "Clients"
+concept = "Fan-out indexed both ways, cleaned up on leaving"
+parts = ["y31-tell-everyone-without-waiting"]
+steps = [7]
+
+[[readiness]]
+group = "Persistence"
+concept = "Replaying a log and cutting off a torn end"
+parts = ["y9-kv-store-wal"]
+steps = [8]
+
+[[readiness]]
+group = "Persistence"
+concept = "Logging effects, with markers that make a group replay whole"
+parts = ["y31-write-down-what-happened"]
+steps = [8]
+
+[[readiness]]
+group = "Persistence"
+concept = "A log that stops for good after a failed write or sync"
+parts = ["y31-one-owner-one-sync"]
+steps = [8]
+note = "In part 19 a failed commit stops the owner."
+
+[[readiness]]
+group = "Persistence"
+concept = "CRC-32"
+parts = ["l5-const-fn-crc-table", "y18-records-and-frames"]
+steps = [9]
+note = "Part 14 teaches the idea on CRC-8. Part 15 writes CRC-32, and step 9 gives it."
+
+[[readiness]]
+group = "Persistence"
+concept = "Bounds-checked decoding of tagged, length-prefixed binary data"
+parts = ["y18-records-and-frames"]
+steps = [9]
+
+[[readiness]]
+group = "Persistence"
+concept = "Publishing a file: write aside, sync, rename; power-cut reasoning"
+parts = ["y31-shrink-a-log-while-it-is-written"]
+steps = [9]
+
+[[readiness]]
+group = "Persistence"
+concept = "A rewrite with a tail buffer while writes go on"
+parts = ["y31-shrink-a-log-while-it-is-written"]
+steps = [9]
+
+[[readiness]]
+group = "Persistence"
+concept = "f64::to_bits, to_le_bytes and from_le_bytes"
+parts = ["y18-records-and-frames"]
+steps = [9]
+
+[[readiness]]
+group = "Network"
+concept = "tokio::spawn, JoinHandle and JoinSet"
+parts = ["c4-bounded-fan-out"]
+steps = [10]
+
+[[readiness]]
+group = "Network"
+concept = "select!, cancel safety, branch preconditions, read_buf"
+parts = ["c4-fix-cancel-safe-reader", "y31-answer-while-still-listening"]
+steps = [10]
+
+[[readiness]]
+group = "Network"
+concept = "mpsc and oneshot channels; one task that owns the data; draining with try_recv"
+parts = ["y31-one-owner-one-sync"]
+steps = [10]
+
+[[readiness]]
+group = "Network"
+concept = "CancellationToken and stopping cleanly"
+parts = ["c4-drain-with-deadline", "y31-answer-while-still-listening"]
+steps = [10]
+
+[[readiness]]
+group = "Network"
+concept = "Splitting a stream, pipelining, closing without losing the last reply"
+parts = ["y31-answer-while-still-listening", "b7-talk-over-a-connection"]
+steps = [10]
+
+[[readiness]]
+group = "Network"
+concept = "A bounded backlog per reader, and dropping the one that falls behind"
+parts = ["y31-tell-everyone-without-waiting"]
+steps = [10]
+note = "Step 10 counts published frames with an atomic; its hints say how."
+
+[[readiness]]
+group = "Network"
+concept = "tokio::net::TcpListener accept loop, TcpStream::into_split and tokio::time::interval"
+parts = ["b7-talk-over-a-connection", "c4-bounded-fan-out"]
+steps = [10]
+note = "These Tokio names are not practised before step 10, and std does not mirror them all: it has no interval, and no into_split. (Part 20 splits a stream with tokio::io::split.) A hint of step 10 explains all three."
+
+[[side_path]]
+id = "l3-binary-frame-parser"
+why = "before part 1: byte slices without panics"
+before = "b4-length-prefixed-codec"
+
+[[side_path]]
+id = "y8-regex-nfa-matcher"
+why = "after part 6: what it takes when patterns can say more"
+after = "y31-which-names-fit"
+
+[[side_path]]
+id = "s5-indexed-priority-queue"
+why = "after part 10: another way to keep deadlines you can cancel"
+after = "y31-hold-requests-until-something-arrives"
+
+[[side_path]]
+id = "y17-save-without-tearing"
+why = "before part 16: publishing a file, checked at every crash point"
+before = "y31-shrink-a-log-while-it-is-written"
+
+[[side_path]]
+id = "c5-oneshot-channel"
+why = "before part 19: build the reply channel yourself"
+before = "y31-one-owner-one-sync"
+
+[[side_path]]
+id = "b7-stop-a-listening-server"
+why = "before capstone step 10: stopping a server of blocked threads, for contrast"
+before = "y32-serve-it-over-tcp"

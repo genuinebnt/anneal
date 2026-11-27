@@ -7174,6 +7174,8 @@ Lines read: `mini_redis.rs` 5876 of 5876.
 
 <details><summary>Suspected bugs and weak spots in the Cookbook file (16 notes, all unverified: found by reading, nothing run)</summary>
 
+Later note: the Cookbook file has since changed, so these notes and the line numbers above describe the old version. Bugs from these notes were fixed with checks in `t_regressions`; what remains is listed under LIMITS in the file header.
+
 - set_expire_at (1252) deletes on a past deadline even while loading. Replaying PEXPIREAT k t after t, followed by later writes made while k was alive (RPUSH, INCR) and no logged DEL (server stopped before expiry), recreates k with only the later data and no TTL. Real Redis does not delete on past deadlines while loading. Also affects the rewrite tail. Tests miss it because the manual clock is not advanced before restart (unverified, found by reading)
 - BGREWRITEAOF is queueable in MULTI and calls flush_aof inside EXEC (3077), draining the log, so self.log.len() - mark (2589) underflows when earlier unflushed records existed, e.g. one pipeline SET x 1, MULTI, BGREWRITEAOF, EXEC. Debug build panics and kills the executor, hence the whole server. With mark 0 the transaction is written without its MULTI wrapper (unverified)
 - block (1386): BLPOP k 1e300 passes the finite check, the cast saturates to u64::MAX and self.now + timeout_ms overflows: debug panic on the executor thread, release wraps to an immediate timeout (unverified)

@@ -1,0 +1,26 @@
+code = "B21"
+name = "Job service: preparation"
+section = "B"
+tier = "core"
+order = 21
+summary = "Small exercises for a service that runs work in the background: safe writes, stable pages, limits, cancellation, retries, live updates and clean shutdown."
+
+[[stages]]
+slug = "edge"
+name = "At the HTTP edge"
+band = "medium"
+
+[[stages]]
+slug = "background"
+name = "Work in the background"
+band = "medium"
+
+[[stages]]
+slug = "promises"
+name = "Promises to clients"
+band = "hard"
+
+[[stages]]
+slug = "running"
+name = "Run it for real"
+band = "hard"

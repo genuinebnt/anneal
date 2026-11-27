@@ -1,0 +1,31 @@
+slug = "who-is-in-40th-place"
+title = "Who is in 40th place?"
+mode = "write"
+level = "hard"
+stage = "data"
+order = 4
+status = "ready"
+tags = ["order statistics", "skip list", "index arena", "ranking"]
+teaches = [
+  "A skip list keeps order with express lanes whose heights are random, without any rebalancing.",
+  "Counting how far each link jumps turns a search into rank and select.",
+  "An arena with a free list gives a linked structure without `Rc` or `unsafe`.",
+]
+follow_up = "1) Your heights come from a seeded generator. What could an attacker who knows the seed do? 2) Compare with a balanced tree that stores subtree sizes (a treap, for example). Which is easier to get right, and which uses less memory? 3) Redis keeps a hash map beside its skip list. Which operations does each of them serve?"
+
+[[hints]]
+kind = "approach"
+text = "A `BTreeSet` keeps order but cannot count how many come before a key. Look for a structure whose search path can add up how many elements it jumped over. A skip list with a width on every link is one; a tree with subtree sizes is another."
+
+[[hints]]
+kind = "rust"
+text = "Keep nodes in a `Vec` and link them by index; node 0 is a head with all levels. Give each node `Vec<(next, span)>`. One helper that returns, for every level, the last node before a point and its place serves insert, remove and rank."
+
+[[hints]]
+kind = "edge"
+text = "When you insert a node of height h, the links on levels above h grow by one. When you remove it, they shrink by one. Set a span of 0 for links to nothing, and decide what a node's place counts from."
+
+[solution]
+explanation = "Each link records how many places it skips, so walking down from the top level adds up a node's rank. Insert and remove fix the spans along one search path. A hash map from name to score turns a name into a position in the order."
+time = "expected O(log n) per operation, plus the range's length"
+space = "O(n)"

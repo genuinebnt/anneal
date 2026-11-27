@@ -1,0 +1,655 @@
+# The series "From one HTTP request to a job service": an order over existing problems, not a track. It copies and
+# moves nothing. required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link
+# gives away how to solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default;
+# level is exact (solves the task), similar (same technique, different task) or related (explains the idea).
+# Minutes are estimates; nobody has been timed.
+
+[series]
+id = "job-service"
+title = "From one HTTP request to a job service"
+summary = "Small parts give you what the capstone needs. Then you build a service that runs background jobs over HTTP, one step at a time."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a job service"
+capstone_summary = "Clients post image-resize jobs, page through them, cancel them and watch them happen. The service runs a few at a time and shuts down without losing one."
+capstone_note = "From step 2 on, each starter contains reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step. It gives away those steps and much of the preparation before them. The tests run in memory: no step opens a network port."
+capstone_cookbook = "job-service-axum"
+
+[[stage]]
+id = "edge"
+name = "At the HTTP edge"
+
+[[stage]]
+id = "background"
+name = "Work in the background"
+
+[[stage]]
+id = "promises"
+name = "Promises to clients"
+
+[[stage]]
+id = "running"
+name = "Run it for real"
+
+[[part]]
+number = 1
+id = "f7-wire-format-json"
+stage = "edge"
+title = "JSON you do not control"
+status = "existing"
+minutes = 60
+blurb = "Read and write JSON whose shape somebody else decided"
+new_idea = "Describing a wire format with serde attributes"
+reuses = "structs and enums"
+required = []
+helpful = []
+used_again = ["b21-two-editors", "b22-refuse-bad-jobs"]
+real_uses = "Webhooks, third-party APIs, config files."
+cookbook = [
+    { level = "similar", page = "backend-request-validation-extractors", note = "Strict decoding with serde, then every field error collected.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "b1-api-error-response"
+stage = "edge"
+title = "One error shape for the whole API"
+status = "existing"
+minutes = 75
+blurb = "Make every failure of a small web API look the same"
+new_idea = "One error type that turns into every response, rejections and fallbacks included"
+reuses = "Result and ?"
+required = []
+helpful = [
+    { id = "l8-import-errors", why = "designing an error type that keeps its cause", reveals_method = false, hidden = true },
+]
+used_again = ["b22-refuse-bad-jobs", "b22-serve-the-jobs"]
+real_uses = "Any public HTTP API with documented error codes."
+cookbook = [
+    { level = "similar", page = "axum-errors", note = "One error type with one JSON shape.", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "b21-two-editors"
+stage = "edge"
+title = "Two people edit one page"
+minutes = 75
+blurb = "Stop one writer from silently wiping out another"
+new_idea = "Write preconditions with ETags: headers, raw bytes, and a compare-and-write under one lock"
+reuses = "axum routing from part 2, serde from part 1"
+required = ["b1-api-error-response"]
+helpful = [
+    { id = "b7-only-what-the-client-needs", why = "the same tags used for reading, in the web server series", reveals_method = false, hidden = true },
+]
+used_again = ["b22-serve-the-jobs"]
+real_uses = "REST APIs with optimistic concurrency, object stores, configuration services."
+cookbook = [
+    { level = "similar", page = "rest-api-patterns", note = "ETag with If-Match, 412 and 428, inside a larger REST example.", hidden = true },
+    { level = "similar", page = "http-caching-conditional", note = "An axum server with ETag and If-Match.", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "b21-pages-that-hold-still"
+stage = "edge"
+title = "Pages that hold still while the list changes"
+minutes = 60
+blurb = "Show a changing list a page at a time without repeats or gaps"
+new_idea = "Keyset pagination over a sorted set with an excluded lower bound and one extra row"
+reuses = "ordered collections"
+required = []
+helpful = [
+    { id = "s4-btreemap-ranges", why = "ranges over a sorted map, as a small warm-up", reveals_method = true, hidden = true },
+]
+used_again = ["b22-serve-the-jobs"]
+real_uses = "Feeds, audit logs, any list API with next-page cursors."
+cookbook = [
+    { level = "similar", page = "rest-api-patterns", note = "Offset against cursor pagination under inserts and deletes.", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "c4-bounded-fan-out"
+stage = "background"
+title = "At most N in flight"
+status = "existing"
+minutes = 60
+blurb = "Run many async calls without running them all at once"
+new_idea = "Spawning, joining and cancelling tasks with a JoinSet, within a limit"
+reuses = "async functions"
+required = []
+helpful = []
+used_again = ["b21-memory-budget", "b22-run-the-jobs"]
+real_uses = "Crawlers, batch API calls, fan-out requests."
+cookbook = [
+    { level = "related", page = "joinset-semaphore", note = "A JoinSet and a limit. It spawns every task up front, which this problem forbids.", hidden = true },
+    { level = "similar", page = "structured-concurrency-cancellation", note = "A scope that cancels the rest on the first failure.", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "b21-memory-budget"
+stage = "background"
+title = "Background jobs within a memory budget"
+minutes = 75
+blurb = "Accept work at once and run only as much as fits"
+new_idea = "A semaphore as a resource budget, one task per job, and waiting for them without owning them"
+reuses = "JoinSet from part 5"
+required = ["c4-bounded-fan-out"]
+helpful = [
+    { id = "l1-raii-span-guard", why = "a guard that acts on every way out", reveals_method = true, hidden = true },
+    { id = "c1-fair-semaphore", why = "build a fair semaphore yourself", reveals_method = true, hidden = true },
+]
+used_again = ["b22-run-the-jobs"]
+real_uses = "Upload processing, image pipelines, limits on database connections."
+cookbook = [
+    { level = "similar", page = "joinset-semaphore", note = "A JoinSet with a Semaphore that proves a limit.", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "b21-one-piece-of-work"
+stage = "background"
+title = "Run one piece of work and say how it ended"
+minutes = 90
+blurb = "Survive work that crashes, hangs or is no longer wanted"
+new_idea = "Panic isolation in a child task, a biased select over cancel, result and time, and abort that is awaited"
+reuses = "tasks from part 5"
+required = ["c4-bounded-fan-out"]
+helpful = [
+    { id = "c4-fix-cancel-safe-reader", why = "what select! does to the branches that lose", reveals_method = false, hidden = true },
+]
+used_again = ["b22-run-the-jobs", "b22-cancel-a-job"]
+real_uses = "Job runners, plugin hosts, request handlers with deadlines."
+cookbook = [
+    { level = "similar", page = "structured-concurrency-cancellation", note = "Cancellation, grace periods and abort.", hidden = true },
+    { level = "related", page = "select-cancel", note = "What select! does to the losing branches.", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "b21-charge-once"
+stage = "promises"
+title = "Charge the card once"
+minutes = 75
+blurb = "Make a retried request safe, even while the first is still running"
+new_idea = "Claiming an idempotency key under one lock and freeing it with a drop guard"
+reuses = "Mutex, async"
+required = []
+helpful = [
+    { id = "l1-raii-span-guard", why = "a guard that acts on every way out", reveals_method = true, hidden = true },
+]
+used_again = ["b22-accept-each-job-once"]
+real_uses = "Payment APIs, order creation, job submission."
+cookbook = [
+    { level = "similar", page = "axum-idempotency", note = "Idempotency keys over HTTP, without in-flight calls.", hidden = true },
+    { level = "similar", page = "idempotency-dedup-leader-fencing-store", note = "In flight or done, with a request fingerprint. Keys free themselves by expiry.", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "b21-leave-and-rejoin"
+stage = "promises"
+title = "A progress feed you can leave and rejoin"
+minutes = 90
+blurb = "Let a reader catch up and then stay up to date, missing nothing"
+new_idea = "A log plus a watch signal: mark seen, read from your position, wait"
+reuses = "async streams"
+required = []
+helpful = [
+    { id = "c5-block-on", why = "what a waker is, and why waiting does not mean spinning", reveals_method = false, hidden = true },
+]
+used_again = ["b22-follow-a-job"]
+real_uses = "Build logs, job progress, change feeds, chat history."
+cookbook = [
+    { level = "similar", page = "axum-sse-replay", note = "Replay after a last-seen id, without following.", hidden = true },
+]
+
+[[part]]
+number = 10
+id = "b21-prices-in-the-browser"
+stage = "promises"
+title = "Live prices in the browser"
+minutes = 75
+blurb = "Keep one response open and send news as it happens"
+new_idea = "Server-Sent Events with axum: a stream as a body, keep-alive, and telling a slow client what it lost"
+reuses = "streams from part 9, extractors from part 2"
+required = ["b1-api-error-response"]
+helpful = [
+    { id = "b21-leave-and-rejoin", why = "building a stream with unfold", reveals_method = true, hidden = true },
+]
+used_again = ["b22-follow-a-job"]
+real_uses = "Dashboards, notifications, token-by-token model output."
+cookbook = [
+    { level = "similar", page = "axum-sse-replay", note = "SSE with axum over a fixed log.", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "c4-drain-with-deadline"
+stage = "running"
+title = "Shut down without losing work"
+status = "existing"
+minutes = 75
+blurb = "Stop a background worker without losing what it accepted"
+new_idea = "Close the queue, then drain under one deadline and account for every job"
+reuses = "select! from part 7"
+required = ["b21-one-piece-of-work"]
+helpful = []
+used_again = ["b21-closing-time", "b22-drain-the-service"]
+real_uses = "Deployments, queue consumers."
+cookbook = [
+    { level = "related", page = "graceful-shutdown", note = "Stop, close the channel, drain. There is no deadline.", hidden = true },
+    { level = "similar", page = "structured-concurrency-cancellation", note = "One grace deadline over a set of tasks.", hidden = true },
+]
+
+[[part]]
+number = 12
+id = "b21-closing-time"
+stage = "running"
+title = "Close the door, then wait for everyone to leave"
+minutes = 75
+blurb = "Know for certain that nothing is still running"
+new_idea = "Admission and closing decided in one change of a watched value, with a cancel-safe wait"
+reuses = "the watch signal from part 9"
+required = ["c4-drain-with-deadline"]
+helpful = [
+    { id = "m4-cap-work-in-flight", why = "permits that give themselves back, in the rate limiter series", reveals_method = false, hidden = true },
+    { id = "b7-stop-a-listening-server", why = "the same promise with threads and sockets", reveals_method = false, hidden = true },
+]
+used_again = ["b22-drain-the-service"]
+real_uses = "Server shutdown, connection draining, hot reload."
+cookbook = [
+    { level = "similar", page = "structured-concurrency-cancellation", note = "Its task tracker: close, then wait for zero.", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "b21-line-per-request"
+stage = "running"
+title = "A log line for every request"
+minutes = 60
+blurb = "Find all the log lines of one request among thousands"
+new_idea = "axum middleware with tracing spans, instrument, and a guard for abandoned requests"
+reuses = "drop guards from part 8"
+required = ["b1-api-error-response"]
+helpful = [
+    { id = "b2-fix-poll-ready", why = "what a middleware layer is made of underneath", reveals_method = false, hidden = true },
+    { id = "l1-raii-span-guard", why = "a span guard without async", reveals_method = true, hidden = true },
+]
+used_again = ["b22-name-every-request"]
+real_uses = "Request tracing in every production service."
+cookbook = [
+    { level = "similar", page = "axum-middleware", note = "A from_fn layer for correlation ids.", hidden = true },
+    { level = "related", page = "tracing-spans-subscriber-layers", note = "Spans, subscribers and layers.", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "b22-refuse-bad-jobs"
+title = "Refuse a bad job and say why"
+minutes = 60
+blurb = "Decide what a job is, and how the service says no"
+new_idea = "A strict job format, every validation problem at once, one error type"
+reuses = "parts 1 and 2"
+prepared_by = ["f7-wire-format-json", "b1-api-error-response"]
+required = []
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "b22-accept-each-job-once"
+title = "Keep the jobs and accept each once"
+minutes = 75
+blurb = "Remember every job, and never create one twice"
+new_idea = "A status machine with one recording function, idempotent submit under one lock, a logical clock"
+reuses = "idempotency from part 8"
+prepared_by = ["b21-charge-once"]
+required = ["b22-refuse-bad-jobs"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "b22-serve-the-jobs"
+title = "Post a job, read it and page through jobs"
+minutes = 75
+blurb = "Put the jobs on the network"
+new_idea = "Routes over the store, with cursor pagination"
+reuses = "parts 2 to 4"
+prepared_by = ["b1-api-error-response", "b21-two-editors", "b21-pages-that-hold-still"]
+required = ["b22-accept-each-job-once"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "b22-run-the-jobs"
+title = "Run the jobs, a few at a time"
+minutes = 90
+blurb = "Do the work in the background, within a limit, surviving crashes"
+new_idea = "A task per job behind a semaphore, with the work in a child task"
+reuses = "parts 5 to 7"
+prepared_by = ["b21-memory-budget", "b21-one-piece-of-work"]
+required = ["b22-serve-the-jobs"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "b22-cancel-a-job"
+title = "Cancel a job"
+minutes = 90
+blurb = "Take a job back at any moment"
+new_idea = "A cancel flag that the store and the worker both obey"
+reuses = "part 7"
+prepared_by = ["b21-one-piece-of-work"]
+required = ["b22-run-the-jobs"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "b22-follow-a-job"
+title = "Watch a job as it happens"
+minutes = 75
+blurb = "Let a client watch, leave and come back"
+new_idea = "Replay then follow the job history as Server-Sent Events"
+reuses = "parts 9 and 10"
+prepared_by = ["b21-leave-and-rejoin", "b21-prices-in-the-browser"]
+required = ["b22-cancel-a-job"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "b22-drain-the-service"
+title = "Shut the service down"
+minutes = 75
+blurb = "Stop without breaking a promise"
+new_idea = "Closing under the lock that creates jobs, and waiting on a count"
+reuses = "parts 11 and 12"
+prepared_by = ["c4-drain-with-deadline", "b21-closing-time"]
+required = ["b22-follow-a-job"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "b22-name-every-request"
+title = "Name every request and log it"
+minutes = 45
+blurb = "Make every request easy to find afterwards"
+new_idea = "A request id and a span in one middleware"
+reuses = "part 13"
+prepared_by = ["b21-line-per-request"]
+required = ["b22-drain-the-service"]
+helpful = []
+used_again = []
+cookbook = [
+    { level = "similar", page = "job-service-axum", note = "The Cookbook job service. Its contract differs, and several of its choices fail these tests.", source = "examples/capstones/job_service_axum.rs", hidden = true },
+]
+
+[[revisit]]
+part = "b21-pages-that-hold-still"
+before = "b22-serve-the-jobs"
+how = "Write part 4 again from memory before capstone step 3."
+minutes = 25
+
+[[revisit]]
+part = "b21-charge-once"
+after = "b21-closing-time"
+how = "Solve part 8 again from a blank starter."
+minutes = 40
+
+[[revisit]]
+part = "b21-one-piece-of-work"
+before = "b22-run-the-jobs"
+how = "Solve part 7 again from a blank starter before capstone step 4."
+minutes = 45
+
+[[revisit]]
+part = "b21-leave-and-rejoin"
+before = "b22-follow-a-job"
+how = "Solve part 9 again from a blank starter before capstone step 6."
+minutes = 45
+
+[[revisit]]
+part = "b21-closing-time"
+before = "b22-drain-the-service"
+how = "Solve part 12 again from memory before capstone step 7."
+minutes = 30
+
+[[readiness]]
+group = "HTTP with axum"
+concept = "one error enum with IntoResponse, status and code mapping, extractor rejections, fallback and method_not_allowed_fallback"
+parts = ["b1-api-error-response"]
+steps = [1, 3]
+
+[[readiness]]
+group = "HTTP with axum"
+concept = "Router and State, HeaderMap and raw Bytes extractors, tuple responses with headers such as Location"
+parts = ["b1-api-error-response", "b21-two-editors"]
+steps = [3]
+
+[[readiness]]
+group = "HTTP with axum"
+concept = "Path and Query extractors"
+parts = ["b1-api-error-response", "b21-prices-in-the-browser"]
+steps = [3]
+note = "Step 3 reads the query as a HashMap of strings."
+
+[[readiness]]
+group = "HTTP with axum"
+concept = "Sse, Event, KeepAlive and a Stream as the response body"
+parts = ["b21-prices-in-the-browser"]
+steps = [6]
+
+[[readiness]]
+group = "HTTP with axum"
+concept = "middleware::from_fn with Router::layer, reading and adding headers"
+parts = ["b21-line-per-request"]
+steps = [8]
+note = "HeaderValue::from_str is one call, used first in step 8."
+
+[[readiness]]
+group = "HTTP with axum"
+concept = "driving a router with tower::ServiceExt::oneshot"
+parts = ["b1-api-error-response"]
+steps = [3]
+note = "The tests do the driving; no step asks you to write it."
+
+[[readiness]]
+group = "Data"
+concept = "serde defaults and renaming"
+parts = ["f7-wire-format-json"]
+steps = [1, 2]
+
+[[readiness]]
+group = "Data"
+concept = "deny_unknown_fields and default = \"function\""
+parts = ["b21-two-editors"]
+steps = [1]
+note = "Part 3 uses deny_unknown_fields and a plain default. The function form is in a hint of step 1."
+
+[[readiness]]
+group = "Data"
+concept = "check-and-insert under one lock, keys that remember their request"
+parts = ["b21-charge-once", "b21-two-editors"]
+steps = [2, 7]
+
+[[readiness]]
+group = "Data"
+concept = "ranges over a BTreeMap with an excluded bound, one extra row for next"
+parts = ["b21-pages-that-hold-still"]
+steps = [3]
+
+[[readiness]]
+group = "Data"
+concept = "a status enum changed through one function, a logical clock"
+parts = []
+steps = [2]
+note = "New in step 2, and small: its statement gives the whole table."
+
+[[readiness]]
+group = "Tasks"
+concept = "spawn, JoinSet, join_next, shutdown and try_join_next"
+parts = ["c4-bounded-fan-out", "b21-memory-budget"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Tasks"
+concept = "Semaphore with owned permits as a limit"
+parts = ["b21-memory-budget"]
+steps = [4]
+
+[[readiness]]
+group = "Tasks"
+concept = "JoinError, panic payloads, abort that is awaited"
+parts = ["b21-one-piece-of-work"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Tasks"
+concept = "select! with biased"
+parts = ["b21-one-piece-of-work", "c4-drain-with-deadline"]
+steps = [5]
+note = "Part 11 signals shutdown with a CancellationToken, not with a watch channel."
+
+[[readiness]]
+group = "Tasks"
+concept = "watch channels, wait_for and a closed sender"
+parts = ["b21-memory-budget", "b21-one-piece-of-work"]
+steps = [5]
+note = "Part 7 is the first to require a watch channel, and its statement introduces it. A hint of part 6 mentions one earlier."
+
+[[readiness]]
+group = "Tasks"
+concept = "storing a closure that returns a boxed future"
+parts = []
+steps = [4]
+note = "The type is spelled out in a hint of step 4."
+
+[[readiness]]
+group = "Live updates"
+concept = "a stream built with unfold, mark seen then read then wait"
+parts = ["b21-leave-and-rejoin"]
+steps = [6]
+
+[[readiness]]
+group = "Ending"
+concept = "stop accepting, then wait; many waiters; cancel safety"
+parts = ["c4-drain-with-deadline", "b21-closing-time"]
+steps = [7]
+
+[[readiness]]
+group = "Observing"
+concept = "tracing events, spans and Instrument"
+parts = ["b21-line-per-request"]
+steps = [8]
+
+[[connection]]
+idea = "One shape for every failure"
+learn = ["b1-api-error-response"]
+again = []
+apply = ["b22-refuse-bad-jobs", "b22-serve-the-jobs"]
+
+[[connection]]
+idea = "Two callers at the same moment"
+learn = ["b21-two-editors"]
+again = ["b21-charge-once", "b21-closing-time"]
+apply = ["b22-accept-each-job-once", "b22-drain-the-service"]
+
+[[connection]]
+idea = "Lists that grow while you read them"
+learn = ["b21-pages-that-hold-still"]
+again = ["b21-leave-and-rejoin"]
+apply = ["b22-serve-the-jobs", "b22-follow-a-job"]
+
+[[connection]]
+idea = "Only so much at once"
+learn = ["c4-bounded-fan-out"]
+again = ["b21-memory-budget"]
+apply = ["b22-run-the-jobs"]
+
+[[connection]]
+idea = "Stopping work part way"
+learn = ["b21-one-piece-of-work"]
+again = ["c4-drain-with-deadline"]
+apply = ["b22-cancel-a-job"]
+
+[[connection]]
+idea = "When a call does not finish normally"
+learn = ["b21-memory-budget"]
+again = ["b21-charge-once", "b21-line-per-request"]
+apply = ["b22-run-the-jobs"]
+
+[[connection]]
+idea = "Waiting for something to happen"
+learn = ["b21-leave-and-rejoin"]
+again = ["b21-closing-time"]
+apply = ["b22-follow-a-job", "b22-drain-the-service"]
+
+[[connection]]
+idea = "A response that stays open"
+learn = ["b21-leave-and-rejoin"]
+again = ["b21-prices-in-the-browser"]
+apply = ["b22-follow-a-job"]
+
+[[connection]]
+idea = "Knowing what happened"
+learn = ["b21-line-per-request"]
+again = []
+apply = ["b22-name-every-request"]
+
+[[side_path]]
+id = "c4-fix-cancel-safe-reader"
+why = "A bug that select! causes, and how to fix it."
+after = "b21-one-piece-of-work"
+
+[[side_path]]
+id = "c5-mini-executor"
+why = "What spawn and wake-ups are made of."
+after = "b21-leave-and-rejoin"
+
+[[side_path]]
+id = "b2-fix-poll-ready"
+why = "Middleware at the tower level, with backpressure."
+after = "b21-line-per-request"
+
+[[side_path]]
+id = "m4-cap-work-in-flight"
+why = "A concurrency limit that refuses instead of queueing."
+after = "b21-memory-budget"
+
+[[side_path]]
+id = "b7-turn-work-away"
+why = "Saying no when the backlog is full: the job service never does."
+after = "b22-run-the-jobs"
+
+[[side_path]]
+id = "c3-atomic-stats"
+why = "Counters that many threads update without a lock, for service metrics."
+after = "b22-name-every-request"

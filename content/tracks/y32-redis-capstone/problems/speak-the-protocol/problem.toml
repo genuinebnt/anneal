@@ -1,0 +1,31 @@
+slug = "speak-the-protocol"
+title = "Capstone 1: speak the protocol"
+mode = "write"
+level = "medium"
+stage = "protocol-and-data"
+order = 1
+status = "ready"
+tags = ["RESP2", "incremental parsing", "untrusted input", "wire protocol"]
+teaches = [
+  "A parser for a stream has three answers: a value, \"need more\" and \"never\". Say \"never\" at the first byte that makes it certain.",
+  "Check every declared length before waiting for it or allocating it, and bound recursion.",
+  "An encoder is a security boundary too: a line end inside a line frame forges a reply.",
+]
+follow_up = "1) Your parser starts again from the first byte on every call. What does that cost for one huge array arriving in small pieces, and what state would a resumable parser keep? 2) Return bulk strings that borrow from the buffer (`Cow` or ranges). What must the caller then do before it drains the buffer? 3) RESP3 adds maps and doubles. Which parts of your code change?"
+
+[[hints]]
+kind = "approach"
+text = "Write one helper that finds the line at the front and enforces the line limit, and one recursive function that parses a frame at a given depth. Decide for each error the earliest point at which you can know it."
+
+[[hints]]
+kind = "rust"
+text = "`let Some(x) = helper(buf)? else { return Ok(None) };` keeps the three outcomes apart. `Vec::with_capacity(n.min(64))` never trusts a count. `b\"\\r\\n\".starts_with(tail)` checks a terminator of 0, 1 or 2 bytes."
+
+[[hints]]
+kind = "edge"
+text = "With no CRLF yet and a buffer that ends in `\\r`, that byte may not belong to the line. Compare lengths without adding to the declared one first."
+
+[solution]
+explanation = "One function parses a frame at a depth and returns `None` until all of it is there. Limits are checked on the line that declares a size, before anything is waited for. The command form walks its elements itself, so it can refuse a wrong element from its first byte."
+time = "O(bytes) per call"
+space = "O(frame)"

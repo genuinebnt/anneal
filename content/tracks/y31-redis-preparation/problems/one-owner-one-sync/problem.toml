@@ -1,0 +1,32 @@
+slug = "one-owner-one-sync"
+title = "Many callers, slow saves"
+mode = "write"
+level = "medium"
+stage = "network"
+order = 9
+status = "ready"
+tags = ["actor", "mpsc and oneshot", "group commit", "batching"]
+teaches = [
+  "A task that owns the data, reached by messages with a oneshot for the answer, needs no lock.",
+  "Draining what already waits gives batches that grow with the load, and add no delay when idle.",
+  "Answer only after the commit, and never let an unsaved change be seen as saved.",
+]
+follow_up = "1) `commit` blocks a runtime worker. When does that matter, and how would `spawn_blocking` change the loop? 2) How does batching change latency and throughput as load rises? 3) Why can a failed `fsync` not simply be retried?"
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Give each request a one-use channel for its answer, and put both in one queue. The owner takes one request, then whatever else is in the queue, before it saves anything."
+
+[[hints]]
+kind = "rust"
+text = "`mpsc::UnboundedSender::send` is not async, so the request goes out on the first poll. `try_recv` drains without waiting. A dropped `oneshot::Sender` shows up at the receiver as an error you can map to `Stopped`."
+
+[[hints]]
+kind = "edge"
+text = "Where do the changes live until the commit succeeds? In which order must the owner close its queue and send the failures, so that nobody can slip a request in between?"
+
+[solution]
+explanation = "Callers send a request with a oneshot sender. The owner takes one, drains what is already queued, applies it to a scratch copy of the touched totals, commits once and only then publishes the totals and the answers. On failure it closes its queue before answering."
+time = "O(batch) per commit"
+space = "O(names + waiting requests)"

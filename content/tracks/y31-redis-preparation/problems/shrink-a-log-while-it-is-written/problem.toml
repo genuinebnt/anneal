@@ -1,0 +1,31 @@
+slug = "shrink-a-log-while-it-is-written"
+title = "Shrink a log while it is still being written"
+mode = "write"
+level = "hard"
+stage = "disk"
+order = 8
+status = "ready"
+tags = ["log compaction", "online rewrite", "atomic rename", "crash safety"]
+teaches = [
+  "A rewrite is a snapshot plus the tail written since; every change belongs to exactly one of them.",
+  "Build the new file aside, sync it, and rename it over the old one.",
+  "Leftovers from a failed attempt must not leak into the next one.",
+]
+follow_up = "1) The tail is kept in memory. What if writes arrive faster than the rewrite finishes? 2) Redis since version 7 keeps a base file and incremental files listed in a manifest. What does that remove from this design? 3) What changes if `add` may fail while a rewrite runs?"
+
+[[hints]]
+kind = "approach"
+text = "Between start and finish, every change must go to two places. Which two, and what does finish do with the second one?"
+
+[[hints]]
+kind = "rust"
+text = "`Option<Vec<u8>>` holds the tail and also says whether a rewrite is running. `take()` it at the start of `finish_rewrite`, so every way out ends the rewrite."
+
+[[hints]]
+kind = "edge"
+text = "`append` adds to whatever `TEMP` already holds. Sync before you rename: the rename is lasting, the unsynced bytes are not. And a partial line at the end of the log would glue onto the next one."
+
+[solution]
+explanation = "`start_rewrite` serialises the totals and begins collecting the lines added afterwards. `finish_rewrite` writes both to a fresh temporary file, syncs it and renames it over the log, so at every instant the log under its name is complete."
+time = "O(names + tail) per rewrite"
+space = "O(names + tail)"

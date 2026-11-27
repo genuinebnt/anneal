@@ -1,0 +1,32 @@
+slug = "serve-it-over-tcp"
+title = "Capstone 10: serve it over TCP"
+mode = "write"
+level = "hard"
+stage = "keep-and-serve"
+order = 10
+status = "ready"
+tags = ["tokio", "TCP server", "actor", "group commit", "backpressure", "graceful shutdown"]
+teaches = [
+  "One task owns the data, so commands need no locks and the log order is the execution order.",
+  "Release replies only after the log is written, and let waiting commands share a write.",
+  "A slow reader must cost bounded memory, and its stuck write must be cancellable.",
+]
+follow_up = "1) Input from a client that never reads its replies is still unbounded. Where would you push back? 2) The log write blocks the owner task. What changes if it moves to a blocking thread, and what must stay ordered? 3) What would it take to run reads on more than one core?"
+crates = ["tokio", "tokio-util"]
+
+[[hints]]
+kind = "approach"
+text = "Give the core to one task that receives messages from all connections. Each connection is a pair: a reader that sends its commands, and a writer that takes from its own queue. The owner takes every message that is waiting, runs them, writes the log, then hands out the deliveries."
+
+[[hints]]
+kind = "rust"
+text = "An unbounded channel carries messages to the owner; `try_recv` drains it. A `CancellationToken` per connection (a child of the server's) lets you stop a stuck write inside `select!`. Count queued published frames in an `Arc<AtomicUsize>` the writer decrements. Three Tokio names may be new. `TcpListener::accept().await` gives `(stream, address)`: call it in a loop, as a `select!` branch beside the stop token. `stream.into_split()` gives an owned read half and an owned write half, so reading and writing can wait separately; dropping the write half shuts down writing. (`tokio::io::split`, which the earlier connection part may have used, also works; blocking std code would use `try_clone`.) `tokio::time::interval(period)` makes a ticker: `ticker.tick().await` waits for the next tick, the first one completes at once, and it can be a `select!` branch."
+
+[[hints]]
+kind = "edge"
+text = "Register the connection with the core before you send its commands. Put the disconnect after the commands in the same channel, so they run first. Closing a socket with unread input resets it: shut down writing, then read a little before you drop it."
+
+[solution]
+explanation = "One owner task holds the core and the log. It drains whatever has arrived, executes it, writes the log once and only then releases the deliveries to each connection's queue, which gives group commit. Published messages are counted per client, and a client over the limit is cancelled, which also interrupts a stuck write."
+time = "one log write per batch of waiting messages"
+space = "O(clients + queued replies)"

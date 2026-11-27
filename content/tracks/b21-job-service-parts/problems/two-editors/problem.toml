@@ -1,0 +1,43 @@
+slug = "two-editors"
+title = "Two people edit one page"
+mode = "write"
+level = "medium"
+stage = "edge"
+order = 1
+status = "ready"
+tags = ["axum", "HeaderMap", "Bytes", "ETag", "If-Match", "optimistic concurrency", "serde"]
+teaches = [
+  "A version tag lets a server refuse a write that started from old data, without locking anything while people think.",
+  "The comparison and the write must happen under one lock. Checked separately, two writers can both pass.",
+  "Taking the raw bytes and the header map lets the handler choose the order of its checks and the status of each failure.",
+]
+follow_up = "1) Why is 412 different from 409, and when would you use each? 2) Where would the check go if the pages lived in SQL? 3) When is a weak ETag acceptable for If-Match?"
+related = ["B1", "C4"]
+crates = ["axum", "tokio", "serde", "serde_json", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Write the write handler as three stages in the stated order: look at the headers, parse the body, then compare and change. Only the last stage touches the stored pages."
+
+[[hints]]
+kind = "rust"
+text = "axum extractors: `HeaderMap` for headers and `axum::body::Bytes` for the raw body (it must be the last argument). A response can be a tuple such as `(StatusCode, [(header::ETAG, tag)], Json(page))`. `#[serde(deny_unknown_fields)]` and `#[serde(default)]` describe the body."
+
+[[hints]]
+kind = "edge"
+text = "Match on the pair (what the client named, what is stored now). Read the current version and replace it while holding the same lock guard."
+
+[solution]
+explanation = "The handler looks at the headers first, because they need no body. It parses the bytes itself, so a bad body gets the status the contract names. Then one match on (If-Match, current version), under one lock guard, decides between creating, replacing and refusing, and the write happens before the guard is dropped."
+time = "O(size of the request) per request"
+space = "O(all pages)"
+
+[[cookbook]]
+level = "similar"
+page = "http-caching-conditional"
+note = "An axum server with ETag and If-Match. Its resources and status rules differ from this task."
+
+[[cookbook]]
+level = "similar"
+page = "rest-api-patterns"
+note = "ETag with If-Match, 412 and 428, inside a larger REST example."

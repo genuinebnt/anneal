@@ -1,0 +1,38 @@
+slug = "pages-that-hold-still"
+title = "Pages that hold still while the list changes"
+mode = "write"
+level = "medium"
+stage = "edge"
+order = 2
+status = "ready"
+tags = ["BTreeSet", "Bound", "cursor pagination", "Reverse", "secondary index"]
+teaches = [
+  "An offset names a position that moves when rows are added or removed. A cursor names a place in the order, which does not move.",
+  "A compound key with `Reverse` gives any order you need, and ties are broken by the rest of the key.",
+  "Asking for one row more than the page holds tells whether there is a next page, without a second query.",
+]
+follow_up = "1) How would a SQL query express \"after this place\" for ORDER BY score DESC, id ASC, and which index serves it? 2) Why might you sign or encrypt a cursor? 3) How would you page backwards?"
+related = ["B1", "C4"]
+crates = []
+
+[[hints]]
+kind = "approach"
+text = "Ask what a cursor has to remember so that the next page can be found even when the entry it came from is gone. Then keep the entries in a structure that can jump straight to that point."
+
+[[hints]]
+kind = "rust"
+text = "A `BTreeSet<(Reverse<u64>, u64)>` sorts by score downwards, then player upwards. `range((Bound::Excluded(key), Bound::Unbounded))` starts just after a key, whether or not the key is present. You also need to find a player's current score quickly."
+
+[[hints]]
+kind = "edge"
+text = "Take `limit + 1` keys: the extra one only says whether `next` is `Some`. Changing a score means removing the old key before inserting the new one."
+
+[solution]
+explanation = "Entries are kept in a BTreeSet ordered by (reversed score, player), with a HashMap from player to score so the old key can be removed. A cursor is the key of the last row returned. The next page is the range strictly after it, which works whether or not that key still exists. One extra row decides next."
+time = "set and remove O(log n); page O(log n + limit)"
+space = "O(players)"
+
+[[cookbook]]
+level = "similar"
+page = "rest-api-patterns"
+note = "Offset against cursor pagination under inserts and deletes, inside a larger REST example."

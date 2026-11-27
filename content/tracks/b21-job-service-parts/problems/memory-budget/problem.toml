@@ -1,0 +1,39 @@
+slug = "memory-budget"
+title = "Background jobs within a memory budget"
+mode = "write"
+level = "medium"
+stage = "background"
+order = 3
+status = "ready"
+tags = ["tokio", "Semaphore", "acquire_many_owned", "JoinSet", "backpressure", "fairness"]
+teaches = [
+  "A semaphore can count any resource: one job may take many permits, and dropping the permit gives them all back.",
+  "A fair semaphore serves waiters in turn, so a big request cannot be starved by a stream of small ones.",
+  "A JoinSet keeps each finished task until it is taken out, so a long-running owner has to keep taking them.",
+  "Waiting for \"all done\" should only watch. A waiter that takes ownership of the tasks kills them when it is cancelled.",
+]
+follow_up = "1) What would change if submit had to refuse work once too many jobs were waiting? 2) Why can this design starve nothing but still waste budget, and when would you reorder? 3) How does dropping a JoinHandle differ from dropping a JoinSet?"
+related = ["B1", "C4"]
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Give every job its own task, and let the task wait for its share before it runs the work. Keep a separate count of unfinished jobs that is correct however a task ends."
+
+[[hints]]
+kind = "rust"
+text = "`tokio::sync::Semaphore::acquire_many_owned(n)` returns a permit that can move into a task. `JoinSet::try_join_next` takes one finished task without waiting. `watch::Sender::send_modify` and `Receiver::wait_for` let callers wait for a count to reach zero."
+
+[[hints]]
+kind = "edge"
+text = "Create the guard that lowers the count before spawning and move it into the task, so a panic or an abort lowers it too. `idle` must not take the JoinSet out."
+
+[solution]
+explanation = "Each submit spawns a task that first acquires cost permits and holds them while the work runs. The semaphore queues waiters in order, which gives both the budget and the submission order on a current-thread runtime. A drop guard keeps a watch counter of unfinished jobs, and idle only waits for that counter to reach zero. submit reaps finished tasks so the JoinSet stays small."
+time = "O(1) per job, amortised"
+space = "O(unfinished jobs)"
+
+[[cookbook]]
+level = "similar"
+page = "joinset-semaphore"
+note = "A JoinSet with a Semaphore that proves a limit. Each job takes one permit, and nothing is reaped while it runs."

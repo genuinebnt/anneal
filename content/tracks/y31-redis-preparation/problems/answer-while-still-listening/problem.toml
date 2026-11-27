@@ -1,0 +1,32 @@
+slug = "answer-while-still-listening"
+title = "Answer while still listening"
+mode = "write"
+level = "hard"
+stage = "network"
+order = 10
+status = "ready"
+tags = ["tokio select", "cancel safety", "backpressure", "pipelining", "cancellation"]
+teaches = [
+  "While one thing is pending, a connection still has other things to watch; `select!` waits on all of them.",
+  "A branch precondition on the read is backpressure: stop reading and the sender must wait.",
+  "Wrapping the whole connection in one `select!` with the kill token cancels any stuck step.",
+]
+follow_up = "1) Which futures in your loop are dropped by `select!`, and why is each safe to drop? 2) With `biased;`, what could starve? 3) How would you give the worker a deadline without losing the connection's state?"
+crates = ["tokio", "tokio-util"]
+
+[[hints]]
+kind = "approach"
+text = "Write the idle state as one wait on two things: bytes or a notice. Write the busy state as another: the reply, or more bytes if there is room. Then think about where cancellation can sit so that it covers every await at once."
+
+[[hints]]
+kind = "rust"
+text = "`read_buf` is cancel-safe: dropped, it has read nothing. `tokio::io::split` lets you write while a read branch exists. A `select!` branch takes `, if condition`. `&mut receiver` lets you poll one oneshot again and again."
+
+[[hints]]
+kind = "edge"
+text = "Check line lengths both for complete lines and for the unfinished rest. A `recv()` on a closed channel completes at once, every time: switch that branch off."
+
+[solution]
+explanation = "The connection alternates between two waits: idle, on input or a notice; busy, on the reply or, while there is room, more input. The whole loop runs inside a `select!` with the kill token, so cancelling drops whatever await is in progress."
+time = "O(bytes)"
+space = "O(max_line + one read)"

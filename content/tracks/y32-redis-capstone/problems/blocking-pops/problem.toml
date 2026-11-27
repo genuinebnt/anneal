@@ -1,0 +1,31 @@
+slug = "blocking-pops"
+title = "Capstone 6: blocking pops"
+mode = "write"
+level = "hard"
+stage = "many-clients"
+order = 6
+status = "ready"
+tags = ["blocking pop", "wait queues", "FIFO fairness", "timeouts", "continuations"]
+teaches = [
+  "Blocking without blocking a thread: store what the client waits for and what it still wants to do.",
+  "Order is part of the contract: who is served, and when held commands resume.",
+  "Collect work in queues and drain them in a loop; do not recurse from one wake-up into the next.",
+]
+follow_up = "1) Add `BLMOVE source target`: what can now chain without any held command? 2) What does real Redis do when one push serves several clients, and how does its log record it? 3) A client's held commands are unbounded. What limit would you set, and who should enforce it?"
+
+[[hints]]
+kind = "approach"
+text = "Treat waking as work to do later: a queue of changed keys, and a queue of woken clients. After the command, loop: serve a changed key if there is one, otherwise run one held command of the first woken client."
+
+[[hints]]
+kind = "rust"
+text = "`Waiting::wake(key)` already picks the right client and removes it from every queue. A blocked pop that is answered at once can run a plain `LPOP` through the engine. A `bool` as the ticket remembers which end."
+
+[[hints]]
+kind = "edge"
+text = "Ask the engine whether the key holds a list before you wake anyone, or you take a waiter out for a string. A woken client that blocks again must stop running its held commands. `now + millis` can overflow."
+
+[solution]
+explanation = "A blocked client is a record in the waiting room plus a queue of its unrun commands. After each command, one loop first serves every changed key, then resumes woken clients one command at a time, so a chain of wake-ups never recurses and every push is served before anything else happens."
+time = "O(log w) per wake-up, w waiters"
+space = "O(blocked clients + held commands)"

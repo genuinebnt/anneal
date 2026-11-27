@@ -1,0 +1,43 @@
+slug = "charge-once"
+title = "Charge the card once"
+mode = "write"
+level = "hard"
+stage = "promises"
+order = 6
+status = "ready"
+tags = ["idempotency keys", "Mutex", "async", "drop guard", "cancel safety", "Send"]
+teaches = [
+  "An idempotency key makes a retry safe: the same request gets the same answer, and a different request with that key is refused.",
+  "Looking a key up and claiming it must be one step. Then the lock can be released before the slow call.",
+  "An async call can end by not ending: the caller drops it. A drop guard is the one cleanup that runs then, and on panic too.",
+]
+follow_up = "1) Your process dies after the bank accepted and before you stored the receipt. What must the bank offer? 2) How long would you keep keys, and what breaks when one expires? 3) How would you let a second caller wait for the first one's answer instead?"
+related = ["B1", "C4"]
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "A key is in one of three situations: unknown, on its way, or done. Write down what each call does in each. Then ask what must happen to an \"on its way\" entry when the call that made it disappears."
+
+[[hints]]
+kind = "rust"
+text = "A `std::sync::Mutex<HashMap<..>>` is enough, as long as the guard is dropped before the `.await` (otherwise the future is not `Send`). A small struct with a `Drop` impl can remove an entry unless it was marked to keep."
+
+[[hints]]
+kind = "edge"
+text = "Create the guard right after claiming the key and before calling `send`, because building the future can panic too. Compare the amount before you look at whether a receipt exists."
+
+[solution]
+explanation = "The map records for each key the amount and, once known, the receipt. Under one short lock a call either answers from the map or inserts a pending entry. A drop guard removes the entry unless the payment succeeded, which covers a refusal, a panic and a dropped future with one piece of code. No lock is held while the bank is called."
+time = "O(1) per call, beyond send"
+space = "O(keys remembered)"
+
+[[cookbook]]
+level = "similar"
+page = "axum-idempotency"
+note = "Idempotency keys over HTTP. It does not compare the request or handle a call that is still running."
+
+[[cookbook]]
+level = "similar"
+page = "idempotency-dedup-leader-fencing-store"
+note = "Keys that are in flight or done, with a request fingerprint. It frees a key by expiry, not by a drop."

@@ -1,0 +1,43 @@
+slug = "closing-time"
+title = "Close the door, then wait for everyone to leave"
+mode = "write"
+level = "hard"
+stage = "running"
+order = 9
+status = "ready"
+tags = ["graceful shutdown", "tokio watch", "race conditions", "drop guard", "cancel safety"]
+teaches = [
+  "\"Are we open?\" and \"count me in\" must be one step. As two steps, closing can slip between them and the newcomer is forgotten.",
+  "Waiting for a condition is safe when the waiter checks it and subscribes to changes without a gap. `watch::Receiver::wait_for` does that.",
+  "A shutdown that only watches can be shared by many callers and abandoned by any of them without harm.",
+]
+follow_up = "1) `tokio_util::task::TaskTracker` is a ready-made relative of this. Which of these rules does it not give you? 2) What would you add so that visitors inside can hear that closing has begun? 3) Why is there still need for a deadline, and who should own it?"
+related = ["B1", "C4"]
+crates = ["tokio", "futures"]
+
+[[hints]]
+kind = "approach"
+text = "Put everything the guarantee talks about into one value that changes as a whole. Then waiting is just waiting for that value to satisfy a condition."
+
+[[hints]]
+kind = "rust"
+text = "`tokio::sync::watch::Sender<T>` holds a value: `send_if_modified` changes it under its lock and wakes receivers, `send_modify` always wakes, and `subscribe().wait_for(|s| ..)` waits without spinning. Wrap the sender in an `Arc` so a `Visit` can own it."
+
+[[hints]]
+kind = "edge"
+text = "Admission must test the closed flag and raise the counts inside the same modification. `shutdown` must not return early just because the door is already closed."
+
+[solution]
+explanation = "One watch channel holds closed, inside and admitted. enter changes them only while open, in a single modification, so no visit can be given after closed was set. A Visit lowers the count when dropped. shutdown sets closed and waits for inside to reach zero. It changes nothing else, so any number of callers can wait and give up."
+time = "O(1) per call, plus one wake per waiter per change"
+space = "O(1)"
+
+[[cookbook]]
+level = "similar"
+page = "structured-concurrency-cancellation"
+note = "Its task tracker: close, then wait for the count to reach zero."
+
+[[cookbook]]
+level = "related"
+page = "graceful-shutdown"
+note = "Stop, drain, exit."

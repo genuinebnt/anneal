@@ -1,0 +1,31 @@
+slug = "which-names-fit"
+title = "Which names fit the pattern?"
+mode = "write"
+level = "medium"
+stage = "data"
+order = 2
+status = "ready"
+tags = ["wildcard matching", "two pointers", "backtracking", "ReDoS"]
+teaches = [
+  "For wildcards, only the latest `*` ever needs to be tried again.",
+  "A matcher that tries every split takes exponential time, and a pattern from a user can ask for it.",
+  "Precise rules for malformed input beat silent surprises.",
+]
+follow_up = "1) Why is it enough to go back to the latest `*`, and never to an earlier one? 2) Compile the pattern once and match many names. What would the compiled form look like? 3) Compare with a regex engine built as an automaton: what extra power does it have, and what does that cost here?"
+
+[[hints]]
+kind = "approach"
+text = "Walk the pattern and the name together. When you meet a mismatch, you may only need to go back to one earlier choice. Which one, and why can no other help?"
+
+[[hints]]
+kind = "rust"
+text = "A helper that reads one pattern token and says whether it accepts a byte, and where the next token starts, keeps the main loop short. Remember the last star as `Option<(pattern_pos, name_pos)>`."
+
+[[hints]]
+kind = "edge"
+text = "After the name ends, only stars may remain in the pattern. Check every bound before you read the byte after a `\\` or a `-`."
+
+[solution]
+explanation = "The loop remembers where the latest star was and how much it has taken. On a mismatch it lets that star take one byte more. Earlier stars never need to change, because the latest one can absorb anything they could have."
+time = "O(pattern × name) in the worst case"
+space = "O(1)"

@@ -1,0 +1,32 @@
+slug = "tell-everyone-without-waiting"
+title = "Tell everyone without waiting for anyone"
+mode = "write"
+level = "medium"
+stage = "waiting"
+order = 5
+status = "ready"
+tags = ["fan-out", "pub/sub", "backpressure", "slow consumer", "try_send"]
+teaches = [
+  "A bounded queue per listener bounds the memory a slow one can cost.",
+  "A publisher that never waits needs a policy for a full queue: here, drop the listener.",
+  "Dropping the sender tells the receiver the end has come, after what is queued.",
+]
+follow_up = "1) Instead of evicting, you could drop the oldest or newest message. Which users would want which, and which does `tokio::sync::broadcast` choose? 2) Cloning a large message per listener is wasteful. What would you send instead? 3) How would a subscriber learn that it was evicted, and not merely that the hub closed?"
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Keep two maps that mirror each other: for each member its topics, and for each topic its members. Publishing walks one topic's list, and sorts out afterwards who must go."
+
+[[hints]]
+kind = "rust"
+text = "`Sender::try_send` never waits and tells `Full` from `Closed`. You cannot remove members while you iterate over the topic's list: collect the ids first. A `BTreeMap` or `BTreeSet` keeps them in id order."
+
+[[hints]]
+kind = "edge"
+text = "Remove a topic's entry when its last member goes, whether it left, unsubscribed or was evicted."
+
+[solution]
+explanation = "The hub keeps topics and members indexed both ways. `try_send` makes publishing non-blocking, and its two errors separate a reader that is behind from one that is gone. Removing the member drops the sender, which ends the reader's queue after what it holds."
+time = "O(listeners of the topic) per publish"
+space = "O(subscriptions + queued messages)"

@@ -1,0 +1,31 @@
+slug = "values-and-commands"
+title = "Capstone 2: values and commands"
+mode = "write"
+level = "medium"
+stage = "protocol-and-data"
+order = 2
+status = "ready"
+tags = ["command dispatch", "enum", "BTreeMap", "VecDeque", "HashSet", "error replies"]
+teaches = [
+  "An enum of value kinds plus one typed accessor per kind puts the wrong-kind check in one place.",
+  "Check the name and argument count in one table before any command runs.",
+  "Keep one invariant everywhere: no empty collection stays in the keyspace.",
+]
+follow_up = "1) How would a table of `(name, arity, writes, function pointer)` compare with your `match`? What does Redis use the `writes` flag for? 2) `SUNION` clones every set. How would you do it with borrowed data? 3) Which commands here cost more than O(1), and what could a client do with that on a single-threaded server?"
+
+[[hints]]
+kind = "approach"
+text = "Make one function that decides arity from the name. Then give each kind one accessor that returns the value, nothing, or the wrong-kind error. Most commands become a few lines."
+
+[[hints]]
+kind = "rust"
+text = "`let Some(list) = self.list(key, false)? else { .. };` reads well if refusals are the `Err` side of `Result<Frame, Frame>`. `VecDeque` has `range(a..=b)`, `truncate` and `drain`; `BTreeSet` has `intersection`, `union` and `difference`."
+
+[[hints]]
+kind = "edge"
+text = "`start + len` can overflow for `i64::MIN`; use saturating arithmetic. Parse every argument before you create a key, or a refused command leaves an empty one behind."
+
+[solution]
+explanation = "One enum holds the five kinds, and a small macro makes the typed accessors. All removal goes through one path that drops empty collections. Commands return `Result<Frame, Frame>`, so `?` turns a refusal into the reply."
+time = "O(1) for most commands; ranges and set operations are linear"
+space = "O(data)"

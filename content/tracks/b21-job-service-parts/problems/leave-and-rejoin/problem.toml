@@ -1,0 +1,39 @@
+slug = "leave-and-rejoin"
+title = "A progress feed you can leave and rejoin"
+mode = "write"
+level = "hard"
+stage = "promises"
+order = 7
+status = "ready"
+tags = ["Stream", "tokio watch", "replay", "resume from id", "async", "wake-ups"]
+teaches = [
+  "If every entry is kept in a log, a follower only needs to remember the last id it saw. Falling behind then loses nothing.",
+  "The notification does not need to carry data. It only says \"look again\", and the follower reads the log from its own position.",
+  "Mark the notification as seen before reading the log. In the other order, news that arrives in between is lost.",
+  "Letting only the producers own the sender gives followers a built-in end: the channel closes when the last producer is gone.",
+]
+follow_up = "1) The log grows for ever. What would you keep, and what would a follower that is too old be told? 2) Why does a bounded broadcast channel alone not meet this contract? 3) How many followers could one watch channel serve, and what does each publish cost?"
+related = ["B1", "C4"]
+crates = ["tokio", "futures"]
+
+[[hints]]
+kind = "approach"
+text = "Keep the whole history in one place. Let each follower carry its own position, and give it a way to sleep until the history may have changed."
+
+[[hints]]
+kind = "rust"
+text = "`futures::stream::unfold` turns \"state to (item, state)\" into a stream. `tokio::sync::watch<()>` works as a change signal: `borrow_and_update` marks it seen, `changed().await` waits and returns `Err` once every sender is dropped. These need no runtime of their own."
+
+[[hints]]
+kind = "edge"
+text = "In the loop: mark seen, read the next entry, return it if there is one; otherwise end if closed; otherwise wait. The stream must not own a sender. After a closed-channel error, read once more before ending."
+
+[solution]
+explanation = "The feed is a Vec behind a mutex plus a watch channel used only as a signal. A follower is an unfold stream holding its position. Each turn marks the signal seen, reads the entry after its position, and sleeps only when there is none and the feed is open. Because it reads the log itself, it cannot miss or repeat an entry. Only Feed handles own the sender, so followers learn when all handles are gone."
+time = "O(1) per entry per follower"
+space = "O(entries)"
+
+[[cookbook]]
+level = "similar"
+page = "axum-sse-replay"
+note = "Replay after a last-seen id. It does not follow new events."

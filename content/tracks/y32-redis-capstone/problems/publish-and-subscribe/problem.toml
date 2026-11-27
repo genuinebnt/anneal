@@ -1,0 +1,31 @@
+slug = "publish-and-subscribe"
+title = "Capstone 7: publish and subscribe"
+mode = "write"
+level = "hard"
+stage = "many-clients"
+order = 7
+status = "ready"
+tags = ["pub/sub", "fan-out", "connection modes", "patterns"]
+teaches = [
+  "Index listeners by channel and keep the index in step with each client's own list.",
+  "A connection can be in a mode that changes which commands it may send.",
+  "Every new feature has to be checked against transactions, blocking and leaving.",
+]
+follow_up = "1) Pattern matching tries every pattern on each publish. How could you index patterns by their literal prefix? 2) Pub/sub here delivers at most once. What would at-least-once need? 3) Why does subscriber mode exist in RESP2, and what does RESP3 change?"
+
+[[hints]]
+kind = "approach"
+text = "Keep two views: for each client what it listens to, and for each channel or pattern who listens. Every change updates both, and leaving walks the client's own lists."
+
+[[hints]]
+kind = "rust"
+text = "`BTreeMap<Vec<u8>, BTreeSet<ClientId>>` keeps patterns in byte order, which gives the delivery order for free. Remove a name's entry when its set empties."
+
+[[hints]]
+kind = "edge"
+text = "Check the subscriber gate before arity and before the transaction queue. `UNSUBSCRIBE` with no arguments must collect the names before it changes the set."
+
+[solution]
+explanation = "Two indexes, by client and by name, are updated together. Publishing looks up the channel and then tries each pattern, in byte order, which also fixes each client's frame order."
+time = "O(listeners + patterns) per publish"
+space = "O(subscriptions)"

@@ -1,6 +1,6 @@
 //! CAPSTONE 15 (database): a mini Redis: RESP2 over TCP, five data types, expiry, pub/sub, transactions, AOF + snapshots
 //! LEVEL: capstone
-//! Use in: any in-memory data server, cache/queue/leaderboard backends, protocol servers with persistence; combines tokio sockets, skip lists, WAL-style logs, model tests.   Run: cargo run --release --example mini_redis
+//! Use in: any in-memory data server, cache/queue/leaderboard backends, protocol servers with persistence; combines tokio sockets, skip lists, WAL-style logs, model tests.   Run: cargo run --release --example mini_redis (without --release it also checks integer overflow)
 #![allow(dead_code)]
 //!
 //! ARCHITECTURE
@@ -11,36 +11,56 @@
 //!  | parse ALL buffered cmds    |                            |   dispatch: subscriber gate / MULTI queue / execute  |
 //!  | (pipelining, inline, limits|<---- BatchReply (frames) --|   Engine { BTreeMap<key,Value>, Expires, watchers,   |
 //!  |  protocol error => -ERR +  |      sent AFTER the AOF     |            pub/sub tables, blocked-client FIFOs }    |
-//!  |  close) -> ONE write       |      flush + fsync          |   then: append AOF records (fsync policy), reply     |
+//!  |  close) -> ONE write       |  write (always: + fsync)    |   then: append AOF records (fsync policy), reply     |
 //!  |  select! { socket read,    |<--- bounded mpsc push ------|   PUBLISH -> try_send into each subscriber's queue   |
 //!  |   push queue, kill, stop } |     (full queue => kill)    |   tick every 10 ms: BLPOP timeouts, active expiry,   |
 //!  +----------------------------+                            |   everysec fsync;  BGSAVE/BGREWRITE on helper threads|
 //!                                                            +-----------------------------------------------------+
 //!   Value::{Str, List(VecDeque), Hash(BTreeMap), Set(BTreeSet), ZSet{HashMap member->score + SkipList with spans}}
-//!   Persistence: appendonly.aof (RESP commands, replayed on start) and dump.mrdb (binary + CRC32); both atomic-rename.
+//!   Persistence: appendonly.aof (RESP commands, replayed on start) and dump.mrdb (binary + CRC32); both put in place by rename.
 //! ```
-//! WHAT: a Redis-compatible server (~85 commands, `redis-cli` would talk to it) and a small async client in one file,
-//! tested only through real loopback sockets. WHY: Redis is the best small study of how a database trades generality
-//! for speed: one thread, one in-memory structure per type, a text protocol, and a log for durability. HOW:
+//! WHAT: a server that speaks a subset of Redis (85 commands over RESP2) and a small async client in one file; the socket
+//! tests use real loopback connections, and `redis-cli` itself has not been tried against it. WHY: Redis is the best small
+//! study of how a database trades generality for speed: one thread, one in-memory structure per type, a text protocol, and
+//! a log for durability. HOW:
 //!  * CONCURRENCY MODEL (chosen: single-threaded executor, like real Redis). Connection tasks only do I/O and parsing; every
 //!    command runs on one thread, so each command, MULTI/EXEC block and BLPOP wake-up is trivially atomic and the AOF order is the
 //!    execution order. No per-key locks, no lock ordering, no torn multi-key commands (SINTER, RENAME, EXEC). The alternative,
-//!    a sharded store with one lock per shard, scales single-key commands across cores (see the measured table) but makes
-//!    every multi-key command and transaction a lock-ordering problem. The measurement shows both effects: a channel
-//!    round trip per op costs ~20x an uncontended lock, but batching (pipelining) amortizes it, which is why Redis
-//!    clients pipeline. Replies are released only after the AOF write, and queued requests share one fsync (group commit).
-//!  * RESP2 parsing is incremental (`Ok(None)` = need more bytes), every length is untrusted and checked BEFORE waiting
-//!    for or allocating the bytes, and a protocol error replies `-ERR Protocol error: ...` then closes.
-//!  * EXPIRY: lazy (every access checks the key's deadline) plus ACTIVE: each cycle samples 20 random keys that have a TTL (a Vec
-//!    + position map gives O(1) random choice), deletes the expired, and repeats while more than 25% were expired. The clock is a
-//!    trait, so tests drive time with `ManualClock`. Expiry is logged as an explicit DEL so AOF replay never needs a clock.
+//!    a sharded store with one lock per shard, can run single-key commands on several cores at once, but makes every
+//!    multi-key command and transaction a lock-ordering problem. The file ends with a small benchmark without sockets. In one
+//!    run on one machine, with one thread, a channel round trip per op was ~20x slower than an uncontended lock, and 64 ops
+//!    per trip closed much of the gap; it did not show sharding paying off (8 threads on 16 locks were slower than 1 thread).
+//!    Replies are released only after the AOF write, and queued requests share one fsync (group commit).
+//!  * RESP2 parsing is incremental (`Ok(None)` = need more bytes), every declared length is untrusted and checked BEFORE
+//!    waiting for or allocating the bytes, one command is capped at 4 MiB, and a protocol error replies
+//!    `-ERR Protocol error: ...` then closes. Line ends are removed from error replies, which quote client input.
+//!  * EXPIRY: lazy (every command that looks a key up checks its deadline; KEYS and SCAN skip expired keys) plus ACTIVE: each
+//!    cycle samples 20 random keys that have a TTL (a Vec + position map gives O(1) random choice), deletes the expired, and
+//!    repeats while more than 25% were expired. DBSIZE still counts keys nobody has reclaimed. The clock is a trait, so tests
+//!    drive time with `ManualClock`. Expiry is logged as an explicit DEL, and replay deletes nothing because of its own
+//!    clock: a deadline that passed while the server was down takes effect after the replay.
 //!  * BLOCKING POPS: a paused batch is parked with its remaining commands; waiters per key are a FIFO queue; a push wakes the
-//!    oldest waiter first and the batch resumes, so pipelined replies stay in order.
-//!  * PUB/SUB: subscriber mode is per-connection state; messages are pushed through a BOUNDED queue so one stuck reader can never
-//!    grow server memory: overflow disconnects it.  TRANSACTIONS: WATCH registers the client on keys; any write marks it dirty; EXEC then
-//!    answers nil. PERSISTENCE: AOF with always/everysec/no, background rewrite (snapshot + buffered tail), torn-tail
-//!    truncation on replay, and an RDB-style snapshot with a checksum. Simplifications vs real Redis: single database, RESP2 only,
-//!    no replication/eviction/Lua/ACL, BGSAVE clones instead of fork(), hash/set replies are sorted (Redis: unspecified order).
+//!    oldest waiter first once the pushing batch has finished, and the woken batch resumes, so its replies stay in order.
+//!  * PUB/SUB: subscriber mode is per-connection state; messages are pushed through a BOUNDED queue (bounded in frames, not
+//!    bytes), so a reader that stops reading is disconnected when it fills.  TRANSACTIONS: WATCH registers the client on keys;
+//!    any write or expiry marks it dirty; EXEC then answers nil.  PERSISTENCE: AOF with always/everysec/no, background
+//!    rewrite (snapshot + buffered tail), torn-tail truncation on replay (other damage that parsing or replay can see
+//!    refuses to start), and an RDB-style snapshot with a checksum. If a write or sync of the log fails, the server drops
+//!    the unconfirmed replies and its executor stops.
+//! LIMITS (a teaching server, not for real data):
+//!  * Durability is untested against power cuts: tests cut the log file and restart the server in the same process. The
+//!    code calls fsync on files and their directory (Rust's std uses F_FULLFSYNC on macOS; what a drive then keeps is its
+//!    own promise). Checks watch the sync calls and inject failures into most of them; the file sync before a
+//!    snapshot or rewritten log is renamed is only seen to be called. No check shows that data survives. A failed append is made with a read-only handle; no partial or full-disk write is
+//!    tried. The AOF has no per-record checksum: damage that still reads as valid commands, or a length damaged so that
+//!    the rest looks unfinished, is replayed or cut off without an error.
+//!  * Memory is not bounded: no maxmemory, no limit on clients, value size, MULTI queue, subscriptions or reply size.
+//!    A command that arrives in pieces is parsed again from its start each time. Long commands (KEYS, big ranges,
+//!    snapshot cloning, SAVE, the end of a rewrite) stall every client. Shutdown does not wait for a background save.
+//!  * Differences from Redis: single database, RESP2 only, no replication/eviction/Lua/ACL, BGSAVE clones instead of fork(),
+//!    hash/set replies are sorted (Redis: unspecified order). Blocked clients are served after the pushing pipeline batch,
+//!    so a later pop in that batch can take the element first. A message published just before UNSUBSCRIBE may arrive after
+//!    its confirmation. SAVE and BGSAVE are refused inside MULTI. Deadlines follow the system clock, which can jump.
 //! COMMON USES: Redis is used as a cache (GET/SET with TTL), a session store, a job/message queue (lists, BLPOP), a rate limiter
 //! (INCR + EXPIRE), a leaderboard (sorted sets), and a lightweight pub/sub bus; MULTI/WATCH give optimistic transactions.
 //! Read: https://redis.io/docs/latest/develop/reference/protocol-spec/ https://redis.io/docs/latest/commands/ https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/ https://redis.io/docs/latest/develop/interact/pubsub/
@@ -50,7 +70,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -131,6 +151,7 @@ impl std::fmt::Display for ProtoError {
 #[derive(Debug, Clone)]
 struct Limits {
     max_line: usize,
+    max_query: usize, // one whole command, complete or not: bounds what a connection must buffer to finish it
     max_bulk: usize,
     max_array: usize,
     max_depth: usize,
@@ -140,6 +161,7 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             max_line: 64 * 1024,
+            max_query: 4 << 20,
             max_bulk: 1 << 20,
             max_array: 1 << 16,
             max_depth: 8,
@@ -154,7 +176,10 @@ fn take_line<'a>(buf: &'a [u8], lim: &Limits) -> Result<Option<(&'a [u8], usize)
     match buf.windows(2).position(|w| w == b"\r\n") {
         Some(i) if i > lim.max_line => Err(ProtoError::LineTooLong),
         Some(i) => Ok(Some((&buf[..i], i + 2))),
-        None if buf.len() > lim.max_line => Err(ProtoError::LineTooLong),
+        // a trailing '\r' may be half of the CRLF, so it does not count yet
+        None if buf.len() - usize::from(buf.ends_with(b"\r")) > lim.max_line => {
+            Err(ProtoError::LineTooLong)
+        }
         None => Ok(None),
     }
 }
@@ -239,20 +264,34 @@ fn parse(buf: &[u8], lim: &Limits) -> Parsed {
     parse_at(buf, 0, lim)
 }
 
+type Command = Result<Option<(Vec<B>, usize)>, ProtoError>;
+
 /// Server side: a command is `*n` + n bulk strings, or an "inline" line (`PING\r\n`) as typed into telnet.
-fn parse_command(buf: &[u8], lim: &Limits) -> Result<Option<(Vec<B>, usize)>, ProtoError> {
+/// `buf` may hold several commands; `max_query` applies to the first one, whether or not it is complete.
+fn parse_command(buf: &[u8], lim: &Limits) -> Command {
+    let parsed = parse_one_command(buf, lim)?;
+    if parsed.as_ref().map_or(buf.len(), |(_, used)| *used) > lim.max_query {
+        return Err(ProtoError::TooLarge("command"));
+    }
+    Ok(parsed)
+}
+
+fn parse_one_command(buf: &[u8], lim: &Limits) -> Command {
     let Some(&first) = buf.first() else {
         return Ok(None);
     };
     if first != b'*' {
         let Some(nl) = buf.iter().position(|&b| b == b'\n') else {
-            return if buf.len() > lim.max_line {
+            return if buf.len() - usize::from(buf.ends_with(b"\r")) > lim.max_line {
                 Err(ProtoError::LineTooLong)
             } else {
                 Ok(None)
             };
         };
         let line = buf[..nl].strip_suffix(b"\r").unwrap_or(&buf[..nl]);
+        if line.len() > lim.max_line {
+            return Err(ProtoError::LineTooLong);
+        }
         let words = line
             .split(|b| b.is_ascii_whitespace())
             .filter(|w| !w.is_empty())
@@ -287,8 +326,9 @@ fn encode(frame: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(b"\r\n");
     };
     match frame {
-        Frame::Simple(s) => line(out, b'+', s.as_bytes()),
-        Frame::Error(s) => line(out, b'-', s.as_bytes()),
+        // error texts quote client input: a CR or LF in a line frame would start a second, forged reply
+        Frame::Simple(s) => line(out, b'+', s.replace(['\r', '\n'], " ").as_bytes()),
+        Frame::Error(s) => line(out, b'-', s.replace(['\r', '\n'], " ").as_bytes()),
         Frame::Int(n) => line(out, b':', n.to_string().as_bytes()),
         Frame::Null => line(out, b'$', b"-1"),
         Frame::NullArray => line(out, b'*', b"-1"),
@@ -629,7 +669,8 @@ impl SkipList {
         for i in 0..self.level {
             let u = update[i];
             if self.nodes[u].next[i] == t {
-                self.nodes[u].span[i] += self.nodes[t].span[i] - 1;
+                // add before subtracting: the last node on a lane has span 0
+                self.nodes[u].span[i] = self.nodes[u].span[i] + self.nodes[t].span[i] - 1;
                 self.nodes[u].next[i] = self.nodes[t].next[i];
             } else {
                 self.nodes[u].span[i] -= 1;
@@ -908,8 +949,43 @@ enum Fsync {
     No,
 }
 
+/// The places where durability depends on a call to the disk.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum IoOp {
+    AppendSync,     // `always`: after an append
+    EverySecSync,   // `everysec`: on the helper thread
+    SyncerJoin,     // before waiting for that thread (no sync of its own)
+    FinalSync,      // at shutdown
+    FileSync,       // a new snapshot or log, before its rename
+    DirSync,        // the directory, after a file in it was created or renamed
+    TruncateSync,   // after cutting off a torn tail
+    RewriteRenamed, // just after the rewritten log took its name (no sync of its own)
+}
+
+type HookFn = dyn Fn(IoOp) -> io::Result<()> + Send + Sync;
+
+/// Lets a check watch these places and make them fail. The server itself uses the default, which does nothing.
+/// Every sync goes through `sync_all`/`sync_data` here, so a call site cannot report a sync it does not make.
+#[derive(Clone, Default)]
+struct IoHook(Option<Arc<HookFn>>);
+
+impl IoHook {
+    fn at(&self, op: IoOp) -> io::Result<()> {
+        self.0.as_ref().map_or(Ok(()), |hook| hook(op))
+    }
+    fn sync_all(&self, op: IoOp, file: &File) -> io::Result<()> {
+        self.at(op)?;
+        file.sync_all()
+    }
+    fn sync_data(&self, op: IoOp, file: &File) -> io::Result<()> {
+        self.at(op)?;
+        file.sync_data()
+    }
+}
+
 #[derive(Clone)]
 struct Config {
+    io: IoHook,
     aof: Option<(PathBuf, Fsync)>,
     rdb: Option<PathBuf>,
     active_expire_every: Option<u32>, // run the sampling cycle every N executor ticks (10 ms each); None = off
@@ -920,6 +996,7 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            io: IoHook::default(),
             aof: None,
             rdb: None,
             active_expire_every: Some(10),
@@ -1024,6 +1101,7 @@ struct Aof {
     size: u64,
     unsynced: bool,
     last_sync: Instant,
+    syncer: Option<std::thread::JoinHandle<()>>, // the `everysec` fsync in flight
 }
 
 struct Engine {
@@ -1045,7 +1123,7 @@ struct Engine {
     patterns: HashMap<B, BTreeSet<u64>>,
     waiters: HashMap<B, VecDeque<u64>>, // per list key, FIFO queue of blocked clients
     blocked: HashMap<u64, Blocked>,
-    ready: Vec<B>,
+    ready: VecDeque<B>, // keys with waiters that got data, oldest first
     outbox: Vec<(oneshot::Sender<BatchReply>, BatchReply)>,
     stats: Stats,
     rng: Rng,
@@ -1053,7 +1131,10 @@ struct Engine {
     tx: xc::Sender<Msg>,
     bg_save: bool,
     bg_rewrite: bool,
+    rewrite_scheduled: bool, // BGREWRITEAOF inside MULTI: starts when EXEC has finished
+    aof_failed: Arc<AtomicBool>, // a write or sync of the log failed: nothing more may be acknowledged
     saved_at_dirty: u64,
+    bg_save_dirty: u64, // becomes saved_at_dirty only if the background save succeeds
     tick_n: u32,
     started: Instant,
     shutdown: Option<oneshot::Sender<()>>,
@@ -1155,7 +1236,7 @@ impl Engine {
             patterns: HashMap::new(),
             waiters: HashMap::new(),
             blocked: HashMap::new(),
-            ready: vec![],
+            ready: VecDeque::new(),
             outbox: vec![],
             stats: Stats::default(),
             rng: Rng(0x2545_F491_4F6C_DD1D),
@@ -1163,7 +1244,10 @@ impl Engine {
             tx,
             bg_save: false,
             bg_rewrite: false,
+            rewrite_scheduled: false,
+            aof_failed: Arc::new(AtomicBool::new(false)),
             saved_at_dirty: 0,
+            bg_save_dirty: 0,
             tick_n: 0,
             started: Instant::now(),
             shutdown: None,
@@ -1249,13 +1333,14 @@ impl Engine {
         if !self.map.contains_key(key) {
             return int(0);
         }
-        if at <= self.now as i64 {
+        // while replaying, a past deadline is only stored: later records were written while the key was alive
+        if at <= self.now as i64 && !self.loading {
             self.map.remove(key);
             self.expires.remove(key);
             self.touch(key);
             self.propagate(vec![b"DEL".to_vec(), key.to_vec()]);
         } else {
-            self.expires.set(key, at as u64);
+            self.expires.set(key, at.max(0) as u64);
             self.touch(key);
             self.propagate(vec![
                 b"PEXPIREAT".to_vec(),
@@ -1318,7 +1403,13 @@ impl Engine {
                 "EXEC" | "DISCARD" | "MULTI" | "WATCH" | "QUIT"
             )
         {
-            return Out::R(match Engine::validate(args) {
+            // a snapshot taken in the middle of a transaction would hold half of it
+            let checked = if matches!(name.as_str(), "SAVE" | "BGSAVE") {
+                Err(Frame::err("ERR Command not allowed inside a transaction"))
+            } else {
+                Engine::validate(args)
+            };
+            return Out::R(match checked {
                 Ok(_) => {
                     self.client(conn)
                         .multi
@@ -1343,13 +1434,14 @@ impl Engine {
             Ok(c) => c,
             Err(e) => return Out::R(e),
         };
-        let before = self.dirty;
+        // expiry also bumps `dirty`, but logs its own DEL: it must not get a failed command logged
+        let before = self.dirty - self.stats.expired;
         self.custom = false;
         let out = match (cmd.f)(self, conn, args) {
             Ok(o) => o,
             Err(e) => Out::R(e),
         };
-        if cmd.write && self.dirty != before && !self.custom {
+        if cmd.write && self.dirty - self.stats.expired != before && !self.custom {
             self.log.push(args.to_vec()); // default: replicate the command as received
         }
         out
@@ -1383,7 +1475,8 @@ impl Engine {
     }
 
     fn block(&mut self, st: Batch, spec: BlockSpec) {
-        let deadline = (spec.timeout_ms > 0).then(|| self.now + spec.timeout_ms);
+        // a huge timeout saturates the cast to u64, so the addition must saturate too
+        let deadline = (spec.timeout_ms > 0).then(|| self.now.saturating_add(spec.timeout_ms));
         for k in &spec.keys {
             self.waiters
                 .entry(k.clone())
@@ -1442,7 +1535,7 @@ impl Engine {
     }
 
     fn settle(&mut self) {
-        while let Some(k) = self.ready.pop() {
+        while let Some(k) = self.ready.pop_front() {
             self.serve_waiters(&k);
         }
     }
@@ -1525,18 +1618,24 @@ impl Engine {
                 last_tick = Instant::now();
                 self.on_tick();
             }
-            self.flush_aof();
-            for (tx, reply) in self.outbox.drain(..) {
-                let _ = tx.send(reply);
+            if !self.commit() {
+                break; // like Redis under fsync=always: stop rather than acknowledge writes that may be lost
             }
             if self.shutdown.is_some() {
                 break;
             }
         }
-        if let Some(a) = &mut self.aof {
-            let _ = a.file.sync_all();
-        }
-        if let Some(ack) = self.shutdown.take() {
+        // an `everysec` fsync still in flight may yet fail: wait for it before reporting anything
+        self.join_syncer();
+        let synced = self
+            .aof
+            .as_ref()
+            .is_none_or(|a| self.cfg.io.sync_all(IoOp::FinalSync, &a.file).is_ok());
+        // dropping the ack without sending makes `Server::shutdown` report the failure
+        if synced
+            && !self.aof_failed.load(SeqCst)
+            && let Some(ack) = self.shutdown.take()
+        {
             let _ = ack.send(());
         }
     }
@@ -1864,6 +1963,9 @@ impl Engine {
             self.expires.set(&a[2], t);
         }
         self.touch(&a[2]);
+        if self.waiters.contains_key(&a[2]) {
+            self.ready.push_back(a[2].clone());
+        }
         fr(Frame::ok())
     }
 
@@ -1938,7 +2040,7 @@ impl Engine {
         }
         let n = l.len();
         if self.waiters.contains_key(&a[1]) {
-            self.ready.push(a[1].clone());
+            self.ready.push_back(a[1].clone());
         }
         self.after_write(&a[1]);
         int(n as i64)
@@ -2423,10 +2525,11 @@ impl Engine {
             ]));
         }
         if targets.is_empty() {
+            // nothing of this kind to leave, but subscriptions of the other kind still count
             out.push(Frame::Array(vec![
                 Frame::bulk(kind),
                 Frame::Null,
-                Frame::Int(0),
+                Frame::Int(self.sub_count(c)),
             ]));
         }
         Ok(Out::Multi(out))
@@ -2500,10 +2603,11 @@ impl Engine {
         self.unsubscribe_all(c);
         if let Some(cl) = self.clients.get_mut(&c) {
             cl.push = None;
+            // one message can match a client twice; it is disconnected once
             if let Some(k) = cl.kill.take() {
                 k.notify_one();
+                self.stats.slow_kills += 1;
             }
-            self.stats.slow_kills += 1;
         }
     }
 
@@ -2539,8 +2643,9 @@ impl Engine {
         }
         for k in &a[1..] {
             self.expire_if_needed(k);
-            self.watchers.entry(k.clone()).or_default().insert(c);
-            self.client(c).watched.push(k.clone());
+            if self.watchers.entry(k.clone()).or_default().insert(c) {
+                self.client(c).watched.push(k.clone());
+            }
         }
         fr(Frame::ok())
     }
@@ -2566,6 +2671,10 @@ impl Engine {
             return Err(Frame::err("ERR EXEC without MULTI"));
         };
         let bad = std::mem::take(&mut cl.multi_err);
+        // a watched key may have expired with nobody touching or sampling it: that is a change too
+        for key in cl.watched.clone() {
+            self.expire_if_needed(&key);
+        }
         let was_dirty = self.unwatch(c);
         if bad {
             return Err(Frame::err(
@@ -2590,6 +2699,10 @@ impl Engine {
             // persist the transaction as one unit: a torn tail then drops all of it (replay discards an unfinished MULTI)
             self.log.insert(mark, vec![b"MULTI".to_vec()]);
             self.log.push(vec![b"EXEC".to_vec()]);
+        }
+        // only now: starting a rewrite flushes the log, which would have split the transaction
+        if std::mem::take(&mut self.rewrite_scheduled) {
+            self.start_rewrite();
         }
         self.custom = true;
         fr(Frame::Array(replies))
@@ -2840,6 +2953,13 @@ impl<'a> Rd<'a> {
     fn u64(&mut self) -> Result<u64, String> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
+    /// the size of a collection; the server never stores an empty one
+    fn count(&mut self) -> Result<u32, String> {
+        match self.u32()? {
+            0 => Err("empty collection".into()),
+            n => Ok(n),
+        }
+    }
     fn blob(&mut self) -> Result<B, String> {
         let n = self.u32()? as usize; // a lying length fails in `take` before anything is allocated
         Ok(self.take(n)?.to_vec())
@@ -2867,22 +2987,45 @@ fn rdb_decode(data: &[u8]) -> Result<Snapshot, String> {
         if ty == 0xFF {
             break;
         }
-        let ttl = (r.take(1)?[0] == 1).then(|| r.u64()).transpose()?;
+        let ttl = match r.take(1)?[0] {
+            0 => None,
+            1 => Some(r.u64()?),
+            f => return Err(format!("unknown TTL flag {f}")),
+        };
         let key = r.blob()?;
         let v = match ty {
             0 => Value::Str(r.blob()?),
-            1 => Value::List((0..r.u32()?).map(|_| r.blob()).collect::<Result<_, _>>()?),
-            2 => Value::Hash(
-                (0..r.u32()?)
-                    .map(|_| Ok((r.blob()?, r.blob()?)))
-                    .collect::<Result<_, String>>()?,
+            1 => Value::List(
+                (0..r.count()?)
+                    .map(|_| r.blob())
+                    .collect::<Result<_, _>>()?,
             ),
-            3 => Value::Set((0..r.u32()?).map(|_| r.blob()).collect::<Result<_, _>>()?),
+            2 => {
+                let mut h = BTreeMap::new();
+                for _ in 0..r.count()? {
+                    let field = r.blob()?;
+                    if h.insert(field, r.blob()?).is_some() {
+                        return Err("field twice".into());
+                    }
+                }
+                Value::Hash(h)
+            }
+            3 => {
+                let mut set = BTreeSet::new();
+                for _ in 0..r.count()? {
+                    if !set.insert(r.blob()?) {
+                        return Err("member twice".into());
+                    }
+                }
+                Value::Set(set)
+            }
             4 => {
                 let mut z = ZSet::default();
-                for _ in 0..r.u32()? {
+                for _ in 0..r.count()? {
                     let sc = f64::from_bits(r.u64()?);
-                    z.add(&r.blob()?, sc);
+                    if sc.is_nan() || !z.add(&r.blob()?, sc) {
+                        return Err("NaN score or member twice".into());
+                    }
                 }
                 Value::ZSet(z)
             }
@@ -2891,17 +3034,29 @@ fn rdb_decode(data: &[u8]) -> Result<Snapshot, String> {
         if let Some(t) = ttl {
             s.exp.insert(key.clone(), t);
         }
-        s.map.insert(key, v);
+        if s.map.insert(key, v).is_some() {
+            return Err("key twice".into());
+        }
+    }
+    if r.p != body.len() {
+        return Err("bytes after the end marker".into());
     }
     Ok(s)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// A rename survives a power cut only once the directory that holds the name is synced.
+fn sync_dir(path: &Path, io: &IoHook) -> io::Result<()> {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    io.sync_all(IoOp::DirSync, &File::open(dir.unwrap_or(Path::new(".")))?)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], io: &IoHook) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     let mut f = File::create(&tmp)?;
     f.write_all(bytes)?;
-    f.sync_all()?;
-    fs::rename(&tmp, path) // readers see the old file or the complete new one, never a torn mix
+    io.sync_all(IoOp::FileSync, &f)?;
+    fs::rename(&tmp, path)?; // readers see the old file or the complete new one, never a torn mix
+    sync_dir(path, io)
 }
 
 impl Engine {
@@ -2925,11 +3080,13 @@ impl Engine {
             }
             self.map = snap.map;
             if let Some((p, _)) = &self.cfg.aof {
-                fs::write(p, snapshot_to_aof(&snapshot_of(self)))?; // seed the AOF from the snapshot
+                // seed the AOF from the snapshot. By rename: a half-written log would win over the snapshot next time
+                write_atomic(p, &snapshot_to_aof(&snapshot_of(self)), &self.cfg.io)?;
             }
         }
         if let Some((p, policy)) = self.cfg.aof.clone() {
             let file = OpenOptions::new().create(true).append(true).open(&p)?;
+            sync_dir(&p, &self.cfg.io)?; // the file may be new
             let size = file.metadata()?.len();
             self.aof = Some(Aof {
                 file,
@@ -2937,6 +3094,7 @@ impl Engine {
                 size,
                 unsynced: false,
                 last_sync: Instant::now(),
+                syncer: None,
             });
         }
         self.dirty = 0;
@@ -2947,20 +3105,30 @@ impl Engine {
         Ok(())
     }
 
-    /// Replay: run each record through the normal dispatcher on a fake client (id 0). A torn tail (crash mid-append)
-    /// ends the replay; the file is truncated back to the last complete record so new appends start clean. An
-    /// unfinished MULTI at the tail is dropped too, so a transaction is all-or-nothing across crashes.
+    /// Replay: run each record through the normal dispatcher on a fake client (id 0). An unfinished record at the end
+    /// (crash mid-append) ends the replay; the file is truncated back to the last complete record so new appends start
+    /// clean. An unfinished MULTI at the tail is dropped too, so a transaction is all-or-nothing across crashes.
+    /// Anything else (bytes that can never become a record, a command that fails) refuses to start and changes nothing.
     fn load_aof(&mut self, path: &Path) -> io::Result<()> {
         let data = fs::read(path)?;
         let lim = Limits {
             max_bulk: 512 << 20,
             max_array: 1 << 24,
+            max_query: usize::MAX,
             ..Limits::default()
         };
         self.loading = true;
         let (mut off, mut multi_start) = (0usize, None);
-        while data.get(off) == Some(&b'*') {
-            let Ok(Some((args, used))) = parse_command(&data[off..], &lim) else {
+        while off < data.len() {
+            let corrupt = |why: String| {
+                let msg = format!("AOF record at byte {off}: {why}");
+                io::Error::new(io::ErrorKind::InvalidData, msg)
+            };
+            if data[off] != b'*' {
+                return Err(corrupt("not a record".into()));
+            }
+            let parsed = parse_command(&data[off..], &lim).map_err(|e| corrupt(e.to_string()))?;
+            let Some((args, used)) = parsed else {
                 break;
             };
             if let Some(first) = args.first() {
@@ -2970,7 +3138,14 @@ impl Engine {
                     _ => {}
                 }
                 self.now = self.clock.now_ms();
-                self.dispatch(0, &args);
+                if let Out::R(reply) = self.dispatch(0, &args) {
+                    let failed = |f: &Frame| matches!(f, Frame::Error(_));
+                    if failed(&reply)
+                        || matches!(&reply, Frame::Array(all) if all.iter().any(failed))
+                    {
+                        return Err(corrupt(format!("replay failed: {reply:?}")));
+                    }
+                }
             }
             self.log.clear();
             self.ready.clear();
@@ -2980,20 +3155,22 @@ impl Engine {
         self.clients.remove(&0);
         let valid = multi_start.unwrap_or(off);
         if valid < data.len() {
-            OpenOptions::new()
-                .write(true)
-                .open(path)?
-                .set_len(valid as u64)?;
+            let file = OpenOptions::new().write(true).open(path)?;
+            file.set_len(valid as u64)?;
+            self.cfg.io.sync_all(IoOp::TruncateSync, &file)?;
             self.stats.aof_truncated = (data.len() - valid) as u64;
         }
         Ok(())
     }
 
-    /// End of every loop iteration: append this iteration's records, then fsync according to the policy. Because
-    /// replies are released only AFTER this, `Always` means "acknowledged implies durable".
-    fn flush_aof(&mut self) {
+    /// Append the pending records, then fsync according to the policy. `false` means the log is broken: a write or
+    /// sync failed (now or earlier), so some of what ran may never reach the disk.
+    fn flush_aof(&mut self) -> bool {
+        if self.aof_failed.load(SeqCst) {
+            return false;
+        }
         if self.log.is_empty() {
-            return;
+            return true;
         }
         let mut bytes = Vec::new();
         for rec in self.log.drain(..) {
@@ -3002,34 +3179,75 @@ impl Engine {
         if let Some(rb) = &mut self.rewrite_buf {
             rb.extend_from_slice(&bytes);
         }
-        if let Some(a) = &mut self.aof
-            && a.file.write_all(&bytes).is_ok()
-        {
-            a.size += bytes.len() as u64;
-            match a.policy {
-                Fsync::Always => {
-                    let _ = a.file.sync_data();
-                    self.stats.fsyncs += 1;
+        if let Some(a) = &mut self.aof {
+            let mut done = a.file.write_all(&bytes);
+            if done.is_ok() {
+                a.size += bytes.len() as u64;
+                match a.policy {
+                    Fsync::Always => {
+                        done = self.cfg.io.sync_data(IoOp::AppendSync, &a.file);
+                        self.stats.fsyncs += 1;
+                    }
+                    Fsync::EverySec => a.unsynced = true,
+                    Fsync::No => {}
                 }
-                Fsync::EverySec => a.unsynced = true,
-                Fsync::No => {}
+            }
+            if done.is_err() {
+                self.aof_failed.store(true, SeqCst);
+                return false;
             }
         }
+        true
+    }
+
+    /// End of every loop iteration: persist, and only then release the replies. So under `Always` an acknowledged
+    /// write has been synced. On a broken log the replies are dropped and `false` tells the executor to stop.
+    fn commit(&mut self) -> bool {
+        if !self.flush_aof() {
+            self.outbox.clear();
+            return false;
+        }
+        for (tx, reply) in self.outbox.drain(..) {
+            let _ = tx.send(reply);
+        }
+        true
     }
 
     /// `everysec`: at most one fsync per second, on a helper thread so the executor never waits for the disk.
+    /// While one is still running no second one starts.
     fn everysec_sync(&mut self) {
-        if let Some(a) = &mut self.aof
-            && a.policy == Fsync::EverySec
-            && a.unsynced
-            && a.last_sync.elapsed() >= Duration::from_secs(1)
-        {
-            (a.unsynced, a.last_sync) = (false, Instant::now());
-            self.stats.fsyncs += 1;
-            if let Ok(f) = a.file.try_clone() {
-                std::thread::spawn(move || {
-                    let _ = f.sync_data();
-                });
+        let due = self.aof.as_ref().is_some_and(|a| {
+            a.policy == Fsync::EverySec
+                && a.unsynced
+                && a.last_sync.elapsed() >= Duration::from_secs(1)
+                && a.syncer.as_ref().is_none_or(|t| t.is_finished())
+        });
+        if !due {
+            return;
+        }
+        self.join_syncer();
+        let Some(a) = &mut self.aof else { return };
+        (a.unsynced, a.last_sync) = (false, Instant::now());
+        self.stats.fsyncs += 1; // counts attempts
+        match a.file.try_clone() {
+            Ok(f) => {
+                let (failed, io) = (self.aof_failed.clone(), self.cfg.io.clone());
+                a.syncer = Some(std::thread::spawn(move || {
+                    if io.sync_data(IoOp::EverySecSync, &f).is_err() {
+                        failed.store(true, SeqCst);
+                    }
+                }));
+            }
+            Err(_) => self.aof_failed.store(true, SeqCst),
+        }
+    }
+
+    /// Wait for the helper thread, so that its failure (if any) is in `aof_failed` afterwards.
+    fn join_syncer(&mut self) {
+        if let Some(t) = self.aof.as_mut().and_then(|a| a.syncer.take()) {
+            let told = self.cfg.io.at(IoOp::SyncerJoin);
+            if t.join().is_err() || told.is_err() {
+                self.aof_failed.store(true, SeqCst);
             }
         }
     }
@@ -3038,7 +3256,11 @@ impl Engine {
         let Some(p) = self.cfg.rdb.clone() else {
             return Err(Frame::err("ERR RDB persistence is not configured"));
         };
-        write_atomic(&p, &rdb_encode(&snapshot_of(self)))
+        if self.bg_save {
+            // both would write the same temporary file
+            return Err(Frame::err("ERR Background save already in progress"));
+        }
+        write_atomic(&p, &rdb_encode(&snapshot_of(self)), &self.cfg.io)
             .map_err(|e| Frame::err(format!("ERR {e}")))?;
         self.stats.saves += 1;
         self.saved_at_dirty = self.dirty;
@@ -3053,10 +3275,10 @@ impl Engine {
             return Err(Frame::err("ERR Background save already in progress"));
         }
         self.bg_save = true;
-        self.saved_at_dirty = self.dirty;
-        let (snap, tx) = (snapshot_of(self), self.tx.clone());
+        self.bg_save_dirty = self.dirty;
+        let (snap, tx, io) = (snapshot_of(self), self.tx.clone(), self.cfg.io.clone());
         std::thread::spawn(move || {
-            let r = write_atomic(&p, &rdb_encode(&snap)).map_err(|e| e.to_string());
+            let r = write_atomic(&p, &rdb_encode(&snap), &io).map_err(|e| e.to_string());
             let _ = tx.send(Msg::BgDone(Bg::Save, r));
         });
         fr(Frame::Simple("Background saving started".into()))
@@ -3066,15 +3288,35 @@ impl Engine {
     /// write to BOTH the old AOF and `rewrite_buf`. When the thread finishes, the buffered tail is appended to the new
     /// file and it is renamed over the old one. Nothing is lost whatever the interleaving.
     fn c_bgrewriteaof(&mut self, _: u64, _: &[B]) -> R {
-        let Some(path) = self.cfg.aof.as_ref().map(|(p, _)| p.clone()) else {
+        if self.cfg.aof.is_none() {
             return Err(Frame::err("ERR AOF is not enabled"));
-        };
+        }
         if self.bg_rewrite {
             return Err(Frame::err(
                 "ERR Background append only file rewriting already in progress",
             ));
         }
-        self.flush_aof(); // records executed before this command belong to the OLD file only (they are in the snapshot)
+        if self.in_exec {
+            self.rewrite_scheduled = true;
+            return fr(Frame::Simple(
+                "Background append only file rewriting scheduled".into(),
+            ));
+        }
+        self.start_rewrite();
+        fr(Frame::Simple(
+            "Background append only file rewriting started".into(),
+        ))
+    }
+
+    /// Must not run inside a transaction: the flush would write the records so far without their MULTI wrapper.
+    fn start_rewrite(&mut self) {
+        let Some((path, _)) = self.cfg.aof.clone() else {
+            return;
+        };
+        // records executed before this point belong to the OLD file only (they are in the snapshot)
+        if !self.flush_aof() {
+            return;
+        }
         self.bg_rewrite = true;
         self.rewrite_buf = Some(Vec::new());
         let (snap, tx) = (snapshot_of(self), self.tx.clone());
@@ -3083,16 +3325,16 @@ impl Engine {
                 .map_err(|e| e.to_string());
             let _ = tx.send(Msg::BgDone(Bg::Rewrite, r));
         });
-        fr(Frame::Simple(
-            "Background append only file rewriting started".into(),
-        ))
     }
 
     fn bg_done(&mut self, kind: Bg, res: Result<(), String>) {
         match kind {
             Bg::Save => {
                 self.bg_save = false;
-                self.stats.saves += res.is_ok() as u64;
+                if res.is_ok() {
+                    self.saved_at_dirty = self.bg_save_dirty;
+                    self.stats.saves += 1;
+                }
             }
             Bg::Rewrite => {
                 self.bg_rewrite = false;
@@ -3105,16 +3347,26 @@ impl Engine {
                     res.clone().map_err(io::Error::other)?;
                     let mut f = OpenOptions::new().append(true).open(&tmp)?;
                     f.write_all(&tail)?;
-                    f.sync_all()?;
+                    self.cfg.io.sync_all(IoOp::FileSync, &f)?;
                     fs::rename(&tmp, &path)?;
-                    OpenOptions::new().append(true).open(&path)
+                    let _ = self.cfg.io.at(IoOp::RewriteRenamed);
+                    // the same handle: reopening could fail and leave appends going to the replaced file
+                    Ok(f)
                 };
-                if let Ok(file) = swap() {
-                    let size = file.metadata().map_or(0, |m| m.len());
-                    if let Some(a) = &mut self.aof {
-                        (a.file, a.size) = (file, size);
+                match swap() {
+                    Ok(file) => {
+                        let size = file.metadata().map_or(0, |m| m.len());
+                        if let Some(a) = &mut self.aof {
+                            (a.file, a.size) = (file, size);
+                        }
+                        self.stats.rewrites += 1;
+                        if sync_dir(&path, &self.cfg.io).is_err() {
+                            self.aof_failed.store(true, SeqCst);
+                        }
                     }
-                    self.stats.rewrites += 1;
+                    Err(_) => {
+                        let _ = fs::remove_file(&tmp); // the old log is complete and still in use
+                    }
                 }
             }
         }
@@ -3162,7 +3414,7 @@ impl Server {
         tokio::time::timeout(Duration::from_secs(5), ack_rx)
             .await
             .map_err(|_| io::Error::other("executor ack timed out"))?
-            .ok();
+            .map_err(|_| io::Error::other("the executor stopped without saving the log"))?;
         let exec = self.exec;
         tokio::task::spawn_blocking(move || exec.join())
             .await?
@@ -5605,7 +5857,572 @@ async fn t_rdb() {
     );
 }
 
-// ================================================================ 14. measurements and the demo session
+// ================================================================ 14. regression checks (no sockets, no sleeps)
+
+/// An engine driven by hand: no executor thread, no timer, a clock that moves only when told to.
+struct Direct {
+    e: Engine,
+    rx: xc::Receiver<Msg>,
+    clock: Arc<ManualClock>,
+}
+
+impl Direct {
+    fn open(cfg: Config, clock: &Arc<ManualClock>) -> io::Result<Direct> {
+        let (tx, rx) = xc::unbounded();
+        let e = Engine::new(cfg, clock.clone(), tx)?;
+        Ok(Direct {
+            e,
+            rx,
+            clock: clock.clone(),
+        })
+    }
+    fn mem() -> Direct {
+        Direct::open(Config::default(), &ManualClock::new(1_000_000)).unwrap()
+    }
+    /// One pipelined batch from `conn`, executed but not yet committed.
+    fn send(&mut self, conn: u64, cmds: &[&str]) -> oneshot::Receiver<BatchReply> {
+        let (reply, answer) = oneshot::channel();
+        let cmds = cmds
+            .iter()
+            .map(|c| c.split(' ').map(|w| w.as_bytes().to_vec()).collect())
+            .collect();
+        self.e.handle(Msg::Req { conn, cmds, reply });
+        answer
+    }
+    fn batch(&mut self, conn: u64, cmds: &[&str]) -> Vec<Frame> {
+        let mut answer = self.send(conn, cmds);
+        assert!(self.e.commit(), "the log could not be written");
+        answer.try_recv().expect("no reply").frames
+    }
+    fn ask(&mut self, conn: u64, cmd: &str) -> Frame {
+        self.batch(conn, &[cmd]).remove(0)
+    }
+    fn finish_background_job(&mut self) {
+        let done = self.rx.recv().expect("background job");
+        self.e.handle(done);
+        assert!(self.e.commit());
+    }
+}
+
+fn simple(s: &str) -> Frame {
+    Frame::Simple(s.into())
+}
+
+/// A deadline that passed while the server was down must not change what the records after it rebuild.
+fn r_replay_past_deadline() {
+    let dir = TempDir::new("r_replay");
+    let clock = ManualClock::new(1_000_000);
+    let cfg = aof_cfg(&dir.join("a.aof"), Fsync::No);
+    let mut d = Direct::open(cfg.clone(), &clock).unwrap();
+    // `kept` was alive when PERSIST ran; `short` was alive when it got its second element
+    d.batch(1, &["SET kept v", "PEXPIRE kept 100", "PERSIST kept"]);
+    d.batch(1, &["RPUSH short a", "PEXPIRE short 100", "RPUSH short b"]);
+    drop(d);
+    clock.advance(500);
+    let mut d = Direct::open(cfg, &clock).unwrap();
+    assert_eq!(d.ask(1, "GET kept"), b("v"), "a persisted key was lost");
+    assert_eq!(d.ask(1, "PTTL kept"), n(-1));
+    assert_eq!(
+        d.ask(1, "EXISTS short"),
+        n(0),
+        "an expired list came back, rebuilt from its last records and without a deadline"
+    );
+}
+
+fn r_rewrite_inside_multi() {
+    let dir = TempDir::new("r_multi");
+    let clock = ManualClock::new(1_000_000);
+    let cfg = aof_cfg(&dir.join("a.aof"), Fsync::No);
+    let mut d = Direct::open(cfg.clone(), &clock).unwrap();
+    // SET x is still waiting for the log when EXEC starts, and nothing is logged after the rewrite
+    let r = d.batch(1, &["SET x 1", "MULTI", "SET y 3", "BGREWRITEAOF", "EXEC"]);
+    assert_eq!(
+        r[4],
+        Frame::Array(vec![
+            Frame::ok(),
+            simple("Background append only file rewriting scheduled")
+        ])
+    );
+    d.finish_background_job();
+    assert_eq!(d.e.stats.rewrites, 1);
+    drop(d);
+    let mut d = Direct::open(cfg, &clock).unwrap();
+    assert_eq!(d.ask(1, "MGET x y"), arr(&["1", "3"]));
+}
+
+fn r_huge_blocking_timeout() {
+    let mut d = Direct::mem();
+    let mut waiting = d.send(1, &["BLPOP q 1e300"]);
+    d.clock.advance(1_000_000_000);
+    d.e.on_tick();
+    assert!(d.e.commit());
+    assert!(waiting.try_recv().is_err(), "a huge timeout expired");
+    d.ask(2, "RPUSH q job");
+    assert_eq!(waiting.try_recv().unwrap().frames, vec![arr(&["q", "job"])]);
+}
+
+fn r_exec_sees_expired_watch() {
+    let mut d = Direct::mem();
+    d.batch(1, &["SET w 1 PX 100", "WATCH w", "MULTI", "SET other 1"]);
+    d.clock.advance(200); // nothing touches or samples `w`
+    assert_eq!(d.ask(1, "EXEC"), Frame::NullArray);
+    assert_eq!(d.ask(1, "EXISTS other"), n(0));
+}
+
+fn r_no_line_end_in_a_line_frame() {
+    let mut d = Direct::mem();
+    let (reply, mut answer) = oneshot::channel();
+    let cmds = vec![vec![b"NO\r\n+OK\r\n:1".to_vec()]];
+    d.e.handle(Msg::Req {
+        conn: 1,
+        cmds,
+        reply,
+    });
+    assert!(d.e.commit());
+    for frame in [
+        answer.try_recv().unwrap().frames.remove(0),
+        Frame::Simple("a\nb\r".into()),
+    ] {
+        let mut wire = Vec::new();
+        encode(&frame, &mut wire);
+        let ends = wire.iter().filter(|&&c| c == b'\r' || c == b'\n').count();
+        assert_eq!(
+            ends,
+            2,
+            "one frame, one line: {:?}",
+            String::from_utf8_lossy(&wire)
+        );
+    }
+}
+
+fn r_bare_unsubscribe_count() {
+    let mut d = Direct::mem();
+    d.ask(1, "PSUBSCRIBE news.*");
+    let nothing = |kind: &str| Frame::Array(vec![b(kind), Frame::Null, n(1)]);
+    assert_eq!(d.ask(1, "UNSUBSCRIBE"), nothing("unsubscribe"));
+    d.batch(1, &["SUBSCRIBE a", "PUNSUBSCRIBE"]);
+    assert_eq!(d.ask(1, "PUNSUBSCRIBE"), nothing("punsubscribe"));
+}
+
+/// The log seeded from a snapshot must be published by rename. A hard link to the old (empty) log file
+/// shows whether any byte was written into that file in place.
+fn r_seed_is_atomic() {
+    let dir = TempDir::new("r_seed");
+    let clock = ManualClock::new(1_000_000);
+    let (aof, rdb) = (dir.join("a.aof"), dir.join("d.mrdb"));
+    let mut d = Direct::open(
+        Config {
+            rdb: Some(rdb.clone()),
+            ..Config::default()
+        },
+        &clock,
+    )
+    .unwrap();
+    d.batch(1, &["SET a 1", "SET b 2", "SAVE"]);
+    fs::write(&aof, b"").unwrap();
+    let old_file = dir.join("old-file");
+    fs::hard_link(&aof, &old_file).unwrap();
+    let cfg = Config {
+        rdb: Some(rdb),
+        ..aof_cfg(&aof, Fsync::Always)
+    };
+    drop(Direct::open(cfg.clone(), &clock).unwrap());
+    assert_eq!(
+        fs::read(&old_file).unwrap(),
+        b"",
+        "the log was written in place"
+    );
+    let mut d = Direct::open(cfg, &clock).unwrap();
+    assert_eq!(d.ask(1, "MGET a b"), arr(&["1", "2"]));
+}
+
+fn r_input_limits() {
+    let lim = Limits {
+        max_line: 8,
+        max_query: 64,
+        ..Limits::default()
+    };
+    // the answer must not depend on how the bytes were cut into packets
+    assert_eq!(parse(b"+1234567\r", &lim), Ok(None));
+    assert!(parse(b"+1234567\r\n", &lim).unwrap().is_some());
+    assert!(parse_command(b"ECHO abc\r", &lim).unwrap().is_none());
+    assert!(parse_command(b"ECHO abc\r\n", &lim).unwrap().is_some());
+    assert_eq!(
+        parse_command(b"ECHO abcd\r\n", &lim),
+        Err(ProtoError::LineTooLong)
+    );
+    let big = encode_cmd(&["0123456789"; 6]);
+    for have in [65, big.len()] {
+        assert_eq!(
+            parse_command(&big[..have], &lim),
+            Err(ProtoError::TooLarge("command")),
+            "{have} bytes of one command"
+        );
+    }
+    // the limit is for one command, not for what happens to be buffered behind it
+    let many = encode_cmd(&["PING"]).repeat(20);
+    assert!(parse_command(&many, &lim).unwrap().is_some());
+}
+
+/// Only an unfinished record at the end may be cut off. Anything else stops the start and changes nothing.
+fn r_corrupt_log_is_refused() {
+    let dir = TempDir::new("r_corrupt");
+    let clock = ManualClock::new(1_000_000);
+    let one = encode_cmd(&["SET", "a", "1"]);
+    let two = encode_cmd(&["SET", "b", "2"]);
+    for (i, middle) in [
+        b"junk".to_vec(),
+        b"*1\r\n:5\r\n".to_vec(),
+        encode_cmd(&["NOSUCHCOMMAND"]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = dir.join(&format!("{i}.aof"));
+        let bytes = [one.clone(), middle, two.clone()].concat();
+        fs::write(&path, &bytes).unwrap();
+        let got = Direct::open(aof_cfg(&path, Fsync::No), &clock);
+        assert_eq!(
+            got.err().map(|e| e.kind()),
+            Some(io::ErrorKind::InvalidData),
+            "case {i}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes, "case {i} changed the log");
+    }
+}
+
+/// A command that failed is not logged, even if looking up its keys expired one of them.
+fn r_failed_command_is_not_logged() {
+    let dir = TempDir::new("r_failed");
+    let clock = ManualClock::new(1_000_000);
+    let path = dir.join("a.aof");
+    let mut d = Direct::open(aof_cfg(&path, Fsync::No), &clock).unwrap();
+    d.ask(1, "SET dst v PX 100");
+    clock.advance(200);
+    assert!(matches!(d.ask(1, "RENAME missing dst"), Frame::Error(_)));
+    assert!(!String::from_utf8_lossy(&fs::read(&path).unwrap()).contains("RENAME"));
+}
+
+/// A hook that records every place it is asked about and fails at one of them, if told to.
+fn recording(fail: Option<IoOp>) -> (IoHook, Arc<std::sync::Mutex<Vec<IoOp>>>) {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let hook = IoHook(Some(Arc::new(move |op| {
+        log.lock().unwrap().push(op);
+        if fail == Some(op) {
+            Err(io::Error::other("injected"))
+        } else {
+            Ok(())
+        }
+    })));
+    (hook, seen)
+}
+
+/// New and renamed files are followed by a sync of their directory, and its failure is not ignored.
+/// This shows that the calls are made, not that a disk keeps its promise through a power cut.
+fn r_directory_is_synced() {
+    use IoOp::{DirSync, FileSync, RewriteRenamed};
+    let dir = TempDir::new("r_dirsync");
+    let clock = ManualClock::new(1_000_000);
+    let (io, seen) = recording(None);
+    let cfg = Config {
+        io,
+        rdb: Some(dir.join("d.mrdb")),
+        ..aof_cfg(&dir.join("a.aof"), Fsync::No)
+    };
+    let mut d = Direct::open(cfg, &clock).unwrap();
+    let take = || std::mem::take(&mut *seen.lock().unwrap());
+    assert_eq!(take(), [DirSync], "a new log");
+    d.ask(1, "SAVE");
+    assert_eq!(take(), [FileSync, DirSync], "SAVE");
+    d.ask(1, "BGREWRITEAOF");
+    d.finish_background_job();
+    assert_eq!(take(), [FileSync, RewriteRenamed, DirSync], "rewrite");
+
+    let (io, _) = recording(Some(DirSync));
+    let cfg = Config {
+        io,
+        ..aof_cfg(&dir.join("b.aof"), Fsync::No)
+    };
+    assert!(Direct::open(cfg, &clock).is_err(), "failure at start");
+    // after a rewrite's rename the new name may not last, so nothing more may be acknowledged
+    let mut d = Direct::open(aof_cfg(&dir.join("c.aof"), Fsync::No), &clock).unwrap();
+    d.ask(1, "BGREWRITEAOF");
+    d.e.cfg.io = recording(Some(DirSync)).0;
+    let done = d.rx.recv().unwrap();
+    d.e.handle(done);
+    assert!(!d.e.commit(), "failure after a rewrite was ignored");
+}
+
+fn r_truncate_is_synced() {
+    let dir = TempDir::new("r_truncsync");
+    let clock = ManualClock::new(1_000_000);
+    let torn = [encode_cmd(&["SET", "a", "1"]), b"*3\r\n$3\r\nSE".to_vec()].concat();
+    let open = |name: &str, fail| {
+        let path = dir.join(name);
+        fs::write(&path, &torn).unwrap();
+        let (io, seen) = recording(fail);
+        let cfg = Config {
+            io,
+            ..aof_cfg(&path, Fsync::No)
+        };
+        let ok = Direct::open(cfg, &clock).is_ok();
+        let synced = seen.lock().unwrap().contains(&IoOp::TruncateSync);
+        (ok, synced)
+    };
+    assert_eq!(open("a.aof", None), (true, true));
+    assert_eq!(open("b.aof", Some(IoOp::TruncateSync)), (false, true));
+}
+
+/// An `everysec` engine with one unsynced write whose fsync is due now.
+fn due_for_fsync(dir: &TempDir, io: IoHook) -> Direct {
+    let cfg = Config {
+        io,
+        ..aof_cfg(&dir.join("a.aof"), Fsync::EverySec)
+    };
+    let mut d = Direct::open(cfg, &ManualClock::new(1_000_000)).unwrap();
+    d.ask(1, "SET a 1");
+    let a = d.e.aof.as_mut().unwrap();
+    a.last_sync = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+    d
+}
+
+fn r_fsync_errors_are_reported() {
+    let dir = TempDir::new("r_everysec");
+    let mut d = due_for_fsync(&dir, recording(Some(IoOp::EverySecSync)).0);
+    d.e.everysec_sync();
+    d.e.join_syncer();
+    assert!(!d.e.commit(), "a failed everysec fsync was ignored");
+
+    let dir = TempDir::new("r_always");
+    let (io, _) = recording(Some(IoOp::AppendSync));
+    let cfg = Config {
+        io,
+        ..aof_cfg(&dir.join("a.aof"), Fsync::Always)
+    };
+    let mut d = Direct::open(cfg, &ManualClock::new(1_000_000)).unwrap();
+    let mut answer = d.send(1, &["SET a 1"]);
+    assert!(!d.e.commit(), "a failed fsync was ignored");
+    assert!(
+        answer.try_recv().is_err(),
+        "an unsynced write was acknowledged"
+    );
+}
+
+/// Runs the real executor loop up to a shutdown; true if it reported success.
+fn shuts_down_cleanly(d: Direct) -> bool {
+    let (ack, mut answer) = oneshot::channel();
+    d.e.tx.send(Msg::Shutdown(ack)).unwrap();
+    d.e.run(d.rx);
+    answer.try_recv().is_ok()
+}
+
+fn r_shutdown_reports_failures() {
+    let dir = TempDir::new("r_final");
+    let cfg = |fail| Config {
+        io: recording(fail).0,
+        ..aof_cfg(&dir.join("a.aof"), Fsync::No)
+    };
+    let clock = ManualClock::new(1_000_000);
+    assert!(shuts_down_cleanly(Direct::open(cfg(None), &clock).unwrap()));
+    let failing = Direct::open(cfg(Some(IoOp::FinalSync)), &clock).unwrap();
+    assert!(
+        !shuts_down_cleanly(failing),
+        "a failed last fsync was not reported"
+    );
+
+    // The helper's fsync fails, but not before the executor starts waiting for it. Without the wait the
+    // executor would report success while the helper is still held here.
+    let dir = TempDir::new("r_join");
+    let (release, held) = xc::bounded::<()>(1);
+    let io = IoHook(Some(Arc::new(move |op| match op {
+        IoOp::EverySecSync => {
+            let _ = held.recv();
+            Err(io::Error::other("injected"))
+        }
+        IoOp::SyncerJoin => {
+            let _ = release.send(());
+            Ok(())
+        }
+        _ => Ok(()),
+    })));
+    let mut d = due_for_fsync(&dir, io);
+    d.e.everysec_sync();
+    assert!(
+        !shuts_down_cleanly(d),
+        "shutdown did not wait for the fsync"
+    );
+}
+
+/// After a rewrite the server appends through the handle it renamed into place. Reopening the file could
+/// fail and leave appends going to the replaced one; here the new file turns read-only right after the rename.
+fn r_rewrite_keeps_its_handle() {
+    let dir = TempDir::new("r_handle");
+    let clock = ManualClock::new(1_000_000);
+    let path = dir.join("a.aof");
+    let mut d = Direct::open(aof_cfg(&path, Fsync::No), &clock).unwrap();
+    d.ask(1, "SET a 1");
+    let renamed = path.clone();
+    d.e.cfg.io = IoHook(Some(Arc::new(move |op| {
+        if op == IoOp::RewriteRenamed {
+            let mut p = fs::metadata(&renamed)?.permissions();
+            p.set_readonly(true);
+            fs::set_permissions(&renamed, p)?;
+        }
+        Ok(())
+    })));
+    d.ask(1, "BGREWRITEAOF");
+    d.finish_background_job();
+    d.ask(1, "SET b 2");
+    drop(d);
+    let on_disk = String::from_utf8_lossy(&fs::read(&path).unwrap()).into_owned();
+    assert!(
+        on_disk.contains("$1\r\nb"),
+        "the write after the rewrite is not in the log"
+    );
+}
+
+/// A write that did not reach the log is never acknowledged, and the server takes no more.
+fn r_log_failure_is_not_acknowledged() {
+    let dir = TempDir::new("r_fail");
+    let clock = ManualClock::new(1_000_000);
+    let path = dir.join("a.aof");
+    let mut d = Direct::open(aof_cfg(&path, Fsync::Always), &clock).unwrap();
+    d.ask(1, "SET a 1");
+    d.e.aof.as_mut().unwrap().file = File::open(&path).unwrap(); // read-only: every append fails
+    let mut answer = d.send(1, &["SET b 2"]);
+    assert!(!d.e.commit(), "the failure was ignored");
+    assert!(answer.try_recv().is_err(), "a lost write was acknowledged");
+}
+
+fn r_saves() {
+    let dir = TempDir::new("r_saves");
+    let clock = ManualClock::new(1_000_000);
+    let cfg = Config {
+        rdb: Some(dir.join("no-such-dir").join("d.mrdb")),
+        ..Config::default()
+    };
+    let mut d = Direct::open(cfg, &clock).unwrap();
+    d.ask(1, "SET a 1");
+    d.ask(1, "BGSAVE");
+    assert_eq!(
+        d.ask(2, "SAVE"),
+        Frame::err("ERR Background save already in progress")
+    );
+    d.finish_background_job();
+    let info = d.ask(1, "INFO").text();
+    assert!(
+        info.contains("rdb_changes_since_last_save:1\r"),
+        "a failed BGSAVE counted as a save"
+    );
+    // a snapshot in the middle of a transaction would hold half of it
+    for cmd in ["SAVE", "BGSAVE"] {
+        d.ask(1, "MULTI");
+        assert!(matches!(d.ask(1, cmd), Frame::Error(_)), "{cmd} was queued");
+        assert!(d.ask(1, "EXEC").text().starts_with("EXECABORT"));
+    }
+}
+
+/// A checksum only detects damage: contents behind a correct one are still checked.
+fn r_snapshot_contents_are_checked() {
+    let sealed = |body: &[u8]| {
+        let mut o = [RDB_MAGIC, body].concat();
+        o.extend(crc32(&o).to_le_bytes());
+        o
+    };
+    let blob = |s: &str| [&(s.len() as u32).to_le_bytes()[..], s.as_bytes()].concat();
+    let count = |c: u32| c.to_le_bytes().to_vec();
+    let entry = |ty: u8, flag: u8, rest: Vec<u8>| [vec![ty, flag], blob("k"), rest].concat();
+    let good = entry(0, 0, blob("v"));
+    assert!(rdb_decode(&sealed(&[good.clone(), vec![0xFF]].concat())).is_ok());
+    let nan = f64::NAN.to_bits().to_le_bytes().to_vec();
+    let bad = [
+        ("empty list", entry(1, 0, count(0))), // LPOP on it would panic the executor
+        ("unknown flag", entry(0, 2, blob("v"))),
+        (
+            "NaN score",
+            entry(4, 0, [count(1), nan, blob("m")].concat()),
+        ),
+        (
+            "member twice",
+            entry(3, 0, [count(2), blob("m"), blob("m")].concat()),
+        ),
+        ("key twice", [good.clone(), good.clone()].concat()),
+    ];
+    for (what, body) in bad {
+        let bytes = sealed(&[body, vec![0xFF]].concat());
+        assert!(rdb_decode(&bytes).is_err(), "{what} was accepted");
+    }
+    let trailing = sealed(&[good, vec![0xFF, 0]].concat());
+    assert!(
+        rdb_decode(&trailing).is_err(),
+        "trailing bytes were accepted"
+    );
+}
+
+fn r_waiters_are_woken() {
+    let mut d = Direct::mem();
+    let mut waiting = d.send(1, &["BLPOP dst 0"]);
+    d.batch(2, &["RPUSH src x", "RENAME src dst"]);
+    assert_eq!(
+        waiting.try_recv().expect("RENAME woke nobody").frames,
+        vec![arr(&["dst", "x"])]
+    );
+    // two keys get data in one transaction: the one pushed first is served first
+    let mut waiting = d.send(1, &["BLPOP a b 0"]);
+    d.batch(2, &["MULTI", "RPUSH b 1", "RPUSH a 2", "EXEC"]);
+    assert_eq!(waiting.try_recv().unwrap().frames, vec![arr(&["b", "1"])]);
+}
+
+fn r_client_bookkeeping() {
+    let mut d = Direct::mem();
+    // one slow subscriber matched twice by one message is one disconnect
+    let (push, _never_read) = mpsc::channel(1);
+    push.try_send(Frame::ok()).unwrap(); // already full
+    let kill = Some(Arc::new(Notify::new()));
+    let state = d.e.client(7);
+    (state.push, state.kill) = (Some(push), kill);
+    d.batch(7, &["SUBSCRIBE a", "PSUBSCRIBE *"]);
+    d.ask(1, "PUBLISH a hi");
+    assert_eq!(d.e.stats.slow_kills, 1);
+    // watching the same key again must not use more memory
+    d.batch(2, &["WATCH k k", "WATCH k"]);
+    assert_eq!(d.e.client(2).watched.len(), 1);
+}
+
+fn t_regressions() {
+    let checks: &[(&str, fn())] = &[
+        ("replay past a deadline", r_replay_past_deadline),
+        ("BGREWRITEAOF inside MULTI", r_rewrite_inside_multi),
+        ("huge BLPOP timeout", r_huge_blocking_timeout),
+        ("EXEC and an expired watched key", r_exec_sees_expired_watch),
+        ("line ends in line frames", r_no_line_end_in_a_line_frame),
+        ("bare UNSUBSCRIBE count", r_bare_unsubscribe_count),
+        ("log seeded by rename", r_seed_is_atomic),
+        ("input limits", r_input_limits),
+        ("corrupt log refused", r_corrupt_log_is_refused),
+        ("failed command not logged", r_failed_command_is_not_logged),
+        ("log write failure", r_log_failure_is_not_acknowledged),
+        ("directory sync", r_directory_is_synced),
+        ("truncate sync", r_truncate_is_synced),
+        ("fsync errors", r_fsync_errors_are_reported),
+        ("shutdown reports failures", r_shutdown_reports_failures),
+        ("handle after a rewrite", r_rewrite_keeps_its_handle),
+        ("SAVE and BGSAVE", r_saves),
+        ("snapshot contents", r_snapshot_contents_are_checked),
+        ("RENAME and key order wake waiters", r_waiters_are_woken),
+        ("slow-kill count, repeated WATCH", r_client_bookkeeping),
+    ];
+    let failed: Vec<&str> = checks
+        .iter()
+        .filter(|(_, check)| std::panic::catch_unwind(check).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "regression checks failed: {failed:?}");
+    println!("  {} regression checks pass", checks.len());
+}
+
+// ================================================================ 15. measurements and the demo session
 
 /// The concurrency-model question in miniature (no sockets, so only the coordination cost is measured).
 fn bench_models() {
@@ -5726,6 +6543,19 @@ async fn bench_ops(addr: SocketAddr, conns: usize, each: usize, set: bool, depth
     (conns * each) as f64 / t0.elapsed().as_secs_f64()
 }
 
+async fn t_server_shutdown_failure() {
+    let dir = TempDir::new("r_server_stop");
+    let cfg = Config {
+        io: recording(Some(IoOp::FinalSync)).0,
+        ..aof_cfg(&dir.join("a.aof"), Fsync::No)
+    };
+    let srv = start(cfg, Arc::new(SystemClock)).await.unwrap();
+    assert!(
+        srv.shutdown().await.is_err(),
+        "Server::shutdown hid a failed fsync"
+    );
+}
+
 async fn t_session_and_bench() {
     let srv = start(Config::default(), Arc::new(SystemClock))
         .await
@@ -5821,7 +6651,7 @@ async fn sub_first(sub: &mut Client, cmd: &[&str]) -> Frame {
     sub.cmd(cmd).await.unwrap()
 }
 
-// ================================================================ 15. main
+// ================================================================ 16. main
 
 async fn step<F: std::future::Future<Output = ()>>(name: &str, f: F) {
     println!("== {name}");
@@ -5845,6 +6675,12 @@ async fn main() {
     step("glob matcher", async { t_glob() }).await;
     step("skip list sorted set", async { t_skiplist() }).await;
     step("RESP parser", async { t_resp_parser() }).await;
+    step("regressions", async { t_regressions() }).await;
+    step(
+        "shutdown reports a failed fsync",
+        t_server_shutdown_failure(),
+    )
+    .await;
     step("golden transcripts", t_golden()).await;
     step("protocol errors, inline, partial frames", t_protocol()).await;
     step("pipelining", t_pipeline()).await;

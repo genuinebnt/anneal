@@ -1,0 +1,31 @@
+slug = "keys-that-expire"
+title = "Capstone 3: keys that expire"
+mode = "write"
+level = "medium"
+stage = "protocol-and-data"
+order = 3
+status = "ready"
+tags = ["TTL", "lazy expiry", "active expiry", "injected time"]
+teaches = [
+  "Lazy expiry works only if every path to a key goes through one check.",
+  "Passing time in as an argument makes expiry testable to the millisecond.",
+  "Which operations keep a deadline is part of the contract, and each one needs deciding.",
+]
+follow_up = "1) `DBSIZE` here counts live keys, which costs a pass over them. Real Redis counts stored keys instead. What does each choice cost? 2) The system clock can jump backwards. What happens to deadlines, and what would a monotonic clock change? 3) Why can a replica not simply expire keys by its own clock?"
+
+[[hints]]
+kind = "approach"
+text = "Find the narrowest place every key access passes. Remove an expired key there, then let the command carry on as if it never existed."
+
+[[hints]]
+kind = "rust"
+text = "Your typed accessors are one such place. Commands that go to the map directly need the same call first. `checked_mul` and `checked_add` give the expire-time errors."
+
+[[hints]]
+kind = "edge"
+text = "`DEL`, `RENAME` (both keys), `MSET` and `TYPE` do not go through a typed accessor. `SET .. KEEPTTL` on an expired key must not find the old deadline."
+
+[solution]
+explanation = "Every access first removes the key if its deadline has passed, so no command can see a stale one. `cycle` reuses the sweep from the preparation part, so memory held by keys nobody asks for is also freed."
+time = "O(1) extra per access; a cycle looks at no more than 320 keys"
+space = "O(keys with deadlines)"

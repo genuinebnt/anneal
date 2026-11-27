@@ -1,0 +1,31 @@
+code = "Y31"
+name = "Mini Redis: preparation"
+section = "Y"
+tier = "sde3"
+order = 31
+summary = "Preparation for the mini Redis capstone: nested messages, ranked sets and patterns, expiry, waiting and fan-out, logs that replay, and connections served over Tokio."
+
+[[stages]]
+slug = "messages"
+name = "Messages in pieces"
+band = "medium"
+
+[[stages]]
+slug = "data"
+name = "Data a server keeps"
+band = "hard"
+
+[[stages]]
+slug = "waiting"
+name = "Waiting and telling"
+band = "hard"
+
+[[stages]]
+slug = "disk"
+name = "A log you can replay"
+band = "hard"
+
+[[stages]]
+slug = "network"
+name = "Over the network"
+band = "hard"
