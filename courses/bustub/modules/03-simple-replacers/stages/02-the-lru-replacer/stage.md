@@ -17,7 +17,7 @@ The `Replacer` trait (given, `replacer.rs`) says what the buffer pool may rely o
 - `size()`: how many frames may be evicted right now.
 - Holding more distinct frames than `num_pages` is a bug in the caller: it **panics**.
 
-The tests run random sequences against a four-line model of LRU, check the promises every policy makes (a general contract that you will also meet in CLOCK, LRU-K and ARC), and run 300 000 operations on 100 000 frames under a time limit. The file also runs a deliberately different, quadratic LRU through the same LRU properties, to show that they test behaviour and not one design.
+The tests run random sequences against a four-line model of LRU, check the promises every policy makes (a general contract that you will also meet in CLOCK, LRU-K and ARC), and run 3 000 000 operations on 400 000 frames under a time limit. The file also runs a deliberately different, quadratic LRU through the same LRU properties, to show that they test behaviour and not one design.
 
 ## Your freedom
 
@@ -51,7 +51,7 @@ Everything inside `LruReplacer`. You can use the `IndexList` you built, a `HashM
 - Frames leave in the order they were unpinned; a second unpin changes nothing; pinning removes, and a later unpin makes the frame the most recent; a replacer over capacity panics.
 - For random sequences, victims and sizes agree with the LRU model.
 - For random sequences, the general replacer contract holds: `size` is the number of evictable frames, a victim is always one of them, draining returns each exactly once.
-- 300 000 operations on 100 000 frames finish under the time limit.
+- 3 000 000 operations on 400 000 frames finish under the time limit.
 
 ## Hints
 

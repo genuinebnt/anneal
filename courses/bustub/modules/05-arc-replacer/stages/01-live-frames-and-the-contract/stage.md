@@ -78,7 +78,7 @@ Optional. Predict first, then run.
 
 ## Other designs
 
-- **Four `IndexList`s and two maps (ours).** Every operation O(1).
+- **Four `IndexList`s and two maps (ours).** Every operation O(1) except the walk in `evict` past frames that are not evictable (see Performance).
 - **One `HashMap<PageId, Entry>` with a status field and a global recency counter.** Simplest; eviction is a scan or a priority structure.
 - **Intrusive lists in the frame table.** The pool stores list links in each frame; fastest; couples the replacer to the pool.
 

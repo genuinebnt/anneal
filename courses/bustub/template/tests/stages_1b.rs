@@ -316,12 +316,13 @@ fn s1b_03_a_write_future_hands_the_buffer_back() {
 
 #[test]
 fn s1b_03_schedule_returns_before_the_io_is_done() {
-    let disk = Arc::new(TestDisk::slow(120));
+    // A write takes 600 ms; handing it over takes microseconds. The bound leaves room for a slow machine.
+    let disk = Arc::new(TestDisk::slow(600));
     let sched = DiskScheduler::new(disk);
     let (w, wf) = write_req(0, 1);
     let start = Instant::now();
     sched.schedule(vec![w]);
-    assert!(start.elapsed() < Duration::from_millis(60), "schedule must hand the request over and return, not do the I/O itself");
+    assert!(start.elapsed() < Duration::from_millis(300), "schedule must hand the request over and return, not do the I/O itself");
     assert!(wait(wf).unwrap().is_ok());
 }
 
@@ -546,7 +547,8 @@ fn s1b_06_a_sharded_scheduler_needs_at_least_one_worker() {
 
 #[test]
 fn s1b_06_requests_for_different_pages_overlap_in_time() {
-    let disk = Arc::new(TestDisk::slow(60));
+    // Overlapped, 8 writes of 100 ms on 4 workers take about 200 ms; one after another they take 800 ms.
+    let disk = Arc::new(TestDisk::slow(100));
     let sched = ShardedDiskScheduler::new(disk, 4);
     let start = Instant::now();
     let futures: Vec<_> = (0..8)
@@ -560,7 +562,7 @@ fn s1b_06_requests_for_different_pages_overlap_in_time() {
         assert!(wait(f).unwrap().is_ok());
     }
     let took = start.elapsed();
-    assert!(took < Duration::from_millis(8 * 60 * 3 / 4), "8 writes of 60 ms to different pages on 4 workers took {took:?}: one worker would take 480 ms, they should overlap");
+    assert!(took < Duration::from_millis(8 * 100 * 3 / 4), "8 writes of 100 ms to different pages on 4 workers took {took:?}: one worker would take 800 ms, they should overlap");
 }
 
 #[test]

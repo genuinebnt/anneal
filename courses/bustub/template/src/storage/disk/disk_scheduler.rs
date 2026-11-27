@@ -57,7 +57,9 @@ impl DiskScheduler {
         todo!("1b-03: a fresh promise/future pair")
     }
 
-    /// Frees a page on the disk.
+    /// Frees a page on the disk, at once: it does not wait behind requests already scheduled. A write of the same page that is
+    /// still queued runs after the delete and brings the page back, so a caller that may have one in flight waits for its future
+    /// first.
     pub fn deallocate_page(&self, page_id: PageId) {
         todo!("1b-04: ask the disk to delete the page")
     }

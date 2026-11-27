@@ -150,6 +150,20 @@ fn s1a_01_opening_the_same_file_twice_in_a_row_works() {
 }
 
 #[test]
+fn s1a_01_opening_an_existing_file_never_shrinks_it() {
+    let dir = TempDir::new("no-shrink");
+    let big = 1000 * BUSTUB_PAGE_SIZE as u64;
+    std::fs::File::create(dir.path("test.bustub")).unwrap().set_len(big).unwrap();
+    let dm = new_dm(&dir);
+    let len = || std::fs::metadata(dir.path("test.bustub")).unwrap().len();
+    assert!(len() >= big, "opening an existing database file keeps its contents, so it must not cut the file short");
+    for p in 0..40 {
+        dm.write_page(PageId(p), &[p as u8; BUSTUB_PAGE_SIZE]).unwrap();
+    }
+    assert!(len() >= big, "allocating pages in a reopened file must not shrink it either");
+}
+
+#[test]
 fn s1a_01_a_page_that_was_never_written_reads_as_zeros() {
     let dir = TempDir::new("zeros");
     let dm = new_dm(&dir);
@@ -269,8 +283,11 @@ fn s1a_02_churn_at_a_constant_number_of_live_pages_never_grows_the_file() {
     for id in 0..100 {
         dm.write_page(PageId(id), &pattern(id as usize)).unwrap();
     }
+    // The first page to come and go makes 101 live at once, which may grow a file sized exactly for 100: measure after it.
+    dm.write_page(PageId(100), &pattern(100)).unwrap();
+    dm.delete_page(PageId(100));
     let size = dm.get_db_file_size();
-    for id in 100..300 {
+    for id in 101..300 {
         dm.write_page(PageId(id), &pattern(id as usize)).unwrap();
         dm.delete_page(PageId(id));
         assert_eq!(dm.get_db_file_size(), size, "page {id} came and went; the file must not grow while the number of live pages does not");
@@ -610,7 +627,7 @@ fn s1a_05_concurrent_writes_deletes_and_log_appends_keep_the_counters_exact() {
 }
 
 #[test]
-fn s1a_05_shut_down_makes_the_log_and_pages_available_to_the_next_manager() {
+fn s1a_05_shut_down_makes_the_log_available_to_the_next_manager() {
     let dir = TempDir::new("shutdown");
     {
         let dm = new_dm(&dir);

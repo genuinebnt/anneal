@@ -51,7 +51,9 @@ let n = file.read_at(&mut buf, offset)?; // like pread(2): may return fewer byte
 
 ## If this is new
 
-Do these on the Rust tracks first if the toolbox above reads like a foreign language; each takes a few minutes and teaches exactly one idea you need here.
+The course's own optional **Rust on-ramp** (module r, five stages: `anneal course show r-01`) builds exactly what this module leans on: bytes and positional I/O (r-01), errors as values (r-02), ownership (r-03) and shared state across threads (r-04). It does not count towards the course and you can stop it at any point.
+
+Or do these on the Rust tracks first if the toolbox above reads like a foreign language; each takes a few minutes and teaches exactly one idea you need here.
 
 - [S1 Option & Result](/t/s1-option-result), the first four problems: `?`, `map`, `ok_or`, and why `unwrap` is a decision.
 - [L1 Ownership & moves](/t/l1-ownership-moves) and [L2 Borrowing](/t/l2-borrowing), the first three problems of each: what a move is, why `&` and `&mut` cannot coexist (the `HashMap` trap is this rule).

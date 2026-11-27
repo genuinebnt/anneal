@@ -71,7 +71,7 @@ Both `pin` and `victim` remove a frame. In each, say where the hand ends up in t
 
 A `victim` sweep is O(n) in the worst case and cheap on average. The bigger cost in this design is `unpin` and `pin`, which search the ring for the frame: O(n) per call with a `Vec`. LRU's list-and-map design had O(1) for these.
 
-**Measure it.** Run the 100 000-frame timing test from 1c-02 on your CLOCK (copy it). It will be slow. What single structure would make `pin` and `unpin` O(1) without changing the policy? (This is the first experiment.)
+**Measure it.** Run the 400 000-frame timing test from 1c-02 on your CLOCK (copy it). It will be slow. What single structure would make `pin` and `unpin` O(1) without changing the policy? (This is the first experiment.)
 
 ## Experiment
 

@@ -4,7 +4,7 @@
 style of CodeCrafters. The layout, file names and tests mirror BusTub's; the code is yours.
 
 ```
-anneal course status      # where you are
+anneal course status      # where you are (new to Rust? `anneal course show r-01` starts the optional on-ramp)
 anneal course show        # the current stage: task, tests, syntax, links to read and watch
 anneal course test        # run its tests (and the earlier stages' as a regression check)
 anneal course next        # the next stage

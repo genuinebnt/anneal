@@ -18,7 +18,7 @@ A buffer pool must answer one question constantly: *which page do I throw out?* 
 - A handle names its element **until that element is removed. After that it never names anything**, not even a new element that took the old one's place in memory. Using such a *stale* handle returns `None` or `false` and changes nothing.
 - Every operation that takes a handle is O(1).
 
-The tests run random sequences of all these operations against a model made of a plain `Vec`, checking the whole list after every step, and a timing test removes 60 000 elements in scrambled order.
+The tests run random sequences of all these operations against a model made of a plain `Vec`, checking the whole list after every step, and a timing test removes 500 000 elements in scrambled order.
 
 ## Your freedom
 
@@ -54,7 +54,7 @@ How the nodes are stored and linked, what a `Handle` contains, how freed space i
 - A removed handle never names another element, even when its space is reused.
 - Moving to the back keeps the handle valid.
 - Random sequences of push, pop, remove, move and get agree with a `Vec` model after every step.
-- Removing 60 000 elements by handle in scrambled order finishes in time.
+- Removing 500 000 elements by handle in scrambled order finishes in time.
 
 ## Hints
 
@@ -72,7 +72,7 @@ If every push appended to the vector, a long-running list would grow forever eve
 
 ## Performance
 
-Each operation touches a handful of `Vec` slots: a few nanoseconds, without any allocation once the arena has grown. Compare a design that searches for an element to remove it: with 60 000 elements it does roughly a billion steps, and the timing test fails. The arena also keeps nodes next to each other in memory, which a pointer-per-node list does not.
+Each operation touches a handful of `Vec` slots: a few nanoseconds, without any allocation once the arena has grown. Compare a design that searches for an element to remove it: with 500 000 elements it does roughly a hundred billion steps, and the timing test fails. The arena also keeps nodes next to each other in memory, which a pointer-per-node list does not.
 
 **Measure it.** Time 1 million `push_back` followed by 1 million `pop_front` on your list and on `VecDeque`. Predict first: which wins, and by how much? Then time `remove` of random elements by handle against `VecDeque::remove(index)` for 50 000 elements.
 

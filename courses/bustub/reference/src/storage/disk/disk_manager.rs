@@ -105,11 +105,16 @@ impl DiskManager {
         let log_file_name = db_file_name.with_extension("log");
         let log_io = OpenOptions::new().read(true).append(true).create(true).open(&log_file_name)?;
         let db = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&db_file_name)?;
-        db.set_len(file_size_for(DEFAULT_DB_IO_SIZE))?;
+        // An existing file may be larger than the default: start from its size, and only ever grow it.
+        let len = db.metadata()?.len();
+        let page_capacity = DEFAULT_DB_IO_SIZE.max((len / BUSTUB_PAGE_SIZE as u64).saturating_sub(1) as usize);
+        if len < file_size_for(page_capacity) {
+            db.set_len(file_size_for(page_capacity))?;
+        }
         Ok(DiskManager {
             db_file_name,
             log_file_name,
-            db_io: Mutex::new(DbIo { file: db, pages: HashMap::new(), free_slots: Vec::new(), num_slots: 0, page_capacity: DEFAULT_DB_IO_SIZE }),
+            db_io: Mutex::new(DbIo { file: db, pages: HashMap::new(), free_slots: Vec::new(), num_slots: 0, page_capacity }),
             log_io: Mutex::new(log_io),
             num_flushes: AtomicUsize::new(0),
             num_writes: AtomicUsize::new(0),

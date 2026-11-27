@@ -121,7 +121,9 @@ impl DiskScheduler {
         // @end
     }
 
-    /// Frees a page on the disk.
+    /// Frees a page on the disk, at once: it does not wait behind requests already scheduled. A write of the same page that is
+    /// still queued runs after the delete and brings the page back, so a caller that may have one in flight waits for its future
+    /// first.
     pub fn deallocate_page(&self, page_id: PageId) {
         // @begin 1b-04
         self.disk.delete_page(page_id)

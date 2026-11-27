@@ -1,7 +1,7 @@
 id = "r-01"
 title = "Bytes and positional file I/O"
 kind = "build"
-difficulty = "very-easy"
+difficulty = "easy"
 tests = ["stages_r::sr_01"]
 learn = ["turning a struct into bytes and back with explicit endianness", "reading and writing a file at an offset, with no seek and no &mut", "a read that returns fewer bytes than asked for"]
 concepts = []

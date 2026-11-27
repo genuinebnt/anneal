@@ -16,7 +16,7 @@ One worker serialises all the I/O. A real disk (an SSD especially) serves severa
 - `workers == 0` is a bug in the caller: it **panics**.
 - Dropping the scheduler finishes everything scheduled, stops every worker and joins them all, as for the single scheduler.
 
-The property the tests check: **the answers do not depend on the number of workers.** A random sequence of reads and writes, run through 1, 2, 3 or 4 workers, gives the same answers as a plain model. A separate test measures that eight 60 ms writes to different pages on four workers take much less than 480 ms.
+The property the tests check: **the answers do not depend on the number of workers.** A random sequence of reads and writes, run through 1, 2, 3 or 4 workers, gives the same answers as a plain model. A separate test measures that eight 100 ms writes to different pages on four workers take much less than 800 ms.
 
 ## Your freedom
 
@@ -45,7 +45,7 @@ How a page picks its worker, how queues and threads are stored, whether the new 
 ## Tests
 
 - Zero workers panics.
-- Eight 60 ms writes to different pages on four workers finish in much less than 480 ms.
+- Eight 100 ms writes to different pages on four workers finish in much less than 800 ms.
 - Dropping finishes everything scheduled (idle too).
 - For random sequences, any number of workers gives a model's answers.
 

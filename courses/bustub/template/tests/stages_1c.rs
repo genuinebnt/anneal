@@ -191,9 +191,10 @@ proptest! {
 
 #[test]
 fn s1c_01_removing_from_the_middle_by_handle_takes_constant_time() {
-    // 60 000 removals in scrambled order. Searching for the element would take about 60 000 x 30 000 steps and miss the limit.
-    within("removing 60 000 elements by handle", Duration::from_secs(10), || {
-        let n = 60_000;
+    // 500 000 removals in scrambled order. Searching for the element would take about 500 000 x 250 000 steps and miss the
+    // limit by far; handles make each removal a few steps.
+    within("removing 500 000 elements by handle", Duration::from_secs(10), || {
+        let n = 500_000;
         let mut list = IndexList::new();
         let handles: Vec<Handle> = (0..n).map(|i| list.push_back(i)).collect();
         let mut order: Vec<usize> = (0..n).collect();
@@ -455,10 +456,10 @@ proptest! {
 }
 
 #[test]
-fn s1c_02_every_operation_stays_fast_with_a_hundred_thousand_frames() {
-    // 300 000 operations on 100 000 frames. A design that searches for a frame costs about 100 000 steps per operation.
-    within("300 000 operations on a replacer of 100 000 frames", Duration::from_secs(10), || {
-        let n = 100_000;
+fn s1c_02_every_operation_stays_fast_with_four_hundred_thousand_frames() {
+    // 3 000 000 operations on 400 000 frames. A design that searches for a frame costs about 400 000 steps per operation.
+    within("3 000 000 operations on a replacer of 400 000 frames", Duration::from_secs(10), || {
+        let n = 400_000;
         let mut r = LruReplacer::new(n);
         for x in 0..n {
             r.unpin(f(x));
@@ -466,7 +467,7 @@ fn s1c_02_every_operation_stays_fast_with_a_hundred_thousand_frames() {
         assert_eq!(r.size(), n);
         let mut rng = Lcg(42);
         let start = Instant::now();
-        for _ in 0..300_000 {
+        for _ in 0..3_000_000 {
             let x = f(rng.next(n));
             match rng.next(3) {
                 0 => r.pin(x),
@@ -477,7 +478,7 @@ fn s1c_02_every_operation_stays_fast_with_a_hundred_thousand_frames() {
             }
         }
         assert!(r.size() <= n);
-        eprintln!("300 000 operations took {:?}", start.elapsed());
+        eprintln!("3 000 000 operations took {:?}", start.elapsed());
     });
 }
 
