@@ -25,7 +25,7 @@ Whether a statement is run through `execute_statements` once per statement or th
 
 **A struct that borrows.** `Session<'a>` holds `&'a BusTubInstance`; the lifetime says the session cannot outlive the database. Several sessions on one instance borrow it shared, which is why `BusTubInstance` uses interior mutability.
 
-**`matches!` on a nested result.** `matches!(outcome, Ok(true))` says "succeeded" without a three-armed `match`.
+**`matches!` on a nested result.** `matches!(reply, Ok(Some(_)))` is `true` for one shape of a `Result<Option<_>>` and `false` for the other two, without a three-armed `match`.
 
 **Abort on every exit.** There are several ways out of "run the statement": success, `Err`, `Ok(false)`. Put the cleanup in one place after the call instead of at each `return`.
 
