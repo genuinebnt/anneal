@@ -1,7 +1,7 @@
 **Where this fits.** Three rules, each tested for the plan it produces. The one property that makes an optimizer an optimizer and not a bug generator is **equivalence**: the rewritten plan returns the same rows as the plan it came from. This stage checks that for queries that use several rules at once (a join on an equality, a filter, an order and a limit), with every rule on, with BusTub's starter rules only, and against a plain Rust computation, plus BusTub's own SQL files that check plans with `+ensure:`.
 
 > [!CHECK] A rewrite passes all its plan-shape tests and still changes an answer on a table with NULLs and duplicate keys. Name two places in the three rules where that could happen, and the table you would build to expose each.
-> ||(1) The hash join: duplicate keys on both sides (each left row must meet every right match) and NULL keys (they must match nothing, not each other): a table with `NULL, NULL, 1, 1` on each side. (2) The index scan: it keeps the whole predicate only if you pass it on; a lookup combined with a second condition on another column on rows where the second fails, and a lookup on a key that was deleted; or top-N when the sort has ties.||
+> ||(1) The hash join: duplicate keys on both sides (each left row must meet every right match) and NULL keys (they must match nothing, not each other): a table with `NULL, NULL, 1, 1` on each side. (2) The index scan: it keeps the whole predicate only if you pass it on; a lookup combined with a second condition on another column on rows where the second fails, and a lookup on a key that was deleted; or top-N when the sort has ties. A rewrite must also respect types: the plain plan compares with `=`, which converts across types (`3 = '3'` is true), while a hash key or an index key compares values as they are, so a join on an INTEGER and a VARCHAR column, or `v1 = '2'` on an indexed INTEGER column, exposes a rule that ignores them.||
 >
 > - Which plan is the oracle: the unoptimised one, or a Rust vector?
 > - What is the smallest table that shows the difference?
@@ -42,7 +42,7 @@ Read the plan first (`explain (o)`), then the rows. If the plan has a `HashJoin`
 
 ### Starter rules need unique keys
 
-The nested index join (a starter rule, given) assumes the index holds one row per key, as a primary key does. The property gives the indexed table distinct keys for that reason.
+Indexes hold one row per non-NULL key, and creating one over a column with a repeated key fails. The property gives the indexed table distinct keys for that reason; the nested index join (a starter rule, given) relies on the same uniqueness.
 
 ## Performance
 

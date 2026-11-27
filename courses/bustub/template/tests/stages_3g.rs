@@ -472,6 +472,22 @@ fn s3g_03_several_keys_expressions_and_nulls() {
 }
 
 #[test]
+fn s3g_03_order_by_an_indexed_column_keeps_the_rows_whose_key_is_null() {
+    let db = new_db();
+    sql(&db, "create table t(a int, b int)");
+    sql(&db, "create index ta on t(a)");
+    sql(&db, "insert into t values (null, 1), (2, 2), (1, 3), (null, 4), (3, 5)");
+    let mut rows = sql(&db, "select * from t order by a");
+    assert_eq!(rows.len(), 5, "every row comes back, though the rows with a NULL key are not in the index: {rows:?}");
+    rows[..2].sort();
+    assert_eq!(rows, vec!["integer_null 1", "integer_null 4", "1 3", "2 2", "3 5"], "a NULL sorts first in ascending order");
+    sql(&db, "delete from t where b = 1 or b = 4");
+    let plan = sql(&db, "explain (o) select * from t order by a").join("\n");
+    assert!(plan.contains("IndexScan"), "once every row is indexed, the index gives the order\n{plan}");
+    assert_eq!(sql(&db, "select * from t order by a"), vec!["1 3", "2 2", "3 5"], "the index scan returns every live row in key order");
+}
+
+#[test]
 fn s3g_03_a_sort_bigger_than_the_buffer_pool() {
     let db = BusTubInstance::new(16);
     sql(&db, "create table t(a int, tag int)");

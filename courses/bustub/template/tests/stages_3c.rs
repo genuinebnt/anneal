@@ -552,17 +552,27 @@ fn s3c_04_a_new_index_is_filled_with_the_rows_the_table_already_has() {
 }
 
 #[test]
-fn s3c_04_deleted_rows_are_not_indexed_and_duplicate_keys_keep_the_first() {
+fn s3c_04_deleted_rows_are_not_indexed_and_two_live_rows_with_one_key_fail_the_index() {
     let bpm = bpm(50);
     let mut catalog = Catalog::new(&bpm);
     let schema = three_ints();
     let table = catalog.create_table("t", &schema).unwrap();
-    let rids: Vec<Rid> = [5, 6, 7, 5].iter().map(|&v| table.table.insert_tuple(&meta(false), &key(&schema, &[v, 0, 0])).unwrap()).collect();
+    let rids: Vec<Rid> = [5, 6, 7, 6].iter().map(|&v| table.table.insert_tuple(&meta(false), &key(&schema, &[v, 0, 0])).unwrap()).collect();
     table.table.update_tuple_meta(&meta(true), rids[1]).unwrap();
     let index = catalog.create_index("i", "t", vec![0], false).unwrap().unwrap();
-    assert_eq!(index.index.scan_all().len(), 2, "5 (once) and 7");
-    assert_eq!(index.index.scan_key(&key(&index.key_schema, &[5])), vec![rids[0]], "the later row with key 5 was ignored");
-    assert!(index.index.scan_key(&key(&index.key_schema, &[6])).is_empty(), "deleted rows are not indexed and duplicate keys keep the first: expected `index.index.scan_key(&key(&index.key_schema, &[6])).is_empty()`");
+    assert_eq!(index.index.scan_all(), vec![rids[0], rids[3], rids[2]], "every live row has one entry; the deleted row with key 6 has none");
+    table.table.insert_tuple(&meta(false), &key(&schema, &[7, 1, 1])).unwrap();
+    let err = catalog.create_index("j", "t", vec![0], false).err().expect("two live rows with the key 7 make creating an index on it fail");
+    assert!(err.message.contains("duplicate key value violates unique constraint \"j\""), "the error names the unique violation and the index: {err}");
+    assert!(catalog.get_index("j", "t").is_none(), "an index that failed to fill is not in the catalog");
+    let mut with_nulls = vec![];
+    let u = catalog.create_table("u", &schema).unwrap();
+    for _ in 0..2 {
+        let values = [Value::null(Integer), Value::integer(0), Value::integer(0)];
+        with_nulls.push(u.table.insert_tuple(&meta(false), &Tuple::new(&values, &schema)).unwrap());
+    }
+    let index = catalog.create_index("i", "u", vec![0], false).unwrap().expect("two rows with a NULL key do not share a key: NULL equals nothing");
+    assert!(index.index.scan_all().is_empty(), "a row whose key has a NULL is not indexed");
 }
 
 #[test]
@@ -747,7 +757,7 @@ proptest! {
     }
 
     /// The catalog hands out oids in creation order, refuses a name that is in use (names are case sensitive), and finds every table by name
-    /// and by oid; an index created on a table with rows holds exactly the live rows' keys.
+    /// and by oid; an index created on a table with rows holds exactly the live rows' keys, or fails if two live rows share a key.
     #[test]
     fn s3c_04_a_catalog_behaves_like_maps(names in prop::collection::vec("[a-cA-C]{1,2}", 1..25), rows in prop::collection::vec((-30i32..30, any::<bool>()), 0..50)) {
         let bpm = bpm(40);
@@ -780,17 +790,15 @@ proptest! {
             let rid = t.table.insert_tuple(&meta(false), &key(&schema, &[*v, 0, 0])).unwrap();
             if *deleted { t.table.update_tuple_meta(&meta(true), rid).unwrap(); } else { live.entry(*v).or_insert(rid); }
         }
-        // a deleted row is not indexed; of several rows with the same key the first live one is
-        let first_live: BTreeMap<i32, Rid> = {
-            let mut m = BTreeMap::new();
-            for (meta_, tuple) in t.table.make_iterator() {
-                if !meta_.is_deleted { m.entry(tuple.get_value(&schema, 0).as_i64().unwrap() as i32).or_insert(tuple.get_rid()); }
-            }
-            m
-        };
-        let index = catalog.create_index("idx", &names[0], vec![0], false).unwrap().unwrap();
-        prop_assert_eq!(index.index.scan_all(), first_live.values().copied().collect::<Vec<_>>());
-        prop_assert_eq!(live.len(), first_live.len());
+        // a deleted row is not indexed; two live rows with one key make the index fail
+        let live_keys: Vec<i32> = rows.iter().filter(|(_, deleted)| !deleted).map(|(v, _)| *v).collect();
+        let created = catalog.create_index("idx", &names[0], vec![0], false);
+        if live_keys.len() == live.len() {
+            prop_assert_eq!(created.unwrap().unwrap().index.scan_all(), live.values().copied().collect::<Vec<_>>(), "every live row has its entry, in key order");
+        } else {
+            prop_assert!(created.is_err(), "live rows share a key: the index cannot be unique");
+            prop_assert!(catalog.get_index("idx", &names[0]).is_none(), "a failed index is not in the catalog");
+        }
     }
 }
 

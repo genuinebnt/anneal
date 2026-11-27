@@ -3,7 +3,12 @@
 //!
 //! An update is a **delete followed by an insert**: the old tuple is marked deleted and the new one is stored under a new rid (it may have another
 //! size), and the table's indexes follow.
+//!
+//! Every index of the table is unique over non-NULL keys, judged on the rows as they are once the whole statement has run: `SET k = k + 1`
+//! over the keys 1, 2, 3 succeeds. A statement that would leave two live rows with the same non-NULL key in an index fails with a unique
+//! violation and changes nothing.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::abstract_executor::{Executor, ExecutorBox, BUSTUB_BATCH_SIZE};
@@ -17,6 +22,7 @@ use crate::execution::execution_common::{insert_mvcc, modify_tuple};
 use crate::execution::executor_context::ExecutorContext;
 use crate::execution::expressions::abstract_expression::ExprRef;
 use crate::execution::plans::plan_node::{PlanKind, PlanRef};
+use crate::storage::index::index::{key_has_null, unique_violation};
 use crate::storage::table::tuple::{Tuple, TupleMeta};
 use crate::types::value::Value;
 
@@ -53,6 +59,32 @@ impl<'e> UpdateExecutor<'e> {
         // @end
     }
 
+    /// Fails with a unique violation if, after replacing each old tuple at `changes[i].0` by `changes[i].1`, two live rows would have the
+    /// same non-NULL key in an index of the table: two new tuples with one key, or a new tuple with the key of a row the statement does
+    /// not change. Fails with a not-null violation if a new primary key has a NULL ([`IndexInfo::check_primary_key`]).
+    fn check_unique(&self, changes: &[(Rid, Tuple)]) -> Result<()> {
+        // @begin 3e-03
+        let changed: HashSet<Rid> = changes.iter().map(|(rid, _)| *rid).collect();
+        for index in &self.indexes {
+            let mut new_keys = HashSet::new();
+            for (_, new) in changes {
+                let key = new.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
+                index.check_primary_key(&key)?;
+                if key_has_null(&key, &index.key_schema) {
+                    continue;
+                }
+                // the old keys of the changed rows are about to go: only an unchanged row's entry is a conflict
+                let held_by_unchanged_row = index.index.scan_key(&key).iter().any(|rid| !changed.contains(rid));
+                if held_by_unchanged_row || !new_keys.insert(key.data().to_vec()) {
+                    return Err(unique_violation(&index.name));
+                }
+            }
+        }
+        Ok(())
+        //~ todo!("3e-03: the not-null error of IndexInfo::check_primary_key for a NULL primary key; Err(unique_violation(index name)) if the new tuples would give two live rows one non-NULL key in some index; Ok otherwise")
+        // @end
+    }
+
     /// Does any change give a tuple another primary key? Then the statement is a delete and an insert, not an in-place update.
     fn changes_primary_key(&self, changes: &[(Rid, Tuple)]) -> Result<bool> {
         let Some(pk) = self.indexes.iter().find(|i| i.is_primary_key) else { return Ok(false) };
@@ -68,9 +100,14 @@ impl<'e> UpdateExecutor<'e> {
     }
 
     /// An update that changes a primary key: first delete every old tuple, then insert every new one, so that `SET k = k + 1` can reuse
-    /// the tombstones it has just made.
+    /// the tombstones it has just made. A new key with a NULL fails with a not-null violation before anything is written.
     fn update_by_delete_and_insert(&self, txn: &Arc<Transaction>, txn_mgr: &TransactionManager, changes: &[(Rid, Tuple)]) -> Result<()> {
         // @begin 4b-06
+        if let Some(pk) = self.indexes.iter().find(|i| i.is_primary_key) {
+            for (_, new) in changes {
+                pk.check_primary_key(&new.key_from_tuple(&self.table_info.schema, &pk.key_schema, pk.index.metadata().get_key_attrs()))?;
+            }
+        }
         for (rid, _) in changes {
             modify_tuple(txn, txn_mgr, self.table_info, *rid, None)?;
         }
@@ -78,7 +115,7 @@ impl<'e> UpdateExecutor<'e> {
             insert_mvcc(txn, txn_mgr, self.table_info, &self.indexes, new)?;
         }
         Ok(())
-        //~ todo!("4b-06: modify_tuple(.., None) for every rid first; then insert_mvcc for every new tuple")
+        //~ todo!("4b-06: a NULL new primary key fails (IndexInfo::check_primary_key) before anything is written; otherwise every old tuple is deleted (modify_tuple) before any new one is inserted (insert_mvcc)")
         // @end
     }
 }
@@ -126,31 +163,37 @@ impl Executor for UpdateExecutor<'_> {
         if self.done {
             return Ok(false);
         }
+        // read everything first: the uniqueness of the new keys is judged on the whole statement
         let (mut child_tuples, mut child_rids) = (vec![], vec![]);
-        let mut count = 0;
+        let mut changes: Vec<(Rid, Tuple)> = vec![];
+        let mut old_tuples: Vec<Tuple> = vec![];
         while self.child.next(&mut child_tuples, &mut child_rids, BUSTUB_BATCH_SIZE)? {
             for (old, old_rid) in child_tuples.iter().zip(&child_rids) {
-                let new = self.make_new_tuple(old)?;
-                // delete the old tuple and its index entries ...
-                self.table_info.table.update_tuple_meta(&TupleMeta { ts: 0, is_deleted: true }, *old_rid)?;
-                for index in &self.indexes {
-                    let key = old.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
-                    index.index.delete_entry(&key);
-                }
-                // ... and insert the new one
-                let new_rid = self.table_info.table.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, &new)?;
-                for index in &self.indexes {
-                    let key = new.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
-                    index.index.insert_entry(&key, new_rid);
-                }
-                count += 1;
+                changes.push((*old_rid, self.make_new_tuple(old)?));
+                old_tuples.push(old.clone());
+            }
+        }
+        self.check_unique(&changes)?;
+        // every old tuple and its index entries go before any new key arrives, so that keys can move between rows
+        for ((old_rid, _), old) in changes.iter().zip(&old_tuples) {
+            self.table_info.table.update_tuple_meta(&TupleMeta { ts: 0, is_deleted: true }, *old_rid)?;
+            for index in &self.indexes {
+                let key = old.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
+                index.index.delete_entry(&key);
+            }
+        }
+        for (_, new) in &changes {
+            let new_rid = self.table_info.table.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, new)?;
+            for index in &self.indexes {
+                let key = new.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
+                index.index.insert_entry(&key, new_rid);
             }
         }
         self.done = true;
-        tuple_batch.push(Tuple::new(&[Value::integer(count)], &self.plan.output_schema));
+        tuple_batch.push(Tuple::new(&[Value::integer(changes.len() as i32)], &self.plan.output_schema));
         rid_batch.push(Rid::default());
         Ok(true)
-        //~ todo!("3e-03: once: every tuple of the child is replaced by its new version (the old marked deleted, the new stored, the indexes following); answers with how many, then false")
+        //~ todo!("3e-03: once: replaces every tuple of the child by its new version (the old marked deleted, the new stored, every index following), or, if the new keys would break uniqueness (check_unique), fails and changes nothing; answers with how many, then false")
         // @end
     }
 

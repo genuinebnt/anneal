@@ -9,7 +9,8 @@ use super::schema::Schema;
 use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::storage::index::generic_key::GenericKey;
-use crate::storage::index::index::{BPlusTreeIndex, Index, IndexMetadata, IndexType};
+use crate::storage::index::index::{key_has_null, not_null_violation, unique_violation, BPlusTreeIndex, Index, IndexMetadata, IndexType};
+use crate::storage::table::tuple::Tuple;
 use crate::storage::table::table_heap::TableHeap;
 
 pub type TableOid = u32;
@@ -35,6 +36,20 @@ pub struct IndexInfo<'a> {
     pub key_size: usize,
     pub is_primary_key: bool,
     pub index_type: IndexType,
+}
+
+impl IndexInfo<'_> {
+    /// Fails with a not-null violation if this is a primary-key index and `key` (laid out with the key schema) has a NULL: a primary
+    /// key identifies its row, and a NULL identifies nothing. Any key passes an index that is not a primary key.
+    pub fn check_primary_key(&self, key: &Tuple) -> Result<()> {
+        if !self.is_primary_key {
+            return Ok(());
+        }
+        match (0..self.key_schema.column_count()).find(|i| key.get_value(&self.key_schema, *i).is_null()) {
+            Some(i) => Err(not_null_violation(self.key_schema.column(i).name(), &self.table_name)),
+            None => Ok(()),
+        }
+    }
 }
 
 pub struct Catalog<'a> {
@@ -110,9 +125,15 @@ impl<'a> Catalog<'a> {
         // @end
     }
 
-    /// Creates an index on the columns `key_attrs` of `table_name`, fills it with the table's existing tuples and returns it. `Ok(None)` if
-    /// the table does not exist or the table already has an index of that name; an error if the key is not made of INTEGER columns or is
-    /// bigger than 64 bytes. Tuples whose key is already in the index are ignored (the tree keeps unique keys).
+    /// Creates an index on the columns `key_attrs` of `table_name`, fills it with the table's live tuples and returns it. `Ok(None)` if
+    /// the table does not exist or the table already has an index of that name.
+    ///
+    /// Every live tuple whose key has no NULL gets exactly one entry; a tuple whose key has a NULL gets none.
+    ///
+    /// # Errors
+    ///
+    /// The key is not made of INTEGER columns or is bigger than 64 bytes, or two live tuples have the same non-NULL key (a unique
+    /// violation). No index is created then.
     pub fn create_index(&mut self, index_name: &str, table_name: &str, key_attrs: Vec<u32>, is_primary_key: bool) -> Result<Option<Arc<IndexInfo<'a>>>> {
         // @begin 3c-04
         let Some(table) = self.get_table(table_name) else { return Ok(None) };
@@ -140,7 +161,10 @@ impl<'a> Catalog<'a> {
         // fill it with what the table already holds (deleted tuples are not indexed)
         for (meta, tuple) in table.table.make_iterator() {
             if !meta.is_deleted {
-                index.insert_entry(&tuple.key_from_tuple(&table.schema, &key_schema, &key_attrs), tuple.get_rid());
+                let key = tuple.key_from_tuple(&table.schema, &key_schema, &key_attrs);
+                if !index.insert_entry(&key, tuple.get_rid()) && !key_has_null(&key, &key_schema) {
+                    return Err(unique_violation(index_name)); // a second live tuple with this key
+                }
             }
         }
         let index_oid = self.next_index_oid;
@@ -158,7 +182,7 @@ impl<'a> Catalog<'a> {
         self.indexes.insert(index_oid, info.clone());
         self.index_names.get_mut(table_name).unwrap().insert(index_name.to_owned(), index_oid);
         Ok(Some(info))
-        //~ todo!("3c-04: Ok(None) for a missing table or a taken name; an error unless the key is 1 to 64 bytes of INTEGER columns; the index holds every live tuple")
+        //~ todo!("3c-04: Ok(None) for a missing table or a taken name; an error unless the key is 1 to 64 bytes of INTEGER columns, or if two live tuples share a non-NULL key; the index holds every live tuple whose key has no NULL")
         // @end
     }
 

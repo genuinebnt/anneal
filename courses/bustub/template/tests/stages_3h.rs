@@ -193,6 +193,25 @@ fn s3h_01_the_results_are_the_same_as_with_nested_loops() {
 }
 
 #[test]
+fn s3h_01_keys_of_different_types_keep_the_nested_loop() {
+    let db = new_db();
+    sql(&db, "create table n(a int)");
+    sql(&db, "create table s(t varchar(10))");
+    sql(&db, "insert into n values (1), (2), (3)");
+    sql(&db, "insert into s values ('1'), ('2'), ('7')");
+    let q = "select * from n join s on n.a = s.t";
+    let p = plan(&db, q);
+    assert!(p.contains("NestedLoopJoin") && !p.contains("HashJoin"), "an INTEGER key and a VARCHAR key are equal only after a cast, which a hash key does not make\n{p}");
+    let (optimized, plain) = both_ways(&db, q);
+    assert_eq!(optimized, vec!["1 1", "2 2"], "the join compares with `=`, which casts the text to a number");
+    assert_eq!(optimized, plain, "the optimised plan returns the rows of the nested loop join");
+    assert!(Optimizer::hash_alike(TypeId::Integer, TypeId::BigInt), "integers of any width hash alike");
+    assert!(Optimizer::hash_alike(TypeId::Varchar, TypeId::Varchar), "a type hashes like itself");
+    assert!(!Optimizer::hash_alike(TypeId::Integer, TypeId::Varchar), "an INTEGER and a VARCHAR do not hash alike");
+    assert!(!Optimizer::hash_alike(TypeId::Integer, TypeId::Decimal), "an INTEGER and a DECIMAL do not hash alike");
+}
+
+#[test]
 fn s3h_01_a_three_way_join_becomes_two_hash_joins() {
     let db = join_db();
     let q = "select * from a join b on a.x = b.p join c on c.r = a.x";
@@ -306,8 +325,8 @@ fn s3h_03_an_or_over_different_columns_or_with_another_condition_is_not_one() {
 }
 
 #[test]
-fn s3h_03_the_constant_may_be_negative_or_a_string_expression_is_refused() {
-    assert_eq!(texts(&Optimizer::extract_point_lookup(&eq(col(0, 0), constant(-5))).unwrap().1), vec!["-5"], "he constant may be negative or a string expression is refused");
+fn s3h_03_the_constant_may_be_negative_and_a_computed_key_is_refused() {
+    assert_eq!(texts(&Optimizer::extract_point_lookup(&eq(col(0, 0), constant(-5))).unwrap().1), vec!["-5"], "the constant may be negative");
     let arithmetic = eq(col(0, 0), cmp(constant(1), constant(2), ComparisonType::Equal));
     assert!(Optimizer::extract_point_lookup(&arithmetic).is_none(), "the key must be a constant expression node, not a computation");
 }
@@ -357,6 +376,21 @@ fn s3h_03_another_condition_is_checked_on_what_the_index_finds() {
     assert_eq!(sql(&db, "select * from t where v1 = 5 and v3 = 445"), vec!["5 10 445"], "nother condition is checked on what the index finds");
     assert_eq!(sql(&db, "select * from t where v1 = 5 and v3 = 1").len(), 0, "the whole predicate still applies");
     assert_eq!(sql(&db, "select * from t where v3 = 645 and v1 = 3"), vec!["3 30 645"], "the indexed conjunct may be second");
+}
+
+#[test]
+fn s3h_03_a_key_of_another_type_gives_the_rows_of_a_sequential_scan() {
+    let db = index_db();
+    sql(&db, "create table u(v1 int, v2 int, v3 int)");
+    sql(&db, "insert into u select * from t");
+    for condition in ["v1 = '2'", "'3' = v1", "v1 = 3000000000", "v1 = '2x'", "v1 = ' 2'", "v1 = 2.0", "v1 = 2.5", "v1 = '4' or v1 = 5"] {
+        let indexed = sorted(sql(&db, &format!("select * from t where {condition}")));
+        let scanned = sorted(sql(&db, &format!("select * from u where {condition}")));
+        assert_eq!(indexed, scanned, "where {condition}: the indexed table returns the rows of a sequential scan");
+    }
+    assert!(plan(&db, "select * from t where v1 = '2'").contains("IndexScan"), "'2' converts to the INTEGER 2 without loss: the index can be used");
+    assert!(plan(&db, "select * from t where v1 = 3000000000").contains("SeqScan"), "no INTEGER equals 3000000000: the scan stays sequential");
+    assert!(plan(&db, "select * from t where v1 = '2x'").contains("SeqScan"), "'2x' is not the text of an INTEGER: the scan stays sequential");
 }
 
 #[test]
@@ -483,13 +517,17 @@ proptest! {
         conjuncts in prop::collection::vec(conjunct_strategy(), 1..4),
         left in any::<bool>(),
         where_form in any::<bool>(),
+        text_key in any::<bool>(),
     ) {
         let db = new_db();
         sql(&db, "create table a(c0 int, c1 int, c2 int)");
-        sql(&db, "create table b(c0 int, c1 int, c2 int)");
-        for (name, rows) in [("a", &a), ("b", &b)] {
-            if !rows.is_empty() { sql(&db, &format!("insert into {name} values {}", rows.iter().map(model::values).collect::<Vec<_>>().join(", "))); }
-        }
+        // with `text_key`, b.c0 holds the same numbers as text: `a.cX = b.c0` is true for 3 and '3', but the two do not hash alike
+        sql(&db, if text_key { "create table b(c0 varchar(8), c1 int, c2 int)" } else { "create table b(c0 int, c1 int, c2 int)" });
+        // (a NULL literal is an INTEGER, which a VARCHAR column refuses: the text column gets 0 instead)
+        let b: Vec<model::Row> = if text_key { b.iter().map(|r| vec![r[0].or(Some(0)), r[1], r[2]]).collect() } else { b };
+        let quoted = |r: &model::Row| if text_key { model::values(r).replacen('(', "('", 1).replacen(',', "',", 1) } else { model::values(r) };
+        if !a.is_empty() { sql(&db, &format!("insert into a values {}", a.iter().map(model::values).collect::<Vec<_>>().join(", "))); }
+        if !b.is_empty() { sql(&db, &format!("insert into b values {}", b.iter().map(quoted).collect::<Vec<_>>().join(", "))); }
         let text = |c: &Conjunct| match c {
             Conjunct::CrossEq { left, right, swapped: false } => format!("a.c{left} = b.c{right}"),
             Conjunct::CrossEq { left, right, swapped: true } => format!("b.c{right} = a.c{left}"),
@@ -515,15 +553,22 @@ proptest! {
         let _ = columns;
         let p = plan(&db, &query);
         let all_keys = conjuncts.iter().all(Conjunct::is_key);
+        // an equality between an INTEGER and the text column is never a hash-join key
+        let mixed_types = text_key && conjuncts.iter().any(|c| matches!(c, Conjunct::CrossEq { right: 0, .. }));
         // Module 3j moves a condition on one table out of a comma join's WHERE clause before the join rules run, which can leave only
         // cross equalities: then a hash join is right, and so is the nested loop of a course that has not reached 3j. Either plan must give the rows.
         let movable = where_form && !left && conjuncts.iter().any(Conjunct::is_key) && conjuncts.iter().all(|c| c.is_key() || matches!(c, Conjunct::EqConst { .. } | Conjunct::SameSide { .. }));
-        if !movable {
+        if mixed_types {
+            prop_assert!(!p.contains("HashJoin"), "keys of different types keep the nested loop: {}\n{}", query, p);
+        } else if !movable {
             prop_assert_eq!(p.contains("HashJoin"), all_keys, "{}\n{}", query, p);
             prop_assert_eq!(!p.contains("NestedLoopJoin"), all_keys, "{}\n{}", query, p);
         }
         let want = model::naive_join(&a, &b, 3, left, holds);
+        // a left join pads the text column with `varlen_null`
+        let as_ints = |rows: Vec<String>| sorted(rows.into_iter().map(|r| r.replace("varlen_null", "integer_null")).collect());
         let (optimized, plain) = both_ways(&db, &query);
+        let (optimized, plain) = (as_ints(optimized), as_ints(plain));
         prop_assert_eq!(optimized, want.clone(), "with the rule: {}", query);
         prop_assert_eq!(plain, want, "without it: {}", query);
     }
@@ -612,7 +657,7 @@ proptest! {
         let db = new_db();
         sql(&db, "create table a(x int, y int)");
         sql(&db, "create table b(p int, q int)");
-        // the index holds one row per key (it is a primary-key style index), so an indexed table has distinct keys
+        // indexes are unique over non-NULL keys, so an indexed table has distinct keys
         let b: Vec<(Option<i64>, Option<i64>)> = if indexed {
             let mut seen = std::collections::HashSet::new();
             b.iter().copied().filter(|(p, _)| p.is_none() || seen.insert(*p)).collect()

@@ -1,12 +1,14 @@
 Tables with a primary key have an index that must stay consistent with versions. Entries are **never removed** by a delete: a deleted tuple is a tombstone, and the next insert of its key finds the entry and reuses the rid. The index also arbitrates races: two transactions that insert the same new key at once, one of them must fail. And an index scan must hand each rid to the same version-reading code as the sequential scan.
 
+Only the primary-key index follows transactional writes: an in-place update can change any other indexed column without that index knowing, so inside a transaction the optimizer (given) reads no other index. And a primary key has no NULL: a NULL key could never be found again, so it is refused before anything is written, as a constraint error, not a conflict.
+
 Changing a primary key in place would break the rule of Part 1: a rid belongs to one key for life. So an update that changes the key columns is executed as **a delete of the old tuple and an insert of the new one**. The order matters: `UPDATE t SET k = k + 1` over keys 1 to 4 deletes 1, 2, 3, 4 and inserts 2, 3, 4, 5. If each tuple were deleted and inserted in turn, inserting 2 would hit the live tuple with key 2 and fail. Do all the deletes first.
 
 ## The task
 
 **Part 1.** In `src/execution/execution_common.rs`, `insert_mvcc`, the region marked `4b-06` (before the `4b-01` fallback): if `indexes` contains a primary-key index (`is_primary_key`):
 
-- the key is `tuple.key_from_tuple(&table.schema, &pk.key_schema, pk.index.metadata().get_key_attrs())`;
+- the key is `tuple.key_from_tuple(&table.schema, &pk.key_schema, pk.index.metadata().get_key_attrs())`; a key with a NULL fails with the error of `pk.check_primary_key(&key)` before anything is written (the transaction is not tainted);
 - `pk.index.scan_key(&key)`: if an entry exists, look at the tuple at its rid (`get_tuple_and_undo_link`). **Live** (`!is_deleted`): duplicate key, fail with `write_write_conflict(txn)`. **Deleted**: reuse the rid, `modify_tuple(txn, txn_mgr, table, rid, Some(tuple))` (stage 2/3's path);
 - no entry: insert the tuple (temporary timestamp), add it to the write set, then `insert_entry(&key, rid)`. If that returns `false` another transaction got the key between your lookup and now: mark your new tuple deleted (`update_tuple_meta`) and fail the same way.
 
@@ -14,10 +16,11 @@ In `src/execution/executors/index_scan_executor.rs`, the region marked `4b-06` a
 
 **Part 2.** In `src/execution/executors/update_executor.rs`, `update_by_delete_and_insert(txn, txn_mgr, changes)` (region `4b-06`; `changes` is the list of `(rid, new tuple)` from stage 3, and `changes_primary_key` already decided this path is needed):
 
-1. for every change, `modify_tuple(txn, txn_mgr, table, rid, None)`: delete the old tuple (its index entry stays);
-2. for every change, `insert_mvcc(txn, txn_mgr, table, &self.indexes, new)`: insert the new tuple. A new key that equals a key just deleted finds the tombstone and reuses its rid; a key nobody had gets a new tuple and entry.
+1. a new key with a NULL fails (`check_primary_key`) before any change is made;
+2. for every change, `modify_tuple(txn, txn_mgr, table, rid, None)`: delete the old tuple (its index entry stays);
+3. for every change, `insert_mvcc(txn, txn_mgr, table, &self.indexes, new)`: insert the new tuple. A new key that equals a key just deleted finds the tombstone and reuses its rid; a key nobody had gets a new tuple and entry.
 
-The tests: exact scenarios (a duplicate primary key fails and taints; a key committed by somebody else is a duplicate too; a deleted key is reused without a second tuple; index scans see the version of their snapshot; aborting an insert keeps the entry and the next insert reuses it; delete then insert in one transaction reuses the tuple; updating the key moves the row; shifting every key reuses the tombstones it just made; older snapshots still see the old keys; a non-key update stays in place; updating a key onto a live key fails), and a property: **transactions one after another on a table with a primary key**, with inserts, deletes, value updates and key moves, committed or aborted, against a `BTreeMap`: every duplicate fails and taints, every other statement succeeds, the table and every point lookup equal the map after each transaction, every earlier snapshot still reads its state, and the heap never holds more tuples than there are different keys.
+The tests: exact scenarios (a duplicate primary key fails and taints; a key committed by somebody else is a duplicate too; a deleted key is reused without a second tuple; index scans see the version of their snapshot; aborting an insert keeps the entry and the next insert reuses it; delete then insert in one transaction reuses the tuple; updating the key moves the row; shifting every key reuses the tombstones it just made; older snapshots still see the old keys; a non-key update stays in place; updating a key onto a live key fails; a NULL primary key is refused before anything is written; a lookup on another index inside a transaction finds the rows written in transactions), and a property: **transactions one after another on a table with a primary key**, with inserts, deletes, value updates and key moves, committed or aborted, against a `BTreeMap`: every duplicate fails and taints, every other statement succeeds, the table and every point lookup equal the map after each transaction, every earlier snapshot still reads its state, and the heap never holds more tuples than there are different keys.
 
 ## Your freedom
 
@@ -73,6 +76,7 @@ for (_, new) in changes { insert_mvcc(txn, txn_mgr, self.table_info, &self.index
 ## Tests
 
 - Duplicate keys, reuse, snapshots through the index, aborts, key moves, shifts, in-place non-key updates.
+- A NULL primary key is refused without a conflict; other indexes are not read inside a transaction.
 - Property: a primary-key table against a `BTreeMap` with commits and aborts, and the tuple-count bound.
 
 ## Hints
