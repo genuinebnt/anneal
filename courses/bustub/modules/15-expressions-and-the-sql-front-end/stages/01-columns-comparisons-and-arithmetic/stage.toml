@@ -1,0 +1,8 @@
+id = "3d-01"
+title = "Columns, comparisons and arithmetic"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_3d::s3d_01"]
+learn = ["an expression as a tree evaluated against a row", "a trait object behind Arc: BusTub's virtual base class", "two inputs: the left and the right side of a join", "answers that are true, false or unknown", "checked arithmetic that reports overflow, and NULL in, NULL out"]
+concepts = ["expression-trees"]
+concepts_optional = ["the-sql-pipeline", "sql-types-and-three-valued-logic", "overflow-and-checked-arithmetic", "trait-objects-and-the-disk-seam", "errors-as-values-with-result", "designing-error-types", "enums-with-data-and-match", "structs-and-accessors", "generics-and-static-dispatch", "model-based-testing", "errors-3d"]

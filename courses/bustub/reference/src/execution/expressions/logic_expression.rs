@@ -52,7 +52,7 @@ impl LogicExpression {
 
     /// The truth table. FALSE AND anything is FALSE and TRUE OR anything is TRUE, even when the other side is NULL.
     fn perform_computation(&self, lhs: &Value, rhs: &Value) -> CmpBool {
-        // @begin 3d-03
+        // @begin 3d-02
         let (l, r) = (Self::as_cmp_bool(lhs), Self::as_cmp_bool(rhs));
         match self.logic_type {
             LogicType::And => {
@@ -74,27 +74,27 @@ impl LogicExpression {
                 }
             }
         }
-        //~ todo!("3d-03: AND: FALSE if either side is FALSE, TRUE if both are TRUE, else NULL. OR: TRUE if either side is TRUE, FALSE if both are FALSE, else NULL")
+        //~ todo!("3d-02: AND: FALSE if either side is FALSE, TRUE if both are TRUE, else NULL. OR: TRUE if either side is TRUE, FALSE if both are FALSE, else NULL")
         // @end
     }
 }
 
 impl Expression for LogicExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        // @begin 3d-03
+        // @begin 3d-02
         let lhs = self.children[0].evaluate(tuple, schema)?;
         let rhs = self.children[1].evaluate(tuple, schema)?;
         Ok(cmp_to_value(self.perform_computation(&lhs, &rhs)))
-        //~ todo!("3d-03: evaluates both sides and answers with the truth table's result as a BOOLEAN")
+        //~ todo!("3d-02: evaluates both sides and answers with the truth table's result as a BOOLEAN")
         // @end
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {
-        // @begin 3d-03
+        // @begin 3d-02
         let lhs = self.children[0].evaluate_join(left_tuple, left_schema, right_tuple, right_schema)?;
         let rhs = self.children[1].evaluate_join(left_tuple, left_schema, right_tuple, right_schema)?;
         Ok(cmp_to_value(self.perform_computation(&lhs, &rhs)))
-        //~ todo!("3d-03: the same with evaluate_join")
+        //~ todo!("3d-02: the same with evaluate_join")
         // @end
     }
 

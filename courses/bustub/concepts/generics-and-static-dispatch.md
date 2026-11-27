@@ -117,7 +117,7 @@ fn boxed_closures_are_dynamic_dispatch_on_a_function_type() {
 
 ### In the exercises
 
-- **3d-01, 3d-02:** `Arc<dyn Expression>` trees and the downcast to inspect them.
+- **3d-01:** `Arc<dyn Expression>` trees and the downcast to inspect them.
 - **3e-01:** `Box<dyn Executor>` children pulled in batches.
 - **1b:** the disk seam as a trait object.
 - **0b-01:** a boxed comparison closure in the skip list.

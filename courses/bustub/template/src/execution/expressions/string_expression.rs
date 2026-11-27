@@ -44,12 +44,12 @@ impl StringExpression {
 
     /// The lower- or upper-case form of `val`.
     pub fn compute(&self, val: &str) -> String {
-        todo!("3d-03: lower case or upper case, as the expression asks")
+        todo!("3d-02: lower case or upper case, as the expression asks")
     }
 
     /// The transformed string as a VARCHAR value; the VARCHAR NULL stays NULL.
     fn result(&self, val: &Value) -> Value {
-        todo!("3d-03: the transformed string as a VARCHAR value; the VARCHAR NULL stays NULL")
+        todo!("3d-02: the transformed string as a VARCHAR value; the VARCHAR NULL stays NULL")
     }
 }
 

@@ -59,17 +59,17 @@ impl ComparisonExpression {
 
     /// The three-valued result of `lhs <op> rhs`; a NULL operand gives `Null`.
     fn perform_comparison(&self, lhs: &Value, rhs: &Value) -> Result<CmpBool> {
-        todo!("3d-02: the Value comparison for this expression's operator")
+        todo!("3d-01: the Value comparison for this expression's operator")
     }
 }
 
 impl Expression for ComparisonExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        todo!("3d-02: evaluates both children and compares them; NULL if either side is NULL")
+        todo!("3d-01: evaluates both children and compares them; NULL if either side is NULL")
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {
-        todo!("3d-02: the same, with evaluate_join on the children")
+        todo!("3d-01: the same, with evaluate_join on the children")
     }
 
     fn children(&self) -> &[ExprRef] {

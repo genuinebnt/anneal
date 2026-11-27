@@ -59,7 +59,7 @@ impl ComparisonExpression {
 
     /// The three-valued result of `lhs <op> rhs`; a NULL operand gives `Null`.
     fn perform_comparison(&self, lhs: &Value, rhs: &Value) -> Result<CmpBool> {
-        // @begin 3d-02
+        // @begin 3d-01
         match self.comp_type {
             ComparisonType::Equal => lhs.compare_equals(rhs),
             ComparisonType::NotEqual => lhs.compare_not_equals(rhs),
@@ -68,27 +68,27 @@ impl ComparisonExpression {
             ComparisonType::GreaterThan => lhs.compare_greater_than(rhs),
             ComparisonType::GreaterThanOrEqual => lhs.compare_greater_than_equals(rhs),
         }
-        //~ todo!("3d-02: the Value comparison for this expression's operator")
+        //~ todo!("3d-01: the Value comparison for this expression's operator")
         // @end
     }
 }
 
 impl Expression for ComparisonExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        // @begin 3d-02
+        // @begin 3d-01
         let lhs = self.children[0].evaluate(tuple, schema)?;
         let rhs = self.children[1].evaluate(tuple, schema)?;
         Ok(cmp_to_value(self.perform_comparison(&lhs, &rhs)?))
-        //~ todo!("3d-02: evaluates both children and compares them; NULL if either side is NULL")
+        //~ todo!("3d-01: evaluates both children and compares them; NULL if either side is NULL")
         // @end
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {
-        // @begin 3d-02
+        // @begin 3d-01
         let lhs = self.children[0].evaluate_join(left_tuple, left_schema, right_tuple, right_schema)?;
         let rhs = self.children[1].evaluate_join(left_tuple, left_schema, right_tuple, right_schema)?;
         Ok(cmp_to_value(self.perform_comparison(&lhs, &rhs)?))
-        //~ todo!("3d-02: the same, with evaluate_join on the children")
+        //~ todo!("3d-01: the same, with evaluate_join on the children")
         // @end
     }
 

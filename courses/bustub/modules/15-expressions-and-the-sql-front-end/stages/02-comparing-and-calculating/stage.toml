@@ -1,8 +1,0 @@
-id = "3d-02"
-title = "Comparing and calculating"
-kind = "build"
-difficulty = "medium"
-tests = ["stages_3d::s3d_02"]
-learn = ["answers that are true, false or unknown", "checked arithmetic that reports overflow", "NULL in, NULL out", "checking the children's types when the node is built"]
-concepts = ["expression-trees"]
-concepts_optional = ["sql-types-and-three-valued-logic", "overflow-and-checked-arithmetic", "errors-as-values-with-result", "designing-error-types", "enums-with-data-and-match", "model-based-testing", "errors-3d"]

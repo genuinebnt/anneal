@@ -244,16 +244,16 @@ Do the rows top to bottom; a module's first rows are the ones its first stages n
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Arc<dyn Expression>`, a trait object tree | 3d-01, 3d-06 |
-| S7 Smart pointers & interior mutability *(planned)* | Use it | `Arc` for shared expressions, `Box<Expr>` for a recursive syntax tree | 3d-01, 3d-05 |
-| L7 Enums & pattern matching *(planned)* | Enums as design | `match` on an operator, on a pair of truth values; an AST as enums, `let else` | 3d-02, 3d-03, 3d-05 |
-| S8 The core traits *(planned)* | Implement by hand | comparison results as values (`Ordering`, `CmpBool`) | 3d-02 |
-| D13 Matrix, bits & math *(planned)* | Matrix, bits & math | `checked_*`, overflow as an error | 3d-02 |
-| L8 Error design *(planned)* | Custom errors | overflow errors; parse errors with messages | 3d-02, 3d-04, 3d-05 |
-| [S2 Strings & text](/t/s2-strings-text) | Understand | case mapping on characters; scanning characters and bytes | 3d-03, 3d-04 |
-| S6 Iterators *(planned)* | Understand | `Peekable` for a lexer | 3d-04 |
-| [F3 Memory & allocation](/t/f3-memory-allocation) | Arenas and pools | an arena AST, a string interner (optional) | 3d-05 |
-| Y5 Testing & verification *(planned)* | Build it | a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser | 3d-02, 3d-03, 3d-04, 3d-05, 3d-07 |
+| [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Arc<dyn Expression>`, a trait object tree | 3d-01, 3d-02 |
+| S7 Smart pointers & interior mutability *(planned)* | Use it | `Arc` for shared expressions, `Box<Expr>` for a recursive syntax tree | 3d-01, 3d-04 |
+| L7 Enums & pattern matching *(planned)* | Enums as design | `match` on an operator, on a pair of truth values; an AST as enums, `let else` | 3d-01, 3d-02, 3d-04 |
+| S8 The core traits *(planned)* | Implement by hand | comparison results as values (`Ordering`, `CmpBool`) | 3d-01 |
+| D13 Matrix, bits & math *(planned)* | Matrix, bits & math | `checked_*`, overflow as an error | 3d-01 |
+| L8 Error design *(planned)* | Custom errors | overflow errors; parse errors with messages | 3d-01, 3d-03, 3d-04 |
+| [S2 Strings & text](/t/s2-strings-text) | Understand | case mapping on characters; scanning characters and bytes | 3d-02, 3d-03 |
+| S6 Iterators *(planned)* | Understand | `Peekable` for a lexer | 3d-03 |
+| [F3 Memory & allocation](/t/f3-memory-allocation) | Arenas and pools | an arena AST, a string interner (optional) | 3d-04 |
+| Y5 Testing & verification *(planned)* | Build it | a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser | 3d-01, 3d-02, 3d-03, 3d-04, 3d-05 |
 
 ### 3E · Access-method executors
 

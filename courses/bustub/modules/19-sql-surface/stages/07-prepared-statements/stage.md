@@ -52,7 +52,7 @@ A statement bound halfway and then failed on a bad value is harder to reason abo
 
 ### The lexer is the first place a new symbol must go
 
-`?` has to be a token before the parser can see it. If you wrote your lexer in 3d-04, its symbol table is where the new character goes; the regions of this stage mark the spot in the reference.
+`?` has to be a token before the parser can see it. If you wrote your lexer in 3d-03, its symbol table is where the new character goes; the regions of this stage mark the spot in the reference.
 
 ## Performance
 

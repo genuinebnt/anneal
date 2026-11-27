@@ -87,7 +87,7 @@ Median solution size of a learn/build stage is 38 lines (75th percentile 57, 90t
 
 Both are deliberate: designing the page types is the lesson, and they are labelled hard. The risk is that they are where a learner
 can stall for hours with only 6 tests of feedback. Size against label is otherwise sane (median 18 lines easy, 37 medium, 48 hard).
-Nine more stages are over 100 lines (3a-01, 2c-04, 3d-04, 0b-01, 3i-01, 3i-03, 3a-02, 4d-05, 4c-01).
+Nine more stages are over 100 lines (3a-01, 2c-04, 3d-03, 0b-01, 3i-01, 3i-03, 3a-02, 4d-05, 4c-01).
 
 ## 5. What was done, and the recommendations that remain
 

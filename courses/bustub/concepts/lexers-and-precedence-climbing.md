@@ -175,8 +175,8 @@ fn precedence_and_associativity() {
 
 ### In the exercises
 
-- **3d-04:** `tokenize` is the lexer loop above with SQL's token kinds: words folded to lower case, `"quoted names"`, numbers with fractions and exponents, `'strings'` with `''`, two-character symbols, comments.
-- **3d-05:** `expr` is the parser, with SQL's levels: `or`, `and`, `not`, comparisons and `is [not] null`, `+ - ||`, `* / %`, unary minus. `primary` (given) parses the atoms and calls back into `expr` for parentheses and call arguments.
+- **3d-03:** `tokenize` is the lexer loop above with SQL's token kinds: words folded to lower case, `"quoted names"`, numbers with fractions and exponents, `'strings'` with `''`, two-character symbols, comments.
+- **3d-04:** `expr` is the parser, with SQL's levels: `or`, `and`, `not`, comparisons and `is [not] null`, `+ - ||`, `* / %`, unary minus. `primary` (given) parses the atoms and calls back into `expr` for parentheses and call arguments.
 
 ### Where it is used
 

@@ -715,7 +715,7 @@ impl Parser {
 
     // ---- expressions --------------------------------------------------------------------------------------------------------
 
-    // @begin 3d-05
+    // @begin 3d-04
     /// Parses an expression with SQL's precedence, loosest first: `OR`, `AND`, `NOT`, comparison and `IS [NOT] NULL`, `+ - ||`, `* / %`, unary minus.
     pub fn expr(&mut self) -> P<Expr> {
         self.or_expr()
@@ -865,7 +865,7 @@ impl Parser {
     }
     //~ /// Parses an expression with SQL's precedence, loosest first: `OR`, `AND`, `NOT`, comparison and `IS [NOT] NULL`, `+ - ||`, `* / %`, unary minus.
     //~ pub fn expr(&mut self) -> P<Expr> {
-    //~     todo!("3d-05: loosest first: or, and, not, comparison and IS [NOT] NULL, + - ||, * / %, unary minus; atoms are primary expressions")
+    //~     todo!("3d-04: loosest first: or, and, not, comparison and IS [NOT] NULL, + - ||, * / %, unary minus; atoms are primary expressions")
     //~ }
     // @end
 

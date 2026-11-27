@@ -415,7 +415,7 @@ impl<'c, 'a> Planner<'c, 'a> {
 
     /// Builds the expression for a call of the function `func_name`.
     pub fn get_func_call_from_factory(func_name: &str, mut args: Vec<ExprRef>) -> Result<ExprRef> {
-        todo!("3d-06: `lower` and `upper` with exactly one argument become a StringExpression; any other name or argument count is an error")
+        todo!("3d-02: `lower` and `upper` with exactly one argument become a StringExpression; any other name or argument count is an error")
     }
 
     // ---- aggregation --------------------------------------------------------------------------------------------------------

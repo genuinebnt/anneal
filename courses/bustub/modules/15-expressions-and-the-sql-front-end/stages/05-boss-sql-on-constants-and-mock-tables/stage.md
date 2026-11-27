@@ -11,7 +11,7 @@
 
 Nothing new to write. Make both pass:
 
-- **`stages_3d::s3d_07`**: for random integer expressions over `+`, `-`, constants, NULLs and large numbers, `select <expr>` answers what a 64-bit oracle does (the value, `integer_null`, or an overflow error); for random boolean expressions (comparisons of such integers combined with `and`/`or`) it answers what Kleene's logic does; a syntax error is reported as a parse error; comments, case and white space do not matter.
+- **`stages_3d::s3d_05`**: for random integer expressions over `+`, `-`, constants, NULLs and large numbers, `select <expr>` answers what a 64-bit oracle does (the value, `integer_null`, or an overflow error); for random boolean expressions (comparisons of such integers combined with `and`/`or`) it answers what Kleene's logic does; a syntax error is reported as a parse error; comments, case and white space do not matter; `lower` and `upper` work through SQL (nested, with upper-case names), wrong calls (`upper(1)`, `lower('a', 'b')`, an unknown function, `lower()`) are errors, and over a mock table `explain` shows `upper(#0.0)` over a `MockScan`.
 - **`slt_expressions_test`** (`cargo test --test slt_expressions_test`): five tests, one per BusTub file (`p0.01-lower-upper.slt`, `p0.02-function-error.slt`, `p0.03-string-scan.slt`, `baby_arithmetic.slt`, `intro.slt`): expressions on constants (`select 1 + 2 + 3 + null;`), `lower`/`upper` with right and wrong arguments, and scans of the built-in `__mock_*` tables with expressions over their columns. Each starts a fresh database (`tests/slt/mod.rs`, given), creates the mock tables and runs the file's records in order.
 
 ## Your freedom
@@ -48,14 +48,14 @@ Cells are separated by one space; NULLs print as `integer_null`, `varlen_null`, 
 
 - Random integer expressions against a 64-bit oracle (values, NULL, overflow).
 - Random boolean expressions against three-valued logic.
-- A syntax error is a parse error; comments and case do not matter.
+- A syntax error is a parse error; comments and case do not matter; `lower` and `upper` run through SQL, wrong calls are errors, and `explain` shows the function over a column.
 - BusTub's five `.slt` files.
 
 ## Hints
 
 ### The oracle disagrees only for large numbers
 
-The generator mixes small and near-`i32::MAX` literals. A wrong answer only for big ones is an overflow rule (stage 02), not a parse problem.
+The generator mixes small and near-`i32::MAX` literals. A wrong answer only for big ones is an overflow rule (3d-01), not a parse problem.
 
 ### Everything is a bit off by one
 
@@ -74,7 +74,7 @@ Optional. Predict first, then run.
 
 ## Other designs
 
-None for this stage. The *Other designs* sections of 3d-01 to 3d-06 list the alternatives to compare with yours.
+None for this stage. The *Other designs* sections of 3d-01 to 3d-04 list the alternatives to compare with yours.
 
 ## In BusTub
 
