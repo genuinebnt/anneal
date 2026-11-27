@@ -458,6 +458,24 @@ fn s3h_03_a_key_of_another_type_gives_the_rows_of_a_sequential_scan() {
 }
 
 #[test]
+fn s3h_03_a_key_many_rows_share_and_null_keys_give_the_rows_of_a_sequential_scan() {
+    let db = new_db();
+    sql(&db, "create table t(v1 int, v2 int)");
+    sql(&db, "create table u(v1 int, v2 int)");
+    let rows = "(2, 1), (null, 2), (2, 3), (5, 4), (null, 5), (2, 6)";
+    sql(&db, &format!("insert into t values {rows}"));
+    sql(&db, &format!("insert into u values {rows}"));
+    sql(&db, "create index t_v1 on t(v1)");
+    assert!(plan(&db, "select * from t where v1 = 2").contains("IndexScan"), "a repeated key is looked up through the index");
+    for condition in ["v1 = 2", "v1 = 2 or v1 = 5", "v1 = 2 and v2 > 1", "v1 = null", "v1 = 7"] {
+        let indexed = sorted(sql(&db, &format!("select * from t where {condition}")));
+        let scanned = sorted(sql(&db, &format!("select * from u where {condition}")));
+        assert_eq!(indexed, scanned, "where {condition}: every row of the key, and no row with a NULL key");
+    }
+    assert_eq!(sql(&db, "select v2 from t where v1 = 2"), vec!["1", "3", "6"], "the rows of one key come in rid order");
+}
+
+#[test]
 fn s3h_03_comparing_with_null_finds_nothing() {
     let db = index_db();
     assert_eq!(sql(&db, "select * from t where v1 = null").len(), 0, "NULL = NULL is unknown, not true");
@@ -666,16 +684,17 @@ proptest! {
     }
 
     /// A point lookup on an indexed column becomes an index scan, with the whole predicate kept as a filter; every other predicate
-    /// stays a sequential scan; and the rows are those of the plain filter on a vector.
+    /// stays a sequential scan; and the rows are those of the plain filter on a vector, with keys that repeat and NULL keys.
     #[test]
     fn s3h_03_point_lookups_use_the_index_and_change_no_rows(
         n in 0i64..25,
-        rows in prop::collection::vec((model::cell(), model::cell()), 0..25),
-        parts in prop::collection::vec((0u8..7, -2i64..27, -2i64..27), 1..4),
+        rows in prop::collection::vec((prop::option::weighted(0.85, 0i64..9), model::cell(), model::cell()), 0..25),
+        parts in prop::collection::vec((0u8..7, -2i64..11, -2i64..11), 1..4),
     ) {
         let db = new_db();
         sql(&db, "create table t(v1 int, v2 int, v3 int)");
-        let data: Vec<model::Row> = rows.iter().take(n as usize).enumerate().map(|(i, (b, c))| vec![Some(i as i64), *b, *c]).collect();
+        // v1 repeats (a small range) and may be NULL: the index holds an entry per row
+        let data: Vec<model::Row> = rows.iter().take(n as usize).map(|(a, b, c)| vec![*a, *b, *c]).collect();
         if !data.is_empty() { sql(&db, &format!("insert into t values {}", data.iter().map(model::values).collect::<Vec<_>>().join(", "))); }
         sql(&db, "create index t_v1 on t(v1)");
         // kinds: 0 v1 = k, 1 k = v1, 2 v1 = k or v1 = k2, 3 v2 = k, 4 v1 > k, 5 v1 = v2, 6 v3 = k
@@ -727,11 +746,6 @@ proptest! {
         let db = new_db();
         sql(&db, "create table a(x int, y int)");
         sql(&db, "create table b(p int, q int)");
-        // indexes are unique over non-NULL keys, so an indexed table has distinct keys
-        let b: Vec<(Option<i64>, Option<i64>)> = if indexed {
-            let mut seen = std::collections::HashSet::new();
-            b.iter().copied().filter(|(p, _)| p.is_none() || seen.insert(*p)).collect()
-        } else { b.clone() };
         for (name, rows) in [("a", &a), ("b", &b)] {
             if !rows.is_empty() { sql(&db, &format!("insert into {name} values {}", rows.iter().map(|(x, y)| format!("({}, {})", x.map_or("null".to_string(), |v| v.to_string()), y.map_or("null".to_string(), |v| v.to_string()))).collect::<Vec<_>>().join(", "))); }
         }
