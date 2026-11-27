@@ -1,0 +1,300 @@
+title = "Control what a program may fetch"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 530
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/fetch_policy.rs"]
+lede = "How to fetch an address that someone else chose, without letting them choose where your program goes."
+summary = """
+When your program fetches an address it did not write, check where it may go. Parse it, allow only listed origins, check every address behind the name, and connect only to those. Repeat this for each redirect, and limit bytes and total time. This costs flexibility, and it is one layer. Keep network rules that block your private network too.
+"""
+
+[[sections]]
+heading = "What can a fetched address do to you?"
+body = """
+Say your service shows a preview of any link a user pastes. A user pastes `http://127.0.0.1:8080/admin`. Your program runs inside your network, so it can reach pages the user can't. This is **server-side request forgery** (SSRF).
+
+Refusing the text `127.0.0.1` doesn't help. An address can be spelled many ways, a name can point anywhere, and a harmless page can redirect. So you check the destination, again at every step.
+
+This page is about *where* a request may go. [Collect pages politely](/cookbook/p/polite-fetching) is about how often to ask, and when to stop.
+
+The two examples don't plug together as they are. This client sends no `User-Agent`. Its `Status` error keeps only the number, so `Retry-After` is lost. Add both before you join them.
+"""
+
+[[sections]]
+heading = "Why can't you check the address as text?"
+body = """
+A check on the start of the text looks reasonable and is wrong:
+
+```compare
+takeaway = "Judge the parsed parts, and fetch the same parsed value. This parser check alone still says nothing about which network address the name reaches."
+[wrong]
+title = "Check the start of the text"
+code = '''
+fn allowed(url: &str) -> bool {
+    url.starts_with("http://docs.test")
+}
+
+fn main() {
+    for url in ["http://docs.test.evil.test/", "http://docs.test@evil.test/"] {
+        println!("{url} allowed: {}", allowed(url));
+    }
+}
+'''
+result = "Both lines print `allowed: true`. The host of the first is `docs.test.evil.test`. The host of the second is `evil.test`; `docs.test` is a user name."
+[fixed]
+title = "Check the parsed parts"
+code = '''
+use reqwest::Url;
+
+fn allowed(url: &str) -> bool {
+    let Ok(url) = Url::parse(url) else { return false };
+    url.scheme() == "http"
+        && url.host_str() == Some("docs.test")
+        && url.port_or_known_default() == Some(80)
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
+fn main() {
+    for url in ["http://docs.test.evil.test/", "http://docs.test@evil.test/"] {
+        println!("{url} allowed: {}", allowed(url));
+    }
+}
+'''
+result = "Both lines print `allowed: false`."
+```
+
+Using a parser is not enough if **two** parsers are involved. These results come from Python 3.14's `urllib.parse`, Node 22's `URL` and the Rust `url` crate that `reqwest` uses:
+
+| Text | Python reads the host as | Node and Rust read it as |
+|---|---|---|
+| `http://good.test\\@evil.test/` | `evil.test` | `good.test` |
+| `http://127.1/` | `127.1` | `127.0.0.1` |
+| `http://good.test%2eevil.test/` | kept with `%2e` | `good.test.evil.test` |
+
+If one program checks with the first reading and another fetches with the second, the check is worthless. Parse once, with the parser your HTTP client uses, and pass the parsed value on.
+
+The example also refuses text that invites disagreement: spaces, control characters, non-ASCII letters, backslashes and `http:///`. A site with a non-ASCII name must be written in its ASCII `xn--` form.
+"""
+
+[[sections]]
+heading = "Which places should be allowed at all?"
+body = """
+If you can, list them. An **origin** here is a scheme, a host and a port, and all three must match exactly. That one rule refuses `file:` addresses, look-alike hosts and port 22.
+
+Don't match hosts by prefix or suffix. A suffix test for `docs.test` also accepts `evildocs.test`.
+
+Some programs must fetch any public site, such as a link previewer. They can't list hosts. Still limit schemes to `http` and `https` and ports to 80 and 443, and expect more risk. The example has only the list.
+"""
+
+[[sections]]
+heading = "What is behind an allowed name?"
+body = """
+Whoever controls a name decides which addresses it gives. So look it up, and refuse the request if **any** answer is not allowed. An address written directly in the URL is never looked up, so check it too.
+
+An allowed address must be **public**. These are some that are not:
+
+| Range | What lives there |
+|---|---|
+| `127.0.0.0/8`, `::1` | Your own machine |
+| `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7` | Private networks |
+| `169.254.0.0/16`, `fe80::/10` | The local link, including many cloud metadata services |
+| `100.64.0.0/10` | Space shared behind provider NAT, also used inside some clouds and VPNs |
+
+Some IPv6 forms carry an IPv4 address. [Addresses and sockets in std](/cookbook/p/std-net-tcp-udp-ip-addr) shows the `::ffff:127.0.0.1` trap. For IPv6, the example accepts only the global unicast block, then removes special parts of it, such as 6to4.
+
+Don't assume a library's idea of "global" matches yours. On this machine, Python 3.9.6 says `2002:7f00:1::` is global, and Python 3.14 says it is not. That is the 6to4 form of `127.0.0.1`.
+"""
+
+[[sections]]
+heading = "Why connect to the address you checked?"
+body = """
+Checking a name and then fetching it makes **two** lookups. The owner of the name can answer them differently. This is called **DNS rebinding**.
+
+```stepper
+caption = "A name that changes between the check and the connection"
+[[frame]]
+title = "The check looks the name up"
+text = "The answer is an allowed address, so the check passes."
+lanes = [ { name = "Resolver answers", items = ["allowed address"] }, { name = "Your program", items = ["check: passes"] }, { name = "Connection", items = [], slots = 1 } ]
+[[frame]]
+title = "The client looks it up again"
+text = "The HTTP client knows nothing of your check. This time the answer is internal."
+lanes = [ { name = "Resolver answers", items = ["allowed address", "internal address"] }, { name = "Your program", items = ["send request"] }, { name = "Connection", items = [], slots = 1 } ]
+[[frame]]
+title = "The request goes inside"
+text = "The check was true about an address that was never used."
+lanes = [ { name = "Resolver answers", items = ["allowed address", "internal address"] }, { name = "Your program", items = ["reads a secret"] }, { name = "Connection", items = ["internal address"], slots = 1 } ]
+[[frame]]
+title = "With pinning"
+text = "The client is given the checked addresses and may not look up anything. There is no second answer."
+lanes = [ { name = "Resolver answers", items = ["allowed address"] }, { name = "Your program", items = ["check, then pin"] }, { name = "Connection", items = ["allowed address"], slots = 1 } ]
+```
+
+**Pinning** keeps the name in the request but fixes the addresses. In `reqwest`, `resolve_to_addrs` does that. The example also installs a resolver that fails every other lookup. If the pin ever stops matching, the request fails instead of asking the network.
+
+A **proxy** breaks pinning, because the proxy looks the name up itself. `reqwest` reads proxy settings such as `HTTP_PROXY` unless you call `no_proxy()`. The checks start a child process with that variable set. A client without `no_proxy()` sends its request to the fake proxy, despite its pin.
+
+If your company requires a proxy, these address checks don't control the connection. The proxy must enforce the rules.
+"""
+
+[[sections]]
+heading = "What must happen at a redirect?"
+body = """
+A **redirect** is an answer that says "ask over there". An allowed server, or anyone who can make it redirect, then chooses your next address. Turn off automatic redirects and follow them yourself.
+
+For each hop:
+
+1. Read the `Location` header and refuse backslashes, spaces and control characters. Joining it to a base address would quietly remove tabs.
+2. Resolve it against the current address, because it may be relative. `//other.test/` changes the host.
+3. Refuse a change from `https` to `http`.
+4. Run **every** check again: text, origin, lookup, addresses and pin.
+
+Count the hops, so a loop ends. The example sends no cookies or login headers. If yours does, don't carry them to another origin.
+"""
+
+[[sections]]
+heading = "What stops a hostile answer?"
+body = """
+The other end also chooses how much to send, and how slowly.
+
+| Limit | How the example does it |
+|---|---|
+| Body size | Counts bytes as they arrive. A large announced length refuses early, but a length may be missing |
+| Compression | Turns off the gzip, Brotli, Zstandard and deflate decoders, and refuses an encoded body |
+| Total time | One deadline around lookups, connections, all redirects and the body |
+| Redirects | A fixed count |
+
+`no_gzip` alone turns off only gzip. This build includes no other decoder, but another build might. If you allow decoding, count the **decoded** bytes against your limit.
+
+A time limit on each read is not enough. A server that sends one byte just in time passes every read. [Addresses and sockets in std](/cookbook/p/std-net-tcp-udp-ip-addr) shows the same problem.
+
+The system lookup, run through Tokio, uses a separate blocking thread. The deadline stops your wait, but that thread keeps going. Limit how many fetches run at once.
+"""
+
+[[sections]]
+heading = "How do the pieces fit together?"
+body = """
+```walkthrough
+file = "examples/web/fetch_policy.rs"
+[[step]]
+title = "Check the text and the origin"
+lines = "80-109"
+text = "Strange text is refused before parsing. After parsing, only the parsed scheme, host and port are compared with the list."
+[[step]]
+title = "Check every address"
+lines = "111-134"
+text = "An address in the URL skips the resolver but not the rule. An empty answer is refused, and so is one bad address among good ones."
+[[step]]
+title = "Pin the client"
+lines = "136-160"
+text = "No proxy, no automatic redirects, no gzip, and a resolver that always fails. Port 0 tells `reqwest` to use the port in the URL."
+[[step]]
+title = "Resolve a redirect"
+lines = "162-173"
+text = "The header is judged as sent. The result is only text again."
+[[step]]
+title = "Check each hop and count bytes"
+lines = "175-228"
+text = "A new pinned client is built for every hop. The size test subtracts what is kept, so the sum can't overflow."
+[[step]]
+title = "One deadline"
+lines = "230-235"
+text = "The timeout wraps the whole chain."
+[[step]]
+title = "Decide what is public"
+lines = "237-278"
+text = "A list for IPv4. For IPv6, one accepted block minus its special parts."
+```
+"""
+
+[[sections]]
+heading = "What does this not protect against?"
+body = """
+> [!WARNING]
+> Passing these checks does **not** make a fetch safe. Add network rules, outside your program, that stop it reaching private addresses and internal services.
+
+- **Your own services on public addresses.** `is_public` can't know them. It also accepts `168.63.129.16`, which Microsoft's cloud uses for a platform service.
+- **Address translation.** A network may turn some public-looking IPv6 addresses into private IPv4 ones.
+- **An old list.** Special ranges change. Compare yours with the IANA registries in the sources.
+- **An allowed host that misbehaves.** It may relay your request inward, or let its users redirect or upload.
+- **What the request does.** A `GET` can change things on a badly built server.
+- **The bytes you receive.** They are still untrusted. See [Reading HTML safely](/cookbook/p/reading-html-safely).
+- **Huge response headers.** The byte limit counts only the body. The HTTP library has its own header limits, which this example does not test.
+
+The example is built without TLS, so it fetches nothing over `https`. It checks the `https` address rules only as text. Production code needs TLS with certificate checks on, and a real lookup in place of the fake one.
+"""
+
+[[sections]]
+heading = "How can you check it?"
+body = """
+Run it from the `cookbook` folder. It uses a fake resolver and servers on your own machine only. A test rule lets `127.0.0.1` play the part of a public address. Never use that rule outside tests.
+
+```sh
+cargo run --release --example fetch_policy
+```
+
+The rebinding check first shows the attack working. A function that checks and then fetches normally reads the "internal secret" from a second local server on `::1`. The pinned version reads the public page. This check is skipped if the machine has no IPv6 loopback.
+
+Random input also tests the address check and the range rules. The ranges are compared with a second, table-based version of the same list. That finds coding slips, not a range missing from both.
+
+Try one change: delete the `.no_proxy()` line in `pinned_client`. The run stops at the proxy check and prints `from the proxy / from the proxy`.
+"""
+
+[[connections]]
+kind = "before"
+title = "Addresses and sockets in std"
+link = "/cookbook/p/std-net-tcp-udp-ip-addr"
+why = "The address types, and the mapped-address trap."
+
+[[connections]]
+kind = "returns"
+title = "Collect pages politely"
+link = "/cookbook/p/polite-fetching"
+why = "Once you know a request may be sent, decide whether and when to send it."
+
+[[connections]]
+kind = "returns"
+title = "Security pitfalls"
+link = "/cookbook/p/security-pitfalls-secure-coding"
+why = "SSRF next to other cases where outside input steers a program."
+
+[[connections]]
+kind = "returns"
+title = "A resilient HTTP client"
+link = "/cookbook/p/http-client-resilience"
+why = "Retries, resumed downloads and connection reuse with the same client library."
+
+[[sources]]
+title = "OWASP: SSRF prevention"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"
+note = "The two cases, a known list and any public site, and the network layer you need too."
+
+[[sources]]
+title = "URL standard"
+url = "https://url.spec.whatwg.org/"
+note = "Why `127.1`, backslashes and extra slashes are read the way they are."
+
+[[sources]]
+title = "IANA IPv4 special-purpose addresses"
+url = "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml"
+note = "Check an IPv4 filter against this list. Multicast is listed elsewhere."
+
+[[sources]]
+title = "IANA IPv6 special-purpose addresses"
+url = "https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml"
+note = "The same for IPv6, with the Globally Reachable column."
+
+[[sources]]
+title = "reqwest ClientBuilder"
+url = "https://docs.rs/reqwest/0.12.28/reqwest/struct.ClientBuilder.html"
+note = "Read resolve_to_addrs, dns_resolver and no_proxy for the version used here."
+
+[[sources]]
+title = "Microsoft: IP address 168.63.129.16"
+url = "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
+note = "A public-looking address with a special job inside one cloud."

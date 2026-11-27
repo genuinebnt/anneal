@@ -150,7 +150,7 @@ result = "It prints `follow it: false`."
 
 A link without a scheme is **relative**. Resolve it with a URL library, such as the [url crate](https://docs.rs/url/latest/url/). The example doesn't apply `<base href>`, which changes the address to resolve against.
 
-Then check the result. `//other.example/x` has no scheme, yet it leads to another site. An allowed scheme also says nothing about the host. A program that fetches links must check [which network address it will reach](/cookbook/p/std-net-tcp-udp-ip-addr), again after every redirect.
+Then check the result. `//other.example/x` has no scheme, yet it leads to another site. An allowed scheme also says nothing about the host. A program that fetches links must [control what it may fetch](/cookbook/p/fetch-policy), again after every redirect.
 """
 
 [[sections]]

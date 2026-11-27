@@ -1,0 +1,274 @@
+title = "Run an outside tool with limits"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 294
+kind = "lesson"
+level = "intermediate"
+code = ["examples/os_and_storage/running_tools_safely.rs"]
+lede = "How to start another program so that strange input, endless output or a hang don't take yours down."
+summary = """
+When you start another program, choose everything: its full path, arguments, environment, folder and input. Stop outside values being read as options. Cap its output, give the run one deadline, and kill its process group and the child afterwards. This controls an honest tool that misbehaves. It is not a sandbox: the tool still runs as you, with your files and network.
+"""
+
+[[sections]]
+heading = "What can go wrong when you start a program?"
+body = """
+Say your service runs a converter on each uploaded file. `Command::new("convert").arg(name).output()` works in a demo. It also leaves open questions:
+
+- Which `convert` runs?
+- What if `name` starts with `-`?
+- Which secrets in your environment can the tool read?
+- What if it prints for ever, or never ends?
+- What if it starts programs of its own?
+
+[`std::process` by use case](/cookbook/p/std-process-command-pipelines) covers the calls and pipes. This page is about limits. The code is for Unix and was run on macOS.
+"""
+
+[[sections]]
+heading = "Is it enough to avoid the shell?"
+body = """
+Use `Command` with each argument separate, and never build a `sh -c` string from outside values. No shell then reads `;`, `$(...)` or spaces. The program still reads each argument by its own rules.
+
+An argument that starts with `-` often means an option. This is **option injection**. The "file name" below is really `sort`'s output option:
+
+```compare
+takeaway = "`--` helps only with programs that honour it, and only for arguments after it. Check each tool's manual."
+[wrong]
+title = "Pass the name as it is"
+code = '''
+use std::process::Command;
+
+fn main() -> std::io::Result<()> {
+    let folder = std::env::temp_dir().join(format!("sort-demo-{}", std::process::id()));
+    std::fs::create_dir(&folder)?;
+    std::fs::write(folder.join("notes.txt"), "keep me\\n")?;
+
+    // a "file name" typed by a stranger
+    let name = "-onotes.txt";
+    Command::new("/usr/bin/sort")
+        .arg(name)
+        .current_dir(&folder)
+        .stdin(std::process::Stdio::null())
+        .status()?;
+
+    println!("notes.txt now holds {:?}", std::fs::read_to_string(folder.join("notes.txt"))?);
+    std::fs::remove_dir_all(folder)
+}
+'''
+result = "Prints `notes.txt now holds \\"\\"`. With nothing to read, `sort` wrote its empty result over your file."
+[fixed]
+title = "End the options first"
+code = '''
+use std::process::Command;
+
+fn main() -> std::io::Result<()> {
+    let folder = std::env::temp_dir().join(format!("sort-demo-{}", std::process::id()));
+    std::fs::create_dir(&folder)?;
+    std::fs::write(folder.join("notes.txt"), "keep me\\n")?;
+
+    // a "file name" typed by a stranger
+    let name = "-onotes.txt";
+    Command::new("/usr/bin/sort")
+        .arg("--") // everything after this is a file name
+        .arg(name)
+        .current_dir(&folder)
+        .stdin(std::process::Stdio::null())
+        .status()?;
+
+    println!("notes.txt now holds {:?}", std::fs::read_to_string(folder.join("notes.txt"))?);
+    std::fs::remove_dir_all(folder)
+}
+'''
+result = "`sort` reports that there is no such file, and the program prints `notes.txt now holds \\"keep me\\\\n\\"`."
+```
+
+Keep the list of arguments fixed in your code, with outside values only in known places. The example's `operand` also refuses an empty value, a zero byte and a leading `-`. That blocks real names that start with `-`; you can pass those as `./-name`.
+
+Neither defence judges meaning. `../../etc/hosts` passes. Some tools read special text after `--`, such as URLs, patterns or `@file` lists. The [security pitfalls page](/cookbook/p/security-pitfalls-secure-coding) shows `grep` splitting one pattern at newlines.
+"""
+
+[[sections]]
+heading = "What should the tool inherit?"
+body = """
+By default, a child gets your environment and working folder. `output` gives it no input, but `spawn` and `status` share yours. Set each one:
+
+| Setting | Choose | Why |
+|---|---|---|
+| Program | A full path | A bare name is searched for, so something else may be found |
+| Environment | `env_clear`, then only what is needed, with `PATH` | API keys and settings such as proxies don't pass along |
+| Folder | A new folder you own | Relative paths and local settings come from there |
+| Input | `Stdio::null()`, or data you write | The tool can't sit waiting on your input |
+
+Set `PATH` yourself. With an empty environment, `/bin/sh` on this Mac made one up that ended in `.`, the current folder. A script could then run a program planted there.
+
+The folder matters more than it looks. Some tools run what a settings file tells them to. A Git repository can set `core.fsmonitor` to a program. On this machine, `git status` ran that program, even with an empty environment. So don't run tools inside folders that strangers filled, unless you know what the tool trusts there.
+
+A full path doesn't prove which file you get. Anyone who can write that file or its folder can replace it. And clearing the environment doesn't hide files that hold secrets.
+"""
+
+[[sections]]
+heading = "How do you stop it from running or printing for ever?"
+body = """
+`output` keeps everything the tool prints in memory, and waits as long as it takes. Instead:
+
+1. Read standard output and standard error **at the same time**. Reading one while the other's buffer fills can deadlock.
+2. Stop at a byte limit. Don't collect everything and check later.
+3. Use one deadline that covers both the output and the exit. A tool can close its output and keep running.
+
+Treat the output as untrusted too. It may not be UTF-8, and it can contain terminal control codes.
+
+The example reports a limit as an error and returns no partial output. If you keep partial output, mark it as cut.
+"""
+
+[[sections]]
+heading = "Why kill a whole process group?"
+body = """
+`Child::kill` signals one process. If that tool started a helper, the helper lives on. It may also hold your pipes open. A test run of `sh -c '/bin/sleep 3 & echo done'` made `output()` take 3 seconds, although the shell ended at once.
+
+A **process group** is a set of processes that can be signalled together. `process_group(0)` puts the child in a new one. Its children start in it too. Sending the signal to the negative group number reaches everyone still there.
+
+Any of them can leave, by starting a session or joining another group. If your direct child leaves, the group signal misses it, and `wait` could block with no limit. So the example also kills the child by its own number. A grandchild that left survives.
+
+```stepper
+caption = "A time limit with a helper process"
+[[frame]]
+title = "The tool starts a helper"
+text = "Both are in the new group and both can write to your pipe."
+lanes = [ { name = "In the group", items = ["tool", "helper"] }, { name = "Outside", items = ["your program"] }, { name = "Pipe held by", items = ["tool", "helper"] } ]
+[[frame]]
+title = "The tool exits"
+text = "The helper still holds the pipe, so reading does not end."
+lanes = [ { name = "In the group", items = ["tool (exited)", "helper"] }, { name = "Outside", items = ["your program: waiting"] }, { name = "Pipe held by", items = ["helper"] } ]
+[[frame]]
+title = "The deadline passes: kill the group"
+text = "One signal reaches the helper. The pipe closes."
+lanes = [ { name = "In the group", items = ["tool (exited)"] }, { name = "Outside", items = ["your program"] }, { name = "Pipe held by", items = [], slots = 1 } ]
+[[frame]]
+title = "Then collect the exit status"
+text = "Only now does the program reap the tool."
+lanes = [ { name = "In the group", items = [], slots = 1 }, { name = "Outside", items = ["your program: done"] }, { name = "Pipe held by", items = [], slots = 1 } ]
+```
+
+The order matters. **Reaping** means collecting a finished child's exit status. After that, the system may reuse its number. So send both signals first, then call `wait`. To learn that the tool has exited without reaping it, the example calls `waitid` with `WNOWAIT`.
+
+It also kills the group after success, so no helper is left behind. Don't use this for a tool that is meant to start a lasting background service.
+"""
+
+[[sections]]
+heading = "How does the example put this together?"
+body = """
+```walkthrough
+file = "examples/os_and_storage/running_tools_safely.rs"
+[[step]]
+title = "Refuse an option in disguise"
+lines = "31-37"
+text = "This check is for values used as operands, never for your own fixed options."
+[[step]]
+title = "Choose everything"
+lines = "152-172"
+text = "A relative program path is refused. The environment starts empty, and the child gets its own group."
+[[step]]
+title = "Make cleanup automatic"
+lines = "71-119"
+text = "`Group` kills and reaps when it is dropped, so an early return or a panic cleans up too."
+[[step]]
+title = "Read with a cap"
+lines = "126-150"
+text = "Each pipe has a thread. The cap is checked before the buffer grows."
+[[step]]
+title = "Wait for both endings"
+lines = "188-213"
+text = "Success needs two closed pipes **and** an exited child. One deadline covers the whole wait."
+[[step]]
+title = "Kill, reap, and notice an escape"
+lines = "215-235"
+text = "After a failure, a pipe that stays open means someone outside the group still holds it."
+```
+"""
+
+[[sections]]
+heading = "What does this not protect against?"
+body = """
+> [!WARNING]
+> **A child process is not a sandbox.** Never run code you don't trust with only these limits.
+
+| The tool can still | Why |
+|---|---|
+| Read, change and delete your files | It has your user's permissions. The folder setting is no fence |
+| Use the network, including your private network | Nothing here restricts connections |
+| Use up memory, processor time, disk or process slots | Only captured output and wall-clock time are limited |
+| Leave the group; a grandchild then survives | `setsid` starts a new session, and `setpgid` can join another group |
+| Use some of your open files and sockets | A descriptor without the **close-on-exec** mark passes to the child |
+
+Checks show that escaping, reading outside the folder, using the network and inheriting a file all **work**. Rust marks the files it opens. C libraries or calls such as `dup` may not. If an escaped process also holds a pipe, the run returns `Escaped`. If it closed the pipes, the run reports success and you learn nothing. After `Escaped`, a reader thread stays blocked until that process lets go.
+
+Cleanup also needs your program to be alive. In a test, a parent killed with `SIGKILL` left its child running in its new group. A new group also no longer receives Ctrl-C from your terminal, so handle shutdown yourself.
+
+For untrusted code or files that attack the tool, use isolation made for it. Examples are a container or virtual machine set up with no secrets, limited resources and limited network. Each has its own gaps and settings. For a fetching tool, [your address checks](/cookbook/p/fetch-policy) don't apply inside it; only network rules do.
+"""
+
+[[sections]]
+heading = "How can you check it?"
+body = """
+Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example running_tools_safely
+```
+
+The pretend tool is the example itself, in a helper mode. It floods, sleeps, changes group and leaves helpers behind. Checks also use `/bin/sh` and `/usr/bin/sort`.
+
+Try one change: in the wait loop, replace `if !open && group.has_exited().map_err(Failed::Io)?` with `if !open`. A tool that closes its output and sleeps is now killed at once. The check fails and shows `Ok` with a status of 9, the kill signal, instead of `TooSlow`.
+
+The checks are not proof for Linux, where this code has not been run. They also don't test the rare case where a process number is reused.
+"""
+
+[[connections]]
+kind = "before"
+title = "std::process by use case"
+link = "/cookbook/p/std-process-command-pipelines"
+why = "The calls used here, with pipelines and exit statuses."
+
+[[connections]]
+kind = "returns"
+title = "Process pipes and signals"
+link = "/cookbook/p/process-pipes-signals"
+why = "Why full pipes deadlock, and how your own program handles a stop signal."
+
+[[connections]]
+kind = "returns"
+title = "Security pitfalls"
+link = "/cookbook/p/security-pitfalls-secure-coding"
+why = "Command injection, and arguments that a tool reads in surprising ways."
+
+[[sources]]
+title = "std::process::Command"
+url = "https://doc.rust-lang.org/std/process/struct.Command.html"
+note = "Read the notes on how a program name is found, and on env_clear."
+
+[[sources]]
+title = "CommandExt::process_group"
+url = "https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html"
+note = "The Unix-only settings, and why pre_exec is unsafe."
+
+[[sources]]
+title = "POSIX: waitid"
+url = "https://pubs.opengroup.org/onlinepubs/9699919799/functions/waitid.html"
+note = "WNOWAIT leaves the child to be waited for again."
+
+[[sources]]
+title = "POSIX: setsid"
+url = "https://pubs.opengroup.org/onlinepubs/9699919799/functions/setsid.html"
+note = "How a process leaves its group."
+
+[[sources]]
+title = "POSIX utility conventions"
+url = "https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html"
+note = "Guideline 10 describes `--`. Not every program follows these."
+
+[[sources]]
+title = "git config: core.fsmonitor"
+url = "https://git-scm.com/docs/git-config"
+note = "A setting that names a hook program for Git to run."

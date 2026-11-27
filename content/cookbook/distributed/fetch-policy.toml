@@ -1,0 +1,42 @@
+title = "Control what a program may fetch"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 530
+kind = "recipe"
+lede = "control what a program may fetch."
+level = "intermediate"
+code = ["examples/web/fetch_policy.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any program that fetches an address it did not write.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>link previews</li><li>webhooks</li><li>import-from-address features</li><li>link checkers</li><li>collectors</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Strict address checks, a list of allowed origins, a check of every address a name resolves to, a connection pinned to the checked addresses, redirects followed by hand, and limits on bytes and total time.
+
+&#42;&#42;**limits**&#42;&#42;: this is one layer, not a sandbox. It does not replace network rules (a firewall or an egress proxy that you control). `is_public` is a list that can go out of date, and it cannot know that a public address belongs to your own service.
+
+There is no TLS in this build, so nothing here tests `https` on the wire. Every test uses local servers and a fake resolver. No real host is contacted.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html>
+"""
+
+[[sources]]
+title = "cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention…"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"

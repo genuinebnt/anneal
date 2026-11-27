@@ -676,6 +676,7 @@
      "examples/os_and_storage/io_uring_model.rs",
      "examples/os_and_storage/zero_copy_sendfile_splice.rs",
      "examples/os_and_storage/process_pipes_signals.rs",
+     "examples/os_and_storage/running_tools_safely.rs",
      "examples/os_and_storage/syscalls_portable.rs",
      "examples/os_and_storage/virtual_memory_sim.rs",
      "examples/os_and_storage/scheduler_policies.rs",
@@ -1388,6 +1389,7 @@
      "examples/web/webhooks_signatures.rs",
      "examples/web/http_caching_conditional.rs",
      "examples/web/http_client_resilience.rs",
+     "examples/web/polite_fetching.rs",
      "examples/web/http_client_server_loopback.rs",
      "examples/web/reverse_proxy_load_balancer.rs"
     ]
@@ -1402,7 +1404,8 @@
      "examples/web/cors_security_headers.rs",
      "examples/web/backend_authz_rbac_abac_policies.rs",
      "examples/web/backend_password_accounts_totp_mfa.rs",
-     "examples/web/security_pitfalls_secure_coding.rs"
+     "examples/web/security_pitfalls_secure_coding.rs",
+     "examples/web/fetch_policy.rs"
     ]
    },
    {

@@ -1,0 +1,42 @@
+title = "Collect pages politely"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 521
+kind = "recipe"
+lede = "collect pages politely."
+level = "intermediate"
+code = ["examples/web/polite_fetching.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any program that asks someone else's server for many pages.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>link checkers</li><li>feed readers</li><li>documentation indexers</li><li>importers</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A reader for `robots.txt` that follows the main rules of RFC 9309, one request at a time to each host with a gap between them, waiting that respects `Retry-After`, a user agent that says who is asking, and a stop that stays stopped when a host says no. When a site refuses you, the program stops. It does not try to get round the refusal.
+
+&#42;&#42;**limits**&#42;&#42;: following `robots.txt` is not permission. A site's terms, the law and the owner's wishes still apply. This keeps its state in one process, reads one of the three HTTP date forms, and cannot recognise a refusal that arrives as an ordinary page with status 200.
+
+It does not read `Crawl-delay` or `Sitemap` lines. Time is passed in, so the checks never sleep. The one network check uses a local server.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.rfc-editor.org/rfc/rfc9309.html>
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc9309.html"
+url = "https://www.rfc-editor.org/rfc/rfc9309.html"

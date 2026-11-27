@@ -245,6 +245,8 @@ result = "It prints `allowed: false`."
 Loopback is only one range to refuse. Private, link-local and other special ranges matter too. Some IPv6 forms, such as **6to4**, carry an IPv4 address inside them. A rule that accepts all of `2000::/3` would let `2002:7f00:1::` through, which is the 6to4 form of `127.0.0.1`.
 
 The program's policy is an example, not a complete list. Check the address you will actually connect to, since a name can resolve differently the next time. Allowing a short list of known destinations is safer than refusing bad ones. Redirects need the same check.
+
+[Control what a program may fetch](/cookbook/p/fetch-policy) puts these checks around a real HTTP client.
 """
 
 [[sections]]

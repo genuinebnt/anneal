@@ -1,0 +1,44 @@
+title = "Run an outside tool with limits"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 294
+kind = "recipe"
+lede = "run an outside tool with limits."
+level = "intermediate"
+code = ["examples/os_and_storage/running_tools_safely.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any program that starts another program.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>converters</li><li>linters</li><li>version control</li><li>archive and media tools</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+No shell, a program named by its full path, arguments that cannot turn into options, a chosen environment and folder, a cap on output, one time limit, and the whole process group killed when the run ends.
+
+&#42;&#42;**this is not a SANDBOX**.&#42;&#42; The tool runs as you. It can read and write your files, use the network, take memory, processor time and disk, and start more processes. A process that starts its own session leaves the group and survives.
+
+To run code you don't trust, use an isolation boundary made for it, and still apply these limits. Unix only (Linux and macOS). Run and checked on macOS.
+
+The checks start this same program as the "tool".
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_group>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_…"
+url = "https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_group"

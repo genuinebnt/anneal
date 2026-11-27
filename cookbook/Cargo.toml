@@ -1035,6 +1035,9 @@ path = "examples/os_and_storage/mmap_files.rs"
 name = "process_pipes_signals"
 path = "examples/os_and_storage/process_pipes_signals.rs"
 [[example]]
+name = "running_tools_safely"
+path = "examples/os_and_storage/running_tools_safely.rs"
+[[example]]
 name = "scheduler_policies"
 path = "examples/os_and_storage/scheduler_policies.rs"
 [[example]]
@@ -1413,6 +1416,9 @@ path = "examples/web/cookies_sessions_csrf.rs"
 name = "cors_security_headers"
 path = "examples/web/cors_security_headers.rs"
 [[example]]
+name = "fetch_policy"
+path = "examples/web/fetch_policy.rs"
+[[example]]
 name = "http_caching_conditional"
 path = "examples/web/http_caching_conditional.rs"
 [[example]]
@@ -1430,6 +1436,9 @@ path = "examples/web/multipart_forms_uploads.rs"
 [[example]]
 name = "oauth2_pkce_flow"
 path = "examples/web/oauth2_pkce_flow.rs"
+[[example]]
+name = "polite_fetching"
+path = "examples/web/polite_fetching.rs"
 [[example]]
 name = "rest_api_patterns"
 path = "examples/web/rest_api_patterns.rs"

@@ -260,6 +260,12 @@ title = "From threads to a web server"
 link = "/rust/series/web-server"
 why = "Your server reads names, sizes and bytes chosen by strangers."
 
+[[connections]]
+kind = "returns"
+title = "Control what a program may fetch"
+link = "/cookbook/p/fetch-policy"
+why = "The SSRF and redirect rules built around a real HTTP client."
+
 [[sources]]
 title = "OWASP Cheat Sheet Series"
 url = "https://cheatsheetseries.owasp.org/"

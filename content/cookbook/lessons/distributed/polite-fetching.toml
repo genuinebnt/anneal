@@ -1,0 +1,270 @@
+title = "Collect pages politely"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 521
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/polite_fetching.rs"]
+code_spoils = ["/p/m3-book-the-next-slot", "/p/y31-which-names-fit"]
+lede = "How a program asks someone else's server for many pages: say who you are, follow its rules, go slowly and stop when told."
+summary = """
+A polite collector names itself, reads `robots.txt` before other pages, and sends one request at a time to each host, with a gap. It waits at least as long as `Retry-After` asks and backs off after failures. When a host refuses, it stops and tells a person. This makes collection slower and sometimes incomplete. It never means permission, and it never tries to get round a block.
+"""
+
+[[sections]]
+heading = "What makes a collector a bad guest?"
+body = """
+Say you write a link checker for a documentation site with 3,000 pages. A loop that fetches them as fast as it can is a small flood. If it retries every failure at once, it presses hardest when the server is weakest.
+
+The owner can't tell what you meant. They see load from an unknown program, and they block it. Good behaviour comes down to a few promises your code can keep.
+
+Before any request leaves, check [where it may go](/cookbook/p/fetch-policy). This page decides whether and when to send it. First ask whether the site offers a download or a documented interface. That is often better than collecting pages.
+"""
+
+[[sections]]
+heading = "How should your program say who it is?"
+body = """
+Send a `User-Agent` header with a stable name, a version and a way to reach you:
+
+```text
+docbot/1.0 (+https://example.org/bot)
+```
+
+The first word is your **product token**. Site owners use it to write rules for you. RFC 9309 allows letters, `-` and `_` in it. The linked page should say what you collect and how to ask you to stop.
+
+`reqwest` sends no `User-Agent` unless you set one. The example checks this on a local socket.
+
+Don't pretend to be a browser or another crawler. Don't change names when one gets rules you dislike.
+"""
+
+[[sections]]
+heading = "How do you read robots.txt?"
+body = """
+`/robots.txt` is a text file where a site tells crawlers which paths to leave alone. Each scheme, host and port has its own. Its rules are standardised in [RFC 9309](https://www.rfc-editor.org/rfc/rfc9309.html).
+
+```text title="robots.txt"
+User-agent: *
+Disallow: /tmp/
+
+User-agent: docbot
+Disallow: /shop/
+Allow: /shop/help
+Disallow: /*.pdf$
+```
+
+- You obey the group that names your token. Groups with the same name are added together. Only if none names you do you obey `*`. Here `docbot` may fetch `/tmp/`.
+- A rule matches the start of the path and query. `*` stands for any characters, and a final `$` means "ends here".
+- Among matching rules, the longest wins. If an `Allow` and a `Disallow` tie, allow.
+- Paths are case sensitive. Spellings such as `%68` and `h` must compare equal.
+
+Old or simple readers differ. These are the answers of Python's `urllib.robotparser` for a crawler named `docbot`:
+
+| File says | Path | Python 3.9.6 | Python 3.14 |
+|---|---|---|---|
+| `Disallow: /shop/`, then `Allow: /shop/help` | `/shop/help` | blocked | allowed |
+| `Disallow: /*.pdf$` | `/a/b.pdf` | **allowed** | blocked |
+| Two `docbot` groups; the second has `Disallow: /b` | `/b` | **allowed** | blocked |
+
+Both versions also apply a group named `bot` to `docbot`. The example wants the whole name, as in `docbot` or `docbot/1.0`. For a malformed name such as `docbot*` or `docbot2.0`, it obeys that group's `Disallow` rules but not its `Allow` rules. That cautious choice is its own, not the standard's.
+
+Only a final `$` marks the end. The example reads an earlier one as an ordinary character. Test your reader too.
+"""
+
+[[sections]]
+heading = "What if robots.txt is missing or broken?"
+body = """
+The status of the `robots.txt` request decides. The first column below is the standard. The second is what the example does, which is sometimes stricter.
+
+| Answer | RFC 9309 | The example |
+|---|---|---|
+| Success | Follow the file | Same |
+| 401, 403, 429 | Counts as unavailable, so a crawler may fetch | Fetches nothing |
+| Other 4xx, such as 404 | May fetch anything | Same |
+| 5xx or no answer | Must assume nothing is allowed | Same |
+| Redirects | Should follow at least five | Left to the fetcher; an unfinished redirect blocks everything |
+
+Cache the file, but the standard says not to use a copy for more than 24 hours. It makes an exception when the file can't be reached. The example does no caching.
+
+Limit the size as well. The standard asks readers to handle at least 500 KiB. The example blocks everything for a larger file, because unread rules might forbid a page.
+"""
+
+[[sections]]
+heading = "How fast may you ask?"
+body = """
+No standard number is safe for every site. Start with one request at a time per host, and a gap of a second or more. Measure the gap from when an answer arrives, so a slow server automatically gets fewer requests. Go slower if the owner asks.
+
+The example takes a host name and ignores capitals, a final dot and the port. So `A.test`, `a.test.` and `a.test:80` share one pace and one stop. It refuses a whole URL. Two different names can still lead to one server. Several workers or copies must share one pace, or they multiply the load.
+
+Some sites put `Crawl-delay` in `robots.txt`. RFC 9309 doesn't define it, and the example ignores it. If you see one, it is a clear wish to follow.
+
+For bursts with an average rate, see the [token bucket](/cookbook/p/token-bucket). A strict gap is simpler and gentler.
+"""
+
+[[sections]]
+heading = "When should you try again?"
+body = """
+A **429** answer means "too many requests", and a **503** means the service can't answer now. These and other answers may carry `Retry-After`, in seconds or as an HTTP date. The example honours it on any status. The wait applies to **everything** you send that host.
+
+Treat the number as the least you may wait. Shortening it is a common mistake:
+
+```compare
+takeaway = "A limit on your own waiting must end the visit. It must never turn into an early retry."
+[wrong]
+title = "Cap the wait"
+code = '''
+/// How many seconds to wait before asking again.
+fn wait(asked: u64) -> Option<u64> {
+    Some(asked.min(60))
+}
+
+fn main() {
+    println!("the host asked for 3600 s, we do: {:?}", wait(3600));
+}
+'''
+result = "Prints `the host asked for 3600 s, we do: Some(60)`. The program comes back 59 minutes early."
+[fixed]
+title = "Wait it out, or leave"
+code = '''
+/// How many seconds to wait before asking again. `None` means: leave this host alone.
+fn wait(asked: u64) -> Option<u64> {
+    (asked <= 60).then_some(asked)
+}
+
+fn main() {
+    println!("the host asked for 3600 s, we do: {:?}", wait(3600));
+}
+'''
+result = "Prints `the host asked for 3600 s, we do: None`."
+```
+
+Without a header, use **backoff with jitter**. The ceiling doubles after each failure, and the real wait is random below it. The randomness stops many clients returning together. [Exponential backoff with full jitter](/cookbook/p/retry-backoff-jitter) shows the formula. The example never goes under its normal gap.
+
+HTTP allows three date forms. The example reads only the current one, such as `Sun, 06 Nov 1994 08:49:37 GMT`. For anything it can't read, it stops visiting the host. Compare a date with the answer's own `Date` header, since your clock may differ.
+
+Retry only requests that are safe to repeat; see [a resilient HTTP client](/cookbook/p/http-client-resilience).
+"""
+
+[[sections]]
+heading = "When must the program stop?"
+body = """
+| Answer | What the example does |
+|---|---|
+| 401, 403, 407, 451 | Stops visiting the host |
+| Any other status with a `Retry-After` that is too long or unreadable | Stops visiting the host |
+| 2xx or 304 | Carries on, after the gap or the wait asked for |
+| 408, 429, any 5xx, or no answer | Counts a failure, waits and retries |
+| Any other status with `Retry-After` | The same |
+| Other answers, such as 404 | Skips that page |
+
+Too many counted failures stop the visit. Only a 2xx or 304 **without** `Retry-After` starts the count again.
+
+A stop stays. A later success from a request already on its way does not reopen the host. Save the stop and its reason, show them to a person, and don't let a restart forget them. The example keeps them in memory only.
+
+> [!WARNING]
+> **A block is an answer.** Don't change your user agent or address, imitate a browser, or solve a challenge page to continue. Stop, and ask the owner for access.
+
+Some sites refuse with an ordinary page and status 200. A program can't reliably recognise that. Watch for many identical or unexpected pages, and have a person look.
+"""
+
+[[sections]]
+heading = "How does the example put this together?"
+body = """
+Its pacing takes the time as a number, so tests need no sleeping. You ask `before` whether you may send, and report each answer to `after`. Your loop must send one request at a time per host. It must also check `robots.txt` and the [fetch policy](/cookbook/p/fetch-policy) for every address, including each redirect. That page's client needs a `User-Agent` and the `Retry-After` value added first.
+
+:::deeper Walk through the code (gives away much of "Give every message a send time" and "Which names fit the pattern?")
+```walkthrough
+file = "examples/web/polite_fetching.rs"
+[[step]]
+title = "Choose the groups"
+lines = "70-149"
+text = "It keeps the rules for its own name apart from the `*` rules, and chooses at the end."
+[[step]]
+title = "Match one pattern"
+lines = "151-175"
+text = "The pattern is cut at each `*`. The pieces must appear in order, without trying every possibility."
+[[step]]
+title = "Pick the winning rule"
+lines = "177-199"
+text = "The longest matching pattern wins, and `true` ranks above `false` to settle a tie."
+[[step]]
+title = "Read the robots.txt answer"
+lines = "201-211"
+text = "Anything unexpected blocks everything."
+[[step]]
+title = "May this request go now?"
+lines = "351-362"
+text = "A stopped host is reported before any waiting time."
+[[step]]
+title = "Record an answer"
+lines = "364-426"
+text = "The wait is chosen from the status and header. The stored time only moves forward, and the first reason to stop is kept."
+```
+:::
+"""
+
+[[sections]]
+heading = "How can you check it without bothering anyone?"
+body = """
+Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example polite_fetching
+```
+
+It contacts no outside server. A pretend site on a pretend clock answers with random statuses in 2,000 runs. The checks look at what the site saw. No disallowed path is asked for, no gap is too short, nothing comes before a requested wait, and nothing follows a 403. The pattern matcher is also compared with a plain, slow one on random input.
+
+Try one change: in `allows`, replace `(r.pattern.len(), r.allow)` with `(r.allow, r.pattern.len())`. Now any `Allow` beats any longer `Disallow`, and the run stops in the robots checks.
+
+Following every rule here also doesn't give you the right to collect or reuse content. Read the site's terms, handle personal data lawfully, and ask when in doubt.
+"""
+
+[[connections]]
+kind = "before"
+title = "Control what a program may fetch"
+link = "/cookbook/p/fetch-policy"
+why = "The address checks that come before any pacing."
+
+[[connections]]
+kind = "before"
+title = "Exponential backoff with full jitter"
+link = "/cookbook/p/retry-backoff-jitter"
+why = "The waiting formula on its own."
+
+[[connections]]
+kind = "returns"
+title = "A resilient HTTP client"
+link = "/cookbook/p/http-client-resilience"
+why = "Which requests may be retried, and what a circuit breaker adds."
+
+[[connections]]
+kind = "returns"
+title = "Reading HTML safely"
+link = "/cookbook/p/reading-html-safely"
+why = "Where a link checker gets the addresses it asks for."
+
+[[sources]]
+title = "RFC 9309: Robots Exclusion Protocol"
+url = "https://www.rfc-editor.org/rfc/rfc9309.html"
+note = "Short. Section 2 covers groups, matching, failed requests, caching and size."
+
+[[sources]]
+title = "RFC 9110: HTTP semantics"
+url = "https://www.rfc-editor.org/rfc/rfc9110.html"
+note = "Section 10.2.3 defines Retry-After, and section 5.6.7 the three date forms."
+
+[[sources]]
+title = "RFC 6585: status 429"
+url = "https://www.rfc-editor.org/rfc/rfc6585.html"
+note = "What Too Many Requests means, and what it leaves open."
+
+[[sources]]
+title = "AWS Builders' Library: timeouts, retries and backoff with jitter"
+url = "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/"
+note = "Why retries add load, and what jitter changes."
+
+[[sources]]
+title = "Python: urllib.robotparser"
+url = "https://docs.python.org/3/library/urllib.robotparser.html"
+note = "The reader compared above. Check the behaviour of your own version."
