@@ -1,0 +1,37 @@
+slug = "rolls-you-can-replay"
+title = "Luck you can run again"
+mode = "write"
+level = "medium"
+stage = "replay"
+order = 1
+status = "ready"
+tags = ["randomness", "determinism", "integer arithmetic", "45-min"]
+teaches = [
+    "A seeded generator turns a random run into a test case: the seed is the whole bug report.",
+    "`x % n` favours small results whenever 2^64 is not a multiple of `n`. For small `n` the bias is invisible; for large `n` it is huge.",
+    "Separate streams per consumer keep one consumer's extra roll from changing everybody else's luck.",
+]
+follow_up = "1) Your `between` may loop. What is the worst expected number of raw rolls, and for which range? 2) Two runs differ only in one setting. What must be true about who rolls what, so that the rest of the two runs stays equal? 3) Why is this generator unfit for passwords or tokens that an attacker must not guess?"
+related = ["Y41", "Y5"]
+
+[[hints]]
+kind = "approach"
+text = "Count raw values: 2^64 of them share out over the values of your range. When the share is not even, some raw values have to be given up. For streams, ask what `new` with two nearby starting states produces: this recipe only ever adds the same constant to its state."
+
+[[hints]]
+kind = "rust"
+text = "`(hi - lo).checked_add(1)` is `None` exactly for the whole of u64. `count.wrapping_neg() % count` is `2^64 % count` without 128-bit arithmetic. `wrapping_add` and `wrapping_mul` say that overflow is meant."
+
+[[hints]]
+kind = "edge"
+text = "If stream `id` starts at `seed + id * step`, it is stream 0 with the first `id` rolls cut off. A starting state needs to be thoroughly scrambled, and the order of `seed` and `id` has to matter. The recipe's own scrambling lines are available to you."
+
+[solution]
+explanation = "The raw recipe is a counter followed by a scramble. For a range of `count` values, the first `2^64 % count` raw values are rejected. The rest are reduced with a remainder. What remains is an exact multiple of `count`, so every result has the same number of raw values behind it. Fewer than half of all raw values are ever rejected, so the loop ends quickly. A stream's start is made by scrambling the seed, adding the id and scrambling again. Because the scramble is a one-to-one mixing function, nearby pairs land far apart in the counter's cycle."
+time = "O(1) expected"
+space = "O(1)"
+
+[[cookbook]]
+level = "related"
+page = "lease-fencing-sim"
+note = "The simulator's source of delays is a small seeded generator. It reduces with a plain remainder, which this task does not allow."

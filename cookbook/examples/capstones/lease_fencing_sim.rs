@@ -12,15 +12,24 @@
 //! longer than the TTL, it wakes up still believing it holds the lease while a new holder is already writing. No check on the
 //! client side closes this gap, because the pause can land between the check and the write. This is the argument of
 //! Martin Kleppmann's essay (Read: below). The fix must live at the resource: reject any write whose token is lower than
-//! the highest token already seen.
+//! the highest token already seen. The clients here DO check their lease right before writing. A pause before the check is
+//! caught by it. A pause between the check and the send is not.
+//! LIMITS: fencing refuses a stale token only after storage has seen a newer one, so an expired holder's write that arrives
+//! first is accepted. It orders writes; it does not make leases exclusive. The model has no release, no lost, duplicated or
+//! reordered messages (a client has one message in flight at a time), and the lease service never restarts.
+//! The client and the service read ONE perfect clock. Real clocks drift and jump, which adds failures not shown here.
+//! A real storage must keep its highest token durably, and check it and write in one atomic step. A real service must
+//! keep its token counter durably. That alone does not stop a restarted service from granting over a live lease: it must
+//! also keep the live lease, or wait a full TTL before granting. A holder that reads, changes and writes must make
+//! storage learn its token BEFORE it reads, or an older holder's late write can slip in between and be lost.
 //! HOW: scenario A (no fencing) is searched for deterministically and replayed with a timeline showing the corruption;
 //! scenario B replays the SAME schedule against a fencing storage and shows the stale write rejected; then 2000 random
 //! schedules check the safety invariant: accepted tokens never go backwards and the final value is the last write of the
-//! highest token. Without fencing the same schedules violate it. Clients deliberately ignore the write ack when deciding what
+//! highest token. Without fencing some of the same schedules violate it. Clients deliberately ignore the write ack when deciding what
 //! to do next, so the schedule is identical in both modes and the comparison is apples to apples.
 //! COMMON USES: ZooKeeper / etcd / Consul leases with revision numbers as fencing tokens, Chubby sequencers, HBase and
 //! Kafka controller epochs, Raft terms rejecting stale leaders, S3 or DynamoDB conditional writes (version check),
-//! database "SELECT ... FOR UPDATE" plus version columns, Kubernetes leader election with resourceVersion.
+//! database "SELECT ... FOR UPDATE" plus version columns.
 //! Testing pattern: deterministic simulation testing (FoundationDB, TigerBeetle, Jepsen/Maelstrom style fault injection).
 //! Read: https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html , https://fly.io/dist-sys/ and
 //! https://github.com/jepsen-io/maelstrom
@@ -30,8 +39,15 @@ use std::collections::BinaryHeap;
 type Time = u64;
 /// Lease length in simulated milliseconds. Pauses are drawn relative to it so they can outlive a lease.
 const TTL: Time = 100;
-/// Safety valve: a correct schedule finishes in far fewer events; hitting this means a livelock bug.
-const MAX_STEPS: u32 = 100_000;
+/// Safety valve against a livelock bug. It grows with the workload: waiting clients poll, so the number of events of a
+/// healthy run grows with (clients waiting) x (leases to be served).
+fn step_budget(cfg: Config) -> u64 {
+    let clients = cfg.clients as u64;
+    let leases = clients.saturating_mul(u64::from(cfg.leases_per_client));
+    let per_lease =
+        (u64::from(cfg.writes_per_lease) + 1).saturating_mul(20 + clients.saturating_mul(15));
+    leases.saturating_mul(per_lease).saturating_add(1_000)
+}
 
 // ---------------------------------------------------------------- deterministic randomness
 
@@ -72,11 +88,12 @@ enum Event {
     AcquireAtSvc { c: usize },
     GrantAtClient { c: usize, token: u64, expiry: Time },
     DeniedAtClient { c: usize },
-    DoWrite { c: usize },
+    CheckLease { c: usize },
+    SendWrite { c: usize },
     WriteAtStorage { c: usize, token: u64, value: u64 },
     WriteAck { c: usize, accepted: bool },
     RenewAtSvc { c: usize, token: u64 },
-    RenewAck { c: usize, ok: bool },
+    RenewAck { c: usize, expiry: Option<Time> },
 }
 
 // ---------------------------------------------------------------- lease service
@@ -129,7 +146,7 @@ impl LeaseService {
 
 // ---------------------------------------------------------------- storage
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Write {
     time: Time,
     client: usize,
@@ -196,6 +213,8 @@ fn check_safety(s: &Storage) -> Result<(), String> {
 
 struct Client {
     token: Option<u64>,
+    /// The expiry the client was last told. It is all the client's own check can go by.
+    lease_until: Time,
     leases_left: u32,
     writes_left: u32,
 }
@@ -218,7 +237,10 @@ struct Sim {
     clients: Vec<Client>,
     cfg: Config,
     next_value: u64,
-    steps: u32,
+    steps: u64,
+    /// Writes dropped by the client's own check, and writes sent although the lease had run out since the check.
+    stopped_by_check: u32,
+    sent_after_expiry: u32,
     trace: Option<Vec<String>>,
 }
 
@@ -227,6 +249,7 @@ impl Sim {
         let clients = (0..cfg.clients)
             .map(|_| Client {
                 token: None,
+                lease_until: 0,
                 leases_left: cfg.leases_per_client,
                 writes_left: 0,
             })
@@ -242,6 +265,8 @@ impl Sim {
             cfg,
             next_value: 1,
             steps: 0,
+            stopped_by_check: 0,
+            sent_after_expiry: 0,
             trace: trace.then(Vec::new),
         }
     }
@@ -262,17 +287,29 @@ impl Sim {
         self.rng.range(1, 20)
     }
 
-    /// Time a client spends "working" before its next write; sometimes it stalls far past the TTL.
-    fn work_delay(&mut self, c: usize) -> Time {
-        let work = self.rng.range(5, 30);
+    /// A stall far longer than usual. It can hit anywhere, also between a check and the action it guards.
+    fn stall(&mut self, c: usize) -> Time {
         if !self.rng.chance(self.cfg.pause_percent) {
-            return work;
+            return 0;
         }
         let pause = self.rng.range(TTL / 2, 3 * TTL);
         self.log(format!(
             "        client {c} PAUSES for {pause}ms (GC / VM stall); it cannot know that"
         ));
-        work + pause
+        pause
+    }
+
+    /// Time until the client's next lease check: some work, and perhaps a stall that the check will see.
+    fn work_delay(&mut self, c: usize) -> Time {
+        self.rng.range(5, 30) + self.stall(c)
+    }
+
+    /// Drop the lease (used up, or lost) and compete again later.
+    fn give_up(&mut self, c: usize) {
+        self.clients[c].token = None;
+        self.clients[c].writes_left = 0;
+        let d = self.rng.range(10, 40);
+        self.schedule(d, Event::Wake { c });
     }
 
     fn run(&mut self) {
@@ -283,7 +320,10 @@ impl Sim {
         while let Some(Reverse((time, _, ev))) = self.queue.pop() {
             self.now = time;
             self.steps += 1;
-            assert!(self.steps < MAX_STEPS, "simulation did not terminate");
+            assert!(
+                self.steps <= step_budget(self.cfg),
+                "simulation did not terminate"
+            );
             self.log(format!("{time:>5}ms  {ev:?}"));
             self.handle(ev);
         }
@@ -311,19 +351,40 @@ impl Sim {
             Event::GrantAtClient { c, token, expiry } => {
                 let client = &mut self.clients[c];
                 client.token = Some(token);
+                client.lease_until = expiry;
                 client.leases_left -= 1;
                 client.writes_left = self.cfg.writes_per_lease;
-                // The client CHECKS validity here and it passes. The pause comes after the check: that gap is the bug.
-                debug_assert!(self.now < expiry || self.cfg.pause_percent > 0);
-                let d = self.work_delay(c);
-                self.schedule(d, Event::DoWrite { c });
+                if client.writes_left == 0 {
+                    self.give_up(c);
+                } else {
+                    let d = self.work_delay(c);
+                    self.schedule(d, Event::CheckLease { c });
+                }
             }
             Event::DeniedAtClient { c } => {
                 let backoff = self.rng.range(20, 60);
                 self.schedule(backoff, Event::Wake { c });
             }
-            Event::DoWrite { c } => {
+            // The client does what careful code does: it looks at the clock right before it writes.
+            Event::CheckLease { c } => {
+                if self.now >= self.clients[c].lease_until {
+                    self.stopped_by_check += 1;
+                    self.log(format!(
+                        "        client {c} checks: lease ran out, not writing"
+                    ));
+                    self.give_up(c);
+                } else {
+                    self.log(format!("        client {c} checks: lease is good"));
+                    // The check passed. A stall HERE is invisible to it: that gap is the bug no client code can close.
+                    let gap = self.stall(c);
+                    self.schedule(gap, Event::SendWrite { c });
+                }
+            }
+            Event::SendWrite { c } => {
                 let token = self.clients[c].token.expect("write without a lease");
+                if self.now >= self.clients[c].lease_until {
+                    self.sent_after_expiry += 1;
+                }
                 self.clients[c].writes_left -= 1;
                 let value = self.next_value;
                 self.next_value += 1;
@@ -356,9 +417,7 @@ impl Sim {
                     let d = self.net();
                     self.schedule(d, Event::RenewAtSvc { c, token });
                 } else {
-                    self.clients[c].token = None;
-                    let d = self.rng.range(10, 40);
-                    self.schedule(d, Event::Wake { c });
+                    self.give_up(c);
                 }
             }
             Event::RenewAtSvc { c, token } => {
@@ -368,25 +427,18 @@ impl Sim {
                     renewed.map_or("too late".into(), |e| format!("extended to {e}ms"))
                 ));
                 let d = self.net();
-                self.schedule(
-                    d,
-                    Event::RenewAck {
-                        c,
-                        ok: renewed.is_some(),
-                    },
-                );
+                self.schedule(d, Event::RenewAck { c, expiry: renewed });
             }
-            Event::RenewAck { c, ok: true } => {
+            Event::RenewAck {
+                c,
+                expiry: Some(expiry),
+            } => {
+                self.clients[c].lease_until = expiry;
                 let d = self.work_delay(c);
-                self.schedule(d, Event::DoWrite { c });
+                self.schedule(d, Event::CheckLease { c });
             }
-            Event::RenewAck { c, ok: false } => {
-                // Lost the lease: stop writing under this token and compete again.
-                self.clients[c].token = None;
-                self.clients[c].writes_left = 0;
-                let d = self.rng.range(10, 40);
-                self.schedule(d, Event::Wake { c });
-            }
+            // Lost the lease: stop writing under this token and compete again.
+            Event::RenewAck { c, expiry: None } => self.give_up(c),
         }
     }
 }
@@ -435,6 +487,87 @@ fn check_lease_service() {
     );
 }
 
+/// Two inputs that used to crash the simulator: a lease with nothing to write (a counter went below zero), and a crowd
+/// large enough to pass the old fixed limit of 100,000 events.
+fn check_unusual_configs() {
+    let idle = Config {
+        clients: 2,
+        leases_per_client: 2,
+        writes_per_lease: 0,
+        pause_percent: 30,
+    };
+    let sim = simulate(1, idle, true, false);
+    assert!(sim.storage.arrived.is_empty());
+    assert!(sim.clients.iter().all(|c| c.leases_left == 0));
+    let crowd = Config {
+        clients: 100,
+        leases_per_client: 3,
+        writes_per_lease: 3,
+        pause_percent: 30,
+    };
+    let sim = simulate(1, crowd, true, false);
+    assert!(sim.steps > 100_000, "the crowd must need many events");
+    assert!(sim.clients.iter().all(|c| c.leases_left == 0));
+}
+
+/// The client's own check, one event at a time: its edge, and the end time a renewal brings.
+fn check_client_check() {
+    let cfg = Config {
+        clients: 1,
+        leases_per_client: 1,
+        writes_per_lease: 2,
+        pause_percent: 0,
+    };
+    let holding = |now: Time, lease_until: Time| {
+        let mut sim = Sim::new(1, cfg, true, false);
+        sim.now = now;
+        sim.clients[0] = Client {
+            token: Some(1),
+            lease_until,
+            leases_left: 0,
+            writes_left: 2,
+        };
+        sim
+    };
+    let next = |sim: &Sim| sim.queue.peek().map(|Reverse((_, _, ev))| *ev);
+
+    let mut last_moment = holding(99, 100);
+    last_moment.handle(Event::CheckLease { c: 0 });
+    assert_eq!(next(&last_moment), Some(Event::SendWrite { c: 0 }));
+
+    let mut at_the_end = holding(100, 100);
+    at_the_end.handle(Event::CheckLease { c: 0 });
+    assert_eq!(
+        at_the_end.stopped_by_check, 1,
+        "a lease has run out at its end time"
+    );
+    assert!(matches!(next(&at_the_end), Some(Event::Wake { c: 0 })));
+
+    let mut renewed = holding(50, 60);
+    renewed.handle(Event::RenewAck {
+        c: 0,
+        expiry: Some(150),
+    });
+    assert_eq!(
+        renewed.clients[0].lease_until, 150,
+        "the client takes the new end"
+    );
+    renewed.queue.clear();
+    renewed.now = 149;
+    renewed.handle(Event::CheckLease { c: 0 });
+    assert_eq!(
+        renewed.stopped_by_check, 0,
+        "the renewed lease is still good"
+    );
+
+    let mut slipped = holding(100, 100);
+    slipped.handle(Event::SendWrite { c: 0 });
+    assert_eq!(
+        slipped.sent_after_expiry, 1,
+        "sending at the end time is too late"
+    );
+}
+
 /// Find the first seed whose schedule corrupts unfenced storage: a concrete, reproducible bad interleaving.
 fn find_corrupting_seed(cfg: Config) -> u64 {
     (1..10_000)
@@ -444,6 +577,8 @@ fn find_corrupting_seed(cfg: Config) -> u64 {
 
 fn main() {
     check_lease_service();
+    check_unusual_configs();
+    check_client_check();
 
     let demo = Config {
         clients: 2,
@@ -471,8 +606,7 @@ fn main() {
     assert!(b.storage.rejected >= 1, "the stale write must be rejected");
     check_safety(&b.storage).expect("fencing keeps storage safe");
     assert_eq!(
-        b.storage.arrived.len(),
-        a.storage.arrived.len(),
+        b.storage.arrived, a.storage.arrived,
         "same schedule, same writes"
     );
     println!(
@@ -488,6 +622,7 @@ fn main() {
         pause_percent: 30,
     };
     let (mut unfenced_bad, mut fenced_bad, mut stale_rejected, mut writes) = (0, 0, 0, 0);
+    let (mut stopped, mut slipped) = (0, 0);
     for seed in 0..2000 {
         let unfenced = simulate(seed, cfg, false, false);
         let fenced = simulate(seed, cfg, true, false);
@@ -495,6 +630,12 @@ fn main() {
         fenced_bad += u32::from(check_safety(&fenced.storage).is_err());
         stale_rejected += fenced.storage.rejected;
         writes += fenced.storage.arrived.len();
+        stopped += fenced.stopped_by_check;
+        slipped += fenced.sent_after_expiry;
+        assert_eq!(
+            unfenced.storage.arrived, fenced.storage.arrived,
+            "seed {seed}: paired"
+        );
         assert!(
             fenced.clients.iter().all(|c| c.leases_left == 0),
             "every client finished its leases"
@@ -511,6 +652,14 @@ fn main() {
         "without fencing some schedules must violate safety"
     );
     assert!(stale_rejected > 0);
+    println!(
+        "  the clients' own check stopped {stopped} writes and let {slipped} expired ones through"
+    );
+    assert!(
+        stopped > 0,
+        "the check must catch pauses that come before it"
+    );
+    assert!(slipped > 0, "and must miss pauses that come after it");
 
     // Determinism: the same seed replays to the identical outcome.
     let again = simulate(seed, demo, false, true);

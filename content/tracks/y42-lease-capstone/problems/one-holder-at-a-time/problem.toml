@@ -1,0 +1,42 @@
+slug = "one-holder-at-a-time"
+title = "Capstone 1: one holder at a time"
+mode = "write"
+level = "medium"
+stage = "pieces"
+order = 1
+status = "ready"
+tags = ["leases", "expiry", "logical time", "45-min"]
+teaches = [
+    "A lease is a promise with an end: it frees itself when its holder disappears.",
+    "Every grant gets a number that only grows. The name of a client does not say which of its grants it means.",
+    "The service decides by its own clock, and that clock must never run backwards.",
+]
+follow_up = "1) The service restarts and forgets everything. Which two promises can it now break? Why is saving the token counter alone not enough to keep both? 2) The service's clock runs 1% faster than a client's. Who is hurt? 3) What changes if clients may give a lease back early?"
+related = ["Y42", "Y41", "Y7"]
+
+[[hints]]
+kind = "approach"
+text = "Remember the latest grant even after it runs out, and decide in one place whether it is live. All three methods ask that same question first."
+
+[[hints]]
+kind = "rust"
+text = "`Option<(u32, Lease)>` with `.filter(|(_, lease)| now < lease.expires_at)` gives the live lease. The `?` operator returns early from a method that returns an `Option`. `saturating_add` stops at `u64::MAX`."
+
+[[hints]]
+kind = "edge"
+text = "A renewal must name the right client and the right token: the same client may have held an earlier lease. And a call you refuse still tells you what time it is."
+
+[solution]
+explanation = "The service keeps the latest grant and the latest time any call named. One helper moves the clock forward and returns the lease if it is live; `acquire` grants only when it returns nothing, and `renew` and `holder` need it to return something. Tokens count grants, so a refusal cannot use one."
+time = "O(1) per call"
+space = "O(1)"
+
+[[cookbook]]
+level = "similar"
+page = "lease-fencing-sim"
+note = "Its lease service. It has no clock rule for earlier times, and no overflow rule."
+
+[[cookbook]]
+level = "related"
+page = "idempotency-dedup-leader-fencing-store"
+note = "A leader lease with numbered terms."

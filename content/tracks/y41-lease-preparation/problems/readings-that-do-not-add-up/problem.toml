@@ -1,0 +1,33 @@
+slug = "readings-that-do-not-add-up"
+title = "Readings that do not add up"
+mode = "write"
+level = "medium"
+stage = "replay"
+order = 3
+status = "ready"
+tags = ["checking records", "trait objects", "iterators", "error propagation", "60-min"]
+teaches = [
+    "A checker works on what came out, not on how it was made, so it can judge code it has never seen.",
+    "`entry` builds per-key data in one lookup; `windows(2)` compares neighbours; `max_by_key` with a tuple breaks ties; `position` finds where to cut a slice.",
+    "`Option::filter` and `?` say \"only if\" without nesting. With `Result`, `?` passes an error up out of a loop.",
+    "`&mut dyn Trait` lets a function use, and wrap, a source whose type it does not know.",
+]
+follow_up = "1) `Remembering` clones every day it hands out. What would the trait have to look like to lend it instead? 2) The days come from a slow network. Why must the search stay lazy, and what would reading ahead cost? 3) When would you take `impl Feed` or a generic `F: Feed` instead of `&mut dyn Feed`?"
+related = ["Y41", "L4", "S1"]
+
+[[hints]]
+kind = "approach"
+text = "Two kinds of question: about one meter's own list, where the one before is the neighbour, and about a mixed day, where you must remember the previous reading of each meter as you walk. For the search, handle one day completely before asking for the next."
+
+[[hints]]
+kind = "rust"
+text = "`map.entry(key).or_default().push(x)` and `entry(..).or_insert_with(..)` fill a `HashMap`; matching on `Entry::Occupied` / `Entry::Vacant` lets the insert use `?`. `windows(2).find(..)`, `max_by_key(|r| (a, b))`, `iter().position(..)` and `find_map` do the walking. `option?` leaves early with `None`, and `.filter(..)` turns a `Some` into `None`."
+
+[[hints]]
+kind = "edge"
+text = "Pick the newest reading first, and only then ask whether it is fresh. Compare falls with `saturating_add` on the side that cannot go below zero. `for day in days` over a `Range<u64>` is lazy, and `Rules { allow_equal: false, ..*self }` copies the fields you do not name."
+
+[solution]
+explanation = "`by_meter` uses the entry API. The current total takes the newest reading with a tuple key and then keeps it only if its age passes a filter. One meter's list is checked with neighbouring pairs. A mixed day is walked once while a map holds the previous reading of each meter. `Remembering` matches on the entry so that a failed fetch returns before anything is stored. The search asks for one day at a time and returns at the first break or error."
+time = "O(readings) per day"
+space = "O(meters), plus the remembered days"

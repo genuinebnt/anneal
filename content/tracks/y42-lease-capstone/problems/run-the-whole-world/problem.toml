@@ -1,0 +1,37 @@
+slug = "run-the-whole-world"
+title = "Capstone 4: run the whole world"
+mode = "write"
+level = "hard"
+stage = "world"
+order = 4
+status = "ready"
+tags = ["deterministic simulation", "message passing", "traces", "90-min"]
+teaches = [
+    "A whole distributed system fits in one thread when every wait is an entry in an agenda.",
+    "Taking the delays as an argument lets a test stage any accident exactly, with no luck and no sleeping.",
+    "A trace of what happened turns a wrong final value into a story with a cause.",
+]
+follow_up = "1) Add lost and duplicated messages. Which parts of the world and the client break first? 2) The lease service now crashes and restarts. How would you simulate what it forgets? 3) Which parts of your world would have to change to run the same client against a real network?"
+related = ["Y42", "Y41"]
+
+[[hints]]
+kind = "approach"
+text = "One enum says what is on its way and to whom. One function delivers a piece of it, and one carries out the action a client returns. Neither needs to know the story: each only turns one thing into the next."
+
+[[hints]]
+kind = "rust"
+text = "Keep the agenda, the service, the disk, the clients and the trace as fields of one struct, with `delays: &mut dyn Delays`. A `WorkDone` cannot be built when the work is planned, as its time is not known yet: give it its own kind of mail. `ok_or(...)?` turns a refused plan into `TimeOverflow`."
+
+[[hints]]
+kind = "edge"
+text = "A pause of 0 is still a planned event, which matters for ties and for the budget. Give a value to a write when it leaves, and stamp it with a time when it arrives. And decide `OutOfSteps` only when there really is one more event."
+
+[solution]
+explanation = "Everything that is on its way is one enum in the agenda. Delivering a client's mail calls its `handle`. The action becomes new mail with a delay from `Delays`. Delivering to the service or the disk calls it at the current time, records the result and posts the reply. `WorkEnds` is separate mail so that `now` is read when it is delivered. The loop counts deliveries against the budget."
+time = "O(events * log pending)"
+space = "O(clients + trace)"
+
+[[cookbook]]
+level = "similar"
+page = "lease-fencing-sim"
+note = "Its simulation loop. It draws its own random delays and logs text lines."

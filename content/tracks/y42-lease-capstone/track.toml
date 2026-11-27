@@ -1,0 +1,16 @@
+code = "Y42"
+name = "Lease simulator capstone"
+section = "Y"
+tier = "sde3"
+order = 42
+summary = "Build a simulation of a lease service in five steps. The steps are the service, the shared disk, a client that can stall, the whole world and a search for the run that corrupts data. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "pieces"
+name = "The pieces"
+band = "medium"
+
+[[stages]]
+slug = "world"
+name = "The world"
+band = "hard"

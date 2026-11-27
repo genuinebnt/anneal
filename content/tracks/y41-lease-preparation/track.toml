@@ -1,0 +1,16 @@
+code = "Y41"
+name = "Lease simulator: preparation"
+section = "Y"
+tier = "sde3"
+order = 41
+summary = "Randomness you can replay, a simulated clock with an agenda, checks on records, messages that arrive too late and a search for the order that breaks things."
+
+[[stages]]
+slug = "replay"
+name = "Runs you can replay"
+band = "medium"
+
+[[stages]]
+slug = "late-and-unlucky"
+name = "Late and unlucky"
+band = "hard"

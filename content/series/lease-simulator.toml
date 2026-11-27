@@ -1,0 +1,403 @@
+# The series "Build a lease simulator": an order over new and existing problems, not a track. It copies and moves
+# nothing. required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives
+# away how to solve the part. cookbook: reference pages (slugs in content/cookbook), closed by default; level is exact
+# (solves the task), similar (same technique, different task) or related (explains the idea). Notes say how much of a
+# page was read. Minutes are estimates; nobody has been timed.
+
+[series]
+id = "lease-simulator"
+rank = 9
+title = "Build a lease simulator"
+summary = "Small parts teach you to replay random runs, handle late messages and hunt for bad orderings. Then you build a simulated system that takes turns writing to one disk, and find the run that corrupts it."
+note = "All times are estimates; nobody has been timed. Nothing sleeps or reads a real clock: every run is simulated."
+capstone_title = "Capstone: a lease simulator"
+capstone_summary = "A lease service, a shared disk, clients that can stall, a slow network, and a search through thousands of runs for the one that goes wrong."
+capstone_note = "From step 2 on, each starter contains reference code for the earlier steps. Steps 4 and 5 also contain code that solves preparation parts. Each of those steps begins with a warning that names what the code solves. Read it before opening the editor. The model is small: no message is lost or repeated by the network, and the service never restarts. Clients and the service share one perfect clock. A real disk must save its highest token, and check and write in one step. A real service needs more than saved tokens after a restart: it must not grant over a lease that is still live. A holder that reads before it writes must show the disk its token before reading."
+capstone_cookbook = "lease-fencing-sim"
+
+[[stage]]
+id = "replay"
+name = "Runs you can replay"
+
+[[stage]]
+id = "old-news"
+name = "Old news"
+
+[[stage]]
+id = "bad-timing"
+name = "Bad timing"
+
+[[part]]
+number = 1
+id = "y41-rolls-you-can-replay"
+stage = "replay"
+status = "new"
+minutes = 45
+blurb = "Make random numbers that a bug report can bring back"
+new_idea = "A seed replays a run, ranges without bias, and a separate stream for each consumer"
+reuses = "nothing"
+know_first = "Structs, loops and integer types"
+required = []
+used_again = ["y42-find-the-bad-run"]
+real_uses = "Property tests, game replays, load generators, deterministic simulators."
+cookbook = [
+    { level = "related", page = "lease-fencing-sim", note = "Read in full. Its small generator reduces with a plain remainder.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "y41-what-happens-next"
+stage = "replay"
+status = "new"
+minutes = 45
+blurb = "Play hours of a system's life in an instant, the same way every time"
+new_idea = "A clock that jumps from event to event, with a fixed rule for ties"
+reuses = "nothing"
+know_first = "Generics, closures and std collections"
+required = []
+helpful = [
+    { id = "s5-binary-heap", why = "how the ordered queue works inside", reveals_method = true, hidden = true },
+]
+used_again = ["y42-run-the-whole-world"]
+real_uses = "Network and queue simulators, timer wheels, game loops, tests with a fake clock."
+cookbook = [
+    { level = "similar", page = "lease-fencing-sim", note = "Read in full. Its event loop, without cancelling.", hidden = true },
+    { level = "related", page = "std-btree-binaryheap-ordered", note = "Only the page text was read.", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "y41-readings-that-do-not-add-up"
+stage = "replay"
+status = "new"
+minutes = 60
+blurb = "Find the first thing wrong in records that you did not write"
+new_idea = "Judging records from a source known only by its trait, stopping at the first fault"
+reuses = "nothing from earlier parts"
+know_first = "Traits, what dyn means, lifetimes in a struct, HashMap, Option and Result"
+required = []
+used_again = ["y42-one-holder-at-a-time", "y42-the-disk-and-the-judge", "y42-run-the-whole-world", "y42-find-the-bad-run"]
+real_uses = "Data quality checks, audit jobs, caching wrappers around slow sources."
+
+[[part]]
+number = 4
+id = "y41-answers-that-come-too-late"
+stage = "old-news"
+status = "new"
+minutes = 60
+blurb = "Retry a question without ever believing an outdated answer"
+new_idea = "A protocol as inputs and outputs, with numbers that tell old messages from new"
+reuses = "nothing from earlier parts"
+know_first = "Enums with data, and match"
+required = []
+used_again = ["y42-one-holder-at-a-time", "y42-a-client-that-can-stall"]
+real_uses = "RPC clients, DNS resolvers, payment retries, connection state machines."
+
+[[part]]
+number = 5
+id = "y7-raft-vote-rules"
+stage = "old-news"
+status = "existing"
+minutes = 45
+blurb = "Decide what a server does with news from an older or a newer time"
+new_idea = "The receiver keeps the highest number it has seen and turns away what is older"
+reuses = "telling old from new, from part 4"
+required = ["y41-answers-that-come-too-late"]
+used_again = ["y42-the-disk-and-the-judge"]
+real_uses = "Leader election in etcd and Consul, controller epochs in Kafka."
+
+[[part]]
+number = 6
+id = "m3-claim-without-a-lock"
+stage = "bad-timing"
+status = "existing"
+minutes = 60
+blurb = "Give many threads pieces of one buffer, with no overlap, and close it cleanly"
+new_idea = "What you looked at may have changed before you act, unless looking and acting are one step"
+reuses = "nothing from earlier parts"
+know_first = "Threads and atomics"
+required = []
+used_again = ["y42-the-disk-and-the-judge", "y42-a-client-that-can-stall"]
+real_uses = "Bump allocators, log reservation in storage engines, conditional writes."
+cookbook = [
+    { level = "related", page = "std-atomics-ordering-use-cases", note = "Not read for this series; the rate limiter series read its gauge section.", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "y41-shortest-way-to-break-it"
+stage = "bad-timing"
+status = "new"
+minutes = 75
+blurb = "Find the shortest order of events that makes two actors go wrong"
+new_idea = "A schedule is data: it can be searched for, kept short and run again"
+reuses = "the gap between looking and acting from part 6"
+know_first = "VecDeque, HashSet and deriving Hash"
+required = ["m3-claim-without-a-lock"]
+used_again = ["y42-find-the-bad-run"]
+real_uses = "Model checkers, loom, debugging reports from concurrent systems."
+cookbook = [
+    { level = "related", page = "lease-fencing-sim", note = "Read in full. It searches random seeds, not all orders.", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "y42-one-holder-at-a-time"
+title = "One holder at a time"
+minutes = 45
+blurb = "Hand out turns that end by themselves"
+new_idea = "A grant that runs out, a new number for each, and a clock that never goes back"
+reuses = "numbers that are never reused, from part 4"
+prepared_by = ["y41-answers-that-come-too-late", "y41-readings-that-do-not-add-up"]
+required = ["y41-answers-that-come-too-late", "y41-readings-that-do-not-add-up"]
+used_again = ["y42-run-the-whole-world"]
+real_uses = "Leader election, job ownership, DHCP addresses."
+cookbook = [
+    { level = "similar", page = "lease-fencing-sim", note = "Read in full. Its lease service.", hidden = true },
+    { level = "related", page = "idempotency-dedup-leader-fencing-store", note = "Its design notes were read.", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y42-the-disk-and-the-judge"
+title = "The disk and its judge"
+minutes = 45
+blurb = "Build what is being written to, and decide from its records whether harm was done"
+new_idea = "The resource itself refuses the out of date, and safety rules judge any history"
+reuses = "the receiver's rule from part 5"
+prepared_by = ["y7-raft-vote-rules", "m3-claim-without-a-lock", "y41-readings-that-do-not-add-up"]
+required = ["y42-one-holder-at-a-time", "y7-raft-vote-rules"]
+helpful = [
+    { id = "b21-two-editors", why = "a server that refuses a write based on an old version", reveals_method = true, hidden = true },
+]
+used_again = ["y42-run-the-whole-world", "y42-find-the-bad-run"]
+real_uses = "Storage that checks epochs, conditional writes in object stores and databases."
+cookbook = [
+    { level = "similar", page = "lease-fencing-sim", note = "Read in full. Its storage and safety checker.", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y42-a-client-that-can-stall"
+title = "A client that can stall anywhere"
+minutes = 75
+blurb = "Write the user of a turn as a thing that only reacts"
+new_idea = "A check before acting still leaves a gap, and old messages must change nothing"
+reuses = "the state machine from part 4, the gap from part 6"
+prepared_by = ["y41-answers-that-come-too-late", "m3-claim-without-a-lock"]
+required = ["y42-one-holder-at-a-time", "y41-answers-that-come-too-late"]
+used_again = ["y42-run-the-whole-world"]
+real_uses = "Workers that hold a lock, leader processes, protocol libraries without I/O."
+cookbook = [
+    { level = "similar", page = "lease-fencing-sim", note = "Read in full. Its client events.", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y42-run-the-whole-world"
+title = "Run the whole world"
+minutes = 90
+blurb = "Connect everything through a slow network that a test controls"
+new_idea = "A distributed system on one thread, where every delay is an argument and every event is traced"
+reuses = "the agenda from part 2, steps 1 to 3"
+prepared_by = ["y41-what-happens-next", "y41-readings-that-do-not-add-up"]
+required = ["y42-a-client-that-can-stall", "y41-what-happens-next"]
+used_again = ["y42-find-the-bad-run"]
+real_uses = "Deterministic simulation testing, protocol simulators."
+cookbook = [
+    { level = "similar", page = "lease-fencing-sim", note = "Read in full. Its simulation loop.", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y42-find-the-bad-run"
+title = "Find the bad run and run it again"
+minutes = 90
+blurb = "Try thousands of runs, then replay the one that breaks and explain it"
+new_idea = "Delays that stay put when anything else changes, so two runs differ in one thing only"
+reuses = "streams from part 1, searching for a failing schedule from part 7"
+prepared_by = ["y41-rolls-you-can-replay", "y41-shortest-way-to-break-it", "y41-readings-that-do-not-add-up"]
+required = ["y42-run-the-whole-world", "y41-rolls-you-can-replay"]
+used_again = []
+real_uses = "FoundationDB and TigerBeetle style testing, chaos testing with replay."
+cookbook = [
+    { level = "similar", page = "lease-fencing-sim", note = "Read in full. Has the search, paired replay and campaign. Delays and story differ.", hidden = true },
+    { level = "related", page = "shrinking", note = "Only the page text was read.", hidden = true },
+]
+
+[[revisit]]
+part = "y41-answers-that-come-too-late"
+before = "y42-a-client-that-can-stall"
+how = "Write part 4 again from memory before capstone step 3."
+minutes = 30
+
+[[revisit]]
+part = "y41-what-happens-next"
+before = "y42-run-the-whole-world"
+how = "Write part 2 again from a blank starter before capstone step 4."
+minutes = 25
+
+[[revisit]]
+part = "y41-rolls-you-can-replay"
+before = "y42-find-the-bad-run"
+how = "Write part 1 again before capstone step 5. Pay attention to the streams."
+minutes = 20
+
+[[connection]]
+idea = "One seed, one run"
+learn = ["y41-rolls-you-can-replay"]
+again = ["y41-what-happens-next"]
+apply = ["y42-run-the-whole-world", "y42-find-the-bad-run"]
+
+[[connection]]
+idea = "Time that the program controls"
+learn = ["y41-what-happens-next"]
+again = ["y41-answers-that-come-too-late"]
+apply = ["y42-one-holder-at-a-time", "y42-run-the-whole-world"]
+
+[[connection]]
+idea = "Telling old from new by a number"
+learn = ["y41-answers-that-come-too-late"]
+again = ["y7-raft-vote-rules"]
+apply = ["y42-one-holder-at-a-time", "y42-the-disk-and-the-judge", "y42-a-client-that-can-stall"]
+
+[[connection]]
+idea = "A protocol with no clock and no network"
+learn = ["y41-answers-that-come-too-late"]
+again = []
+apply = ["y42-a-client-that-can-stall", "y42-run-the-whole-world"]
+
+[[connection]]
+idea = "The gap between looking and acting"
+learn = ["m3-claim-without-a-lock"]
+again = ["y41-shortest-way-to-break-it"]
+apply = ["y42-a-client-that-can-stall", "y42-the-disk-and-the-judge"]
+
+[[connection]]
+idea = "Judging records, not the code that made them"
+learn = ["y41-readings-that-do-not-add-up"]
+again = []
+apply = ["y42-the-disk-and-the-judge", "y42-find-the-bad-run"]
+
+[[connection]]
+idea = "Searching for the run that breaks"
+learn = ["y41-shortest-way-to-break-it"]
+again = []
+apply = ["y42-find-the-bad-run"]
+
+[[readiness]]
+group = "Replay"
+concept = "A seeded generator; wrapping_add and wrapping_mul"
+steps = [5]
+parts = ["y41-rolls-you-can-replay"]
+
+[[readiness]]
+group = "Replay"
+concept = "Unbiased ranges over u64, checked_add and wrapping_neg"
+steps = [5]
+parts = ["y41-rolls-you-can-replay"]
+
+[[readiness]]
+group = "Replay"
+concept = "A stream for each consumer; HashMap entry with or_insert_with"
+steps = [5]
+parts = ["y41-rolls-you-can-replay", "y41-readings-that-do-not-add-up"]
+
+[[readiness]]
+group = "Simulated time"
+concept = "BinaryHeap with a reversed order, ties by planning number, checked_add on times"
+steps = [4]
+parts = ["y41-what-happens-next"]
+note = "Given in the step 4 starter."
+
+[[readiness]]
+group = "Simulated time"
+concept = "A step budget that stops a system which never rests"
+steps = [4]
+parts = ["y41-what-happens-next"]
+
+[[readiness]]
+group = "Simulated time"
+concept = "Time passed in as u64 milliseconds; saturating_add; a time that goes back"
+steps = [1]
+parts = ["y41-answers-that-come-too-late"]
+note = "Part 4 has saturating arithmetic. The clock that never goes back is new in step 1."
+
+[[readiness]]
+group = "Leases"
+concept = "Option with filter and the ? operator"
+steps = [1]
+parts = ["y41-readings-that-do-not-add-up"]
+
+[[readiness]]
+group = "Leases"
+concept = "Numbers that are never reused, and refusing what carries an old one"
+steps = [1, 2, 3]
+parts = ["y41-answers-that-come-too-late", "y7-raft-vote-rules"]
+
+[[readiness]]
+group = "Leases"
+concept = "slice windows, find and max_by_key over a tuple"
+steps = [2]
+parts = ["y41-readings-that-do-not-add-up"]
+
+[[readiness]]
+group = "Protocols"
+concept = "Input and output enums; a match over state and event with guards"
+steps = [3, 4]
+parts = ["y41-answers-that-come-too-late"]
+
+[[readiness]]
+group = "Protocols"
+concept = "Check then act, and why a second check does not help"
+steps = [2, 3]
+parts = ["m3-claim-without-a-lock", "y41-shortest-way-to-break-it"]
+
+[[readiness]]
+group = "Putting it together"
+concept = "A trait object passed as &mut dyn Delays, and a type that implements the trait"
+steps = [4, 5]
+parts = ["y41-readings-that-do-not-add-up"]
+
+[[readiness]]
+group = "Putting it together"
+concept = "Result with ? to pass an error up through a loop"
+steps = [4, 5]
+parts = ["y41-readings-that-do-not-add-up"]
+
+[[readiness]]
+group = "Putting it together"
+concept = "Searching for a failing run and replaying it"
+steps = [5]
+parts = ["y41-shortest-way-to-break-it", "y41-rolls-you-can-replay"]
+
+[[readiness]]
+group = "Putting it together"
+concept = "A lazy Range<u64>, struct update syntax, iterator position and filter"
+steps = [5]
+parts = ["y41-readings-that-do-not-add-up"]
+
+[[side_path]]
+id = "y5-catch-the-broken-queue"
+why = "practise judging code by random runs against a model"
+after = "y41-rolls-you-can-replay"
+
+[[side_path]]
+id = "y5-shrink-failing-input"
+why = "the next move once you have a failing run: make it small"
+after = "y42-find-the-bad-run"
+
+[[side_path]]
+id = "m2-rate-limiter"
+why = "more practice with a clock that the test moves"
+after = "y41-what-happens-next"
+
+[[side_path]]
+id = "y7-raft-leader-commit"
+why = "another rule that stops an old leader from doing harm"
+after = "y7-raft-vote-rules"
+
+[[side_path]]
+id = "b21-two-editors"
+why = "refusing a write based on an old version, over HTTP"
+after = "y42-find-the-bad-run"

@@ -1,0 +1,42 @@
+slug = "what-happens-next"
+title = "What happens next?"
+mode = "write"
+level = "medium"
+stage = "replay"
+order = 2
+status = "ready"
+tags = ["simulated time", "priority queue", "determinism", "45-min"]
+teaches = [
+    "In a discrete-event simulation the clock does not tick: it jumps to the next thing that happens.",
+    "A tie broken by planning order makes the whole run repeatable. A tie broken by the data would make order depend on what the events say.",
+    "A step budget turns a livelock into a test failure instead of a hung test.",
+]
+follow_up = "1) `BinaryHeap` has no remove. What does a cancelled entry cost you until its time comes, and when would you rebuild the heap? 2) A `BTreeMap` could do the whole job. What would you use as the key, and what do you give up or gain? 3) Why must a simulation never read `Instant::now` or iterate a `HashMap` to decide what happens next?"
+related = ["Y41", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "Two questions need answers fast: which pending event is next, and is this ticket still pending? Every event has two facts that decide its turn: its time, and how many were planned before it."
+
+[[hints]]
+kind = "rust"
+text = "`std::collections::BinaryHeap` gives the greatest first: use `std::cmp::Reverse` or write `Ord` the other way round. Order small keys and keep the events beside them, so that `E` needs no `Ord`. A `BTreeMap<(u64, u64), E>` with `pop_first` is another way."
+
+[[hints]]
+kind = "edge"
+text = "A cancelled event that is still somewhere in a queue must not move the clock, count as a step or count in `len`. And what does `run` answer when its last allowed step empties the agenda?"
+
+[solution]
+explanation = "A heap holds only (time, planning number) pairs, ordered so that the smallest comes first. The events sit in a map under their planning numbers, which are also the tickets. Cancelling removes the event from the map; its heap entry is skipped when it surfaces, without touching the clock. `after` uses `checked_add`. `run` takes at most `max_steps` events and then asks whether anything is left."
+time = "after and next O(log n) amortised, cancel O(1) expected"
+space = "O(pending + cancelled entries not yet reached)"
+
+[[cookbook]]
+level = "similar"
+page = "lease-fencing-sim"
+note = "The simulator's event loop: a heap of (time, sequence number, event). Its events must be comparable, and it has no cancel."
+
+[[cookbook]]
+level = "related"
+page = "std-btree-binaryheap-ordered"
+note = "What std's ordered collections offer."

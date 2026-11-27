@@ -1,0 +1,42 @@
+slug = "find-the-bad-run"
+title = "Capstone 5: find the bad run and run it again"
+mode = "write"
+level = "hard"
+stage = "world"
+order = 5
+status = "ready"
+tags = ["simulation testing", "seed search", "fault injection", "90-min"]
+teaches = [
+    "Random worlds find accidents nobody wrote a test for, and a seed makes each one repeatable.",
+    "A fair comparison changes one thing. Delays that belong to a client and a kind stay put when anything else changes.",
+    "A thousand clean runs are evidence, not proof. The run that breaks is proof, and its story shows the cause.",
+]
+follow_up = "1) The guarded campaign shows no breach in 10,000 seeds. What has that shown, and what has it not? 2) How would you make a bad run smaller than its story: fewer clients, fewer stalls? 3) FoundationDB runs its real code inside such a simulator. What must the code never do directly for that to work?"
+related = ["Y42", "Y41", "Y5"]
+
+[[hints]]
+kind = "approach"
+text = "The delays rule is the heart of it: where would the n-th `Net` delay of client 2 come from if nobody else's calls may matter? Everything after that is a loop over seeds and a judgement for each report."
+
+[[hints]]
+kind = "rust"
+text = "A `HashMap<(u32, Wait), Dice>` with `entry(..).or_insert_with(|| Dice::stream(seed, id))` gives each pair its own stream; build `id` so that no two pairs share it. `for seed in seeds` over a `Range<u64>` is lazy, so returning early costs nothing. For `story`, `iter().position` finds both ends."
+
+[[hints]]
+kind = "edge"
+text = "A stall is added to the work, not put in its place, and both numbers can be enormous. `run_pair`, `first_breach` and `campaign` choose the guard themselves. And `story` keeps two clients, not every entry between its ends."
+
+[solution]
+explanation = "Each (client, kind) pair gets its own stream of the seed, so a delay depends only on how often that pair was asked. Running a seed is then a pure function, and the two disks of a pair see the same writes because the client ignores verdicts. The search walks the range lazily and returns at the first error from the judge; the campaign counts both runs of each seed. The story finds the grant of the stale token and the arrival of the stale write and keeps the two clients' entries between them."
+time = "O(seeds * events * log pending)"
+space = "O(one run)"
+
+[[cookbook]]
+level = "similar"
+page = "lease-fencing-sim"
+note = "It has the seed search, the paired replay and the campaign. Its delays come from one shared generator, and its timeline is filtered text, not a cut of two clients."
+
+[[cookbook]]
+level = "related"
+page = "shrinking"
+note = "Making a failing case smaller, the next step after finding one."

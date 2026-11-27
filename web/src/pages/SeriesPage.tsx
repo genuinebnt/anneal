@@ -76,7 +76,7 @@ function Capstone({ cap, series }: { cap: NonNullable<SeriesView["capstone"]>; s
       {cap.note && <p className="sx-capnote">{cap.note}</p>}
       {cap.cookbook && (
         <details>
-          <summary>Show the Cookbook solution<small>This shows the complete approach</small></summary>
+          <summary>Show the Cookbook solution<small>This gives away much of the approach</small></summary>
           <Link to="/cookbook/p/$id" params={{ id: cap.cookbook.id }}><span>Open in the Cookbook: <Inline text={cap.cookbook.title} /></span></Link>
         </details>
       )}

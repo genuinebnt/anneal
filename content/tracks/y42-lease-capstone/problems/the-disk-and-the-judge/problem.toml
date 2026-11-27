@@ -1,0 +1,42 @@
+slug = "the-disk-and-the-judge"
+title = "Capstone 2: the disk and its judge"
+mode = "write"
+level = "medium"
+stage = "pieces"
+order = 2
+status = "ready"
+tags = ["fencing tokens", "safety checks", "histories", "45-min"]
+teaches = [
+    "The resource can refuse a holder that is out of date, by remembering one number. No check inside the client can do that job.",
+    "A safety rule stated over a recorded history can judge any implementation, including a broken one.",
+    "A guard orders writes. It does not make leases exclusive: an expired holder's write that arrives first is still accepted.",
+]
+follow_up = "1) The disk restarts and forgets the highest token. What can now happen, and what must it store with the data? 2) A real database has no `token` argument. How do you get the same guarantee from a conditional update? 3) An expired holder's write arrives before the new holder has written anything. Is that safe for your application?"
+related = ["Y42", "Y7", "B21"]
+
+[[hints]]
+kind = "approach"
+text = "The disk needs one remembered number besides its histories. For the judge, ask for each rule what the smallest amount of work over the lists is: one rule compares neighbours, the other needs one largest element."
+
+[[hints]]
+kind = "rust"
+text = "`slice::windows(2)` walks neighbouring pairs, and `find` stops at the first match. `max_by_key` with a tuple `(token, value)` orders by token, then value."
+
+[[hints]]
+kind = "edge"
+text = "While no pair of neighbours goes down, the write just before holds the highest token so far. And the newest write must be looked for among everything that arrived: a broken disk may have turned it away."
+
+[solution]
+explanation = "The disk keeps the highest accepted token and, when guarded, refuses anything lower. The judge looks for the first neighbouring pair in `accepted` whose token falls. If all earlier pairs did not fall, the earlier element of that pair is the highest so far. Then it takes the largest (token, value) over `arrived` and compares its value with the disk's."
+time = "write O(1) amortised, judge O(n)"
+space = "O(n) histories"
+
+[[cookbook]]
+level = "similar"
+page = "lease-fencing-sim"
+note = "Its storage and safety checker. Its judge reads the storage itself and returns a message, not the writes."
+
+[[cookbook]]
+level = "related"
+page = "idempotency-dedup-leader-fencing-store"
+note = "A store that checks the leader's term on every write."

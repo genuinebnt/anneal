@@ -29,6 +29,8 @@ body = """
 a lease alone cannot give mutual exclusion. The service decides "your lease expired" using **its** clock, but a client can only act on what it believed when it last looked. If the client then stalls (GC pause, VM freeze, slow network) for longer than the TTL, it wakes up still believing it holds the lease while a new holder is already writing.
 
 No check on the client side closes this gap, because the pause can land between the check and the write. This is the argument of Martin Kleppmann's essay (Read: below). The fix must live at the resource: reject any write whose token is lower than the highest token already seen.
+
+The clients here do check their lease right before writing. A pause before the check is caught by it. A pause between the check and the send is not, and the campaign counts both.
 """
 
 [[sections]]
@@ -36,13 +38,29 @@ heading = "How it works"
 body = """
 scenario A (no fencing) is searched for deterministically and replayed with a timeline showing the corruption; scenario B replays the **same** schedule against a fencing storage and shows the stale write rejected; then 2000 random schedules check the safety invariant: accepted tokens never go backwards and the final value is the last write of the highest token.
 
-Without fencing the same schedules violate it. Clients deliberately ignore the write ack when deciding what to do next, so the schedule is identical in both modes and the comparison is apples to apples.
+Without fencing some of the same schedules violate it. Clients deliberately ignore the write ack when deciding what to do next, so the schedule is identical in both modes and the comparison is apples to apples.
+"""
+
+[[sections]]
+heading = "What it does not cover"
+body = """
+Fencing refuses a stale token only after storage has seen a newer one. An expired holder's write that arrives first is accepted. Tokens keep writes in order; they do not make leases exclusive.
+
+The model has no release, and no message is lost, duplicated or reordered: each client has one message in flight at a time. The lease service never restarts.
+
+The client and the service read one perfect clock. Real clocks drift and jump, which adds failures not shown here.
+
+A real storage must keep its highest token on durable storage. It must check the token and write in one atomic step.
+
+A real service must keep its token counter on durable storage, or tokens could repeat. That alone does not stop a restarted service from granting over a live lease. It must also keep the live lease, or wait a full TTL before granting.
+
+A holder may read, change and write. Then storage must learn its token <strong>before</strong> the read. Otherwise an older holder's late write can land in between and be overwritten.
 """
 
 [[sections]]
 heading = "Common uses"
 body = """
-ZooKeeper / etcd / Consul leases with revision numbers as fencing tokens, Chubby sequencers, HBase and Kafka controller epochs, Raft terms rejecting stale leaders, S3 or DynamoDB conditional writes (version check), database "**select** ... **For update**" plus version columns, Kubernetes leader election with resourceVersion.
+ZooKeeper / etcd / Consul leases with revision numbers as fencing tokens, Chubby sequencers, HBase and Kafka controller epochs, Raft terms rejecting stale leaders, S3 or DynamoDB conditional writes (version check), database <code>SELECT ... FOR UPDATE</code> plus version columns.
 
 Testing pattern: deterministic simulation testing (FoundationDB, TigerBeetle, Jepsen/Maelstrom style fault injection).
 """

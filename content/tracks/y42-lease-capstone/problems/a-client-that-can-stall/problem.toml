@@ -1,0 +1,37 @@
+slug = "a-client-that-can-stall"
+title = "Capstone 3: a client that can stall anywhere"
+mode = "write"
+level = "hard"
+stage = "pieces"
+order = 3
+status = "ready"
+tags = ["state machine", "leases", "check then act", "75-min"]
+teaches = [
+    "A client can only act on what it believed when it last looked. A stall after the look makes the belief stale.",
+    "Even a careful check before every write leaves a gap between the check and the effect.",
+    "A client with no clock and no network can be stepped through any order of events by a test.",
+]
+follow_up = "1) Name every place where this client could stall, and say for each whether its check helps. 2) Would checking with a safety margin of 10 ms close the gap? 3) How would you number writes and refusals so that duplicate `WriteDone` and `Denied` messages could be told apart?"
+related = ["Y42", "Y41"]
+
+[[hints]]
+kind = "approach"
+text = "Make the table the shape of your code: what you are waiting for on one side, the event on the other. Everything that is not in the table does nothing."
+
+[[hints]]
+kind = "rust"
+text = "An enum with the data in its variants, such as `ForWork(Held)`, cannot be \"working without a lease\". `match (self.waiting, event)` with guards such as `if token == held.lease.token` gives one arm per row and one `_ => None` for the rest."
+
+[[hints]]
+kind = "edge"
+text = "Count a lease when it is granted, not when you ask. A grant is old if its token is not above every token you were given before, even if you gave that lease up long ago. And think about `writes_per_lease = 0` before you subtract."
+
+[solution]
+explanation = "The client is an enum of the things it can be waiting for, with the lease and the remaining writes inside the states that need them. `handle` matches the pair of state and event; each row of the table is one arm and everything else returns `None` without touching anything. It remembers the highest token ever granted, so a repeated grant fails its guard, and a renewal answer must name the held token. The write's verdict is not looked at."
+time = "O(1) per event"
+space = "O(1)"
+
+[[cookbook]]
+level = "similar"
+page = "lease-fencing-sim"
+note = "Its clients, as event handlers inside the simulation. It takes no repeated or old messages."

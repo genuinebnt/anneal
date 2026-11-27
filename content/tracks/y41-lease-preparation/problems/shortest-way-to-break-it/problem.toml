@@ -1,0 +1,37 @@
+slug = "shortest-way-to-break-it"
+title = "The shortest way to break it"
+mode = "write"
+level = "hard"
+stage = "late-and-unlucky"
+order = 5
+status = "ready"
+tags = ["interleavings", "state search", "reproducing bugs", "75-min"]
+teaches = [
+    "A concurrent bug is a schedule. Once the schedule is data, the bug can be searched for, shortened and replayed.",
+    "Many schedules lead to the same place. Visiting each place once turns an impossible count into a small one.",
+    "A place is how far every actor has got **and** the state. Either one alone merges runs that have different futures.",
+]
+follow_up = "1) How would you add a lock, a step that cannot be taken at every moment? What new kind of failure can the search then report? 2) Real programs have too many states even so. What do tools such as loom do to skip schedules that cannot differ? 3) A random search finds a failing schedule of 400 entries. How do you shorten it?"
+related = ["Y41", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "Think of each moment of a run as a point: how many steps each actor has taken, and the state. Steps are the roads between points. You are looking for the nearest bad point, and in which order you explore decides which one you meet first."
+
+[[hints]]
+kind = "rust"
+text = "A `VecDeque` of points to look at, and a `HashSet` of points already met. A point is a struct with `done: Vec<usize>` and the state, deriving `Eq` and `Hash`. Keep the schedule that led to each queued point."
+
+[[hints]]
+kind = "edge"
+text = "Two different schedules can give equal states while different actors have steps left: they are not the same point. And in which order must you try the actors, so that the first bad point you meet is first in dictionary order?"
+
+[solution]
+explanation = "A breadth-first search over points, where a point is the number of steps each actor has taken plus the state. Actors are tried in rising order, so points are met by schedule length and, within one length, in dictionary order. The first schedule to reach a point is therefore the best one, and later arrivals are dropped. Every state is checked when it is first reached, including the start."
+time = "O(points * actors * (actors + state size))"
+space = "O(points * schedule length)"
+
+[[cookbook]]
+level = "related"
+page = "lease-fencing-sim"
+note = "It searches seeds for a failing run and replays it. It samples schedules at random and does not try all of them."

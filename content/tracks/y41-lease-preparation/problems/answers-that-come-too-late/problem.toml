@@ -1,0 +1,37 @@
+slug = "answers-that-come-too-late"
+title = "Answers that come too late"
+mode = "write"
+level = "medium"
+stage = "late-and-unlucky"
+order = 4
+status = "ready"
+tags = ["state machine", "timeouts", "retries", "60-min"]
+teaches = [
+    "A protocol written as `handle(input) -> outputs`, with no clock and no socket, can be tested message by message.",
+    "A number that is never reused tells a stale reply or timer from a current one. Restarting it per request brings the confusion back.",
+    "A timeout does not mean the other side did nothing. The answer may still be on its way.",
+]
+follow_up = "1) Sending twice can make the server act twice. What must the server do so that it is safe? 2) Why add random jitter to the growing wait? Where would the randomness come from, if the type must stay testable? 3) The caller restarts after a crash and its numbers begin at 1 again. What goes wrong, and what would you put into the number?"
+related = ["Y41", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "Decide what must be remembered about the open question, and what must be remembered for ever. For every input, ask: which message is this about, and is that message still one I care about?"
+
+[[hints]]
+kind = "rust"
+text = "`Option<Open>` for the open question keeps \"idle\" from having leftover fields. `match &self.open { Some(open) if ... => }` puts the validity check into the arm. `u64::saturating_mul` cannot overflow."
+
+[[hints]]
+kind = "edge"
+text = "Replies and timers do not follow the same rule: one accepts every try of the open question, the other only the newest. And what does an input naming a number you have not sent yet do?"
+
+[solution]
+explanation = "The caller counts attempts over its whole life. For the open question it remembers the first and latest attempt numbers. So the attempts of that question are exactly the numbers in that range. Any reply in the range is accepted, and a timer counts only for the latest. Everything else falls through and does nothing. The wait is doubled with saturating arithmetic and capped."
+time = "O(1) per input"
+space = "O(1)"
+
+[[cookbook]]
+level = "related"
+page = "lease-fencing-sim"
+note = "The simulator's clients are state machines driven by events. They never see a duplicate or late message, so they need no such numbers."
