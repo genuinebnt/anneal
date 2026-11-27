@@ -158,16 +158,16 @@ Do the rows top to bottom; a module's first rows are the ones its first stages n
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S3 Vec & slices](/t/s3-vec-slices) | Understand it | `copy_within`, `split_at_mut`, ranges of bytes | 2a-02, 2a-03 |
-| S8 The core traits *(planned)* | Implement by hand | `TryFrom` (slice to array), `Ord` for a comparator | 2a-01, 2a-02 |
+| [S3 Vec & slices](/t/s3-vec-slices) | Understand it | `copy_within`, `split_at_mut`, ranges of bytes | 2a-01, 2a-02 |
+| S8 The core traits *(planned)* | Implement by hand | `TryFrom` (slice to array), `Ord` for a comparator | 2a-01 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Define & implement | a trait with an associated const (`FixedSize::SIZE`) | 2a-01 |
-| [L5 Generics & associated types](/t/l5-generics) | Compile-time Rust | const generics, `const fn` | 2a-02 |
+| [L5 Generics & associated types](/t/l5-generics) | Compile-time Rust | const generics, `const fn` | 2a-01 |
 | [F2 Data layout](/t/f2-data-layout) | Size it | padding, `repr(C)`, why layouts are stated and checked | 2a-01 |
 | S11 mem, ptr & alloc *(planned)* | Understand | `size_of`, `align_of` | 2a-01 |
-| [F7 I/O & serialization](/t/f7-io-serialization) | Encodings | byte order, fixed-width encodings, `bytemuck` as the safe cast | 2a-01, 2a-02 |
-| [P3 Binary search practice](/t/p3-binary-search-practice) | Binary search practice | `partition_point`, lower bound and upper bound | 2a-04 |
-| D4 Binary search *(planned)* | Binary search | the lower-bound loop and its invariant | 2a-04 |
-| Y5 Testing & verification *(planned)* | Understand it | round-trip properties and a `Vec` model | 2a-01, 2a-03, 2a-05 |
+| [F7 I/O & serialization](/t/f7-io-serialization) | Encodings | byte order, fixed-width encodings, `bytemuck` as the safe cast | 2a-01 |
+| [P3 Binary search practice](/t/p3-binary-search-practice) | Binary search practice | `partition_point`, lower bound and upper bound | 2a-02 |
+| D4 Binary search *(planned)* | Binary search | the lower-bound loop and its invariant | 2a-02 |
+| Y5 Testing & verification *(planned)* | Understand it | round-trip properties and a `Vec` model | 2a-01, 2a-02, 2a-03 |
 
 ### 2B · Extendible hash table
 

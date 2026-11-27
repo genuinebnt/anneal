@@ -10,6 +10,6 @@ pub struct IntComparator;
 
 impl KeyComparator<i32> for IntComparator {
     fn compare(&self, lhs: &i32, rhs: &i32) -> Ordering {
-        todo!("2a-02: the natural order of the integers")
+        todo!("2a-01: the natural order of the integers")
     }
 }

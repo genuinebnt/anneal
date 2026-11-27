@@ -1,10 +1,10 @@
-//! Tests for module 2a, typed pages. A test name starts with its stage: `s2a_03_…` belongs to stage 2a-03, and
+//! Tests for module 2a, typed pages. A test name starts with its stage: `s2a_01_…` belongs to stage 2a-02, and
 //! `anneal course test` runs just those.
 //!
 //! The tests use only the public items: the `FixedSize` encodings, `Rid`, `GenericKey` and its comparators, `array_size` and
 //! `PageArray`. Values are encoded into buffers at random offsets and must decode to themselves without touching their neighbours;
-//! `PageArray` runs random operations against a `Vec`; `lower_bound` is compared with `partition_point`. The byte order you choose
-//! for an encoding is yours: only the round trip is tested.
+//! `PageArray` runs random operations against a `Vec`; `lower_bound` is compared with `partition_point`. Integers and a key's integer
+//! are little-endian (module 2b hashes those bytes); how a `Rid` or a pair lays out its parts is yours: only the round trip is tested.
 
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -27,7 +27,7 @@ fn config() -> ProptestConfig {
     ProptestConfig { cases: 128, max_shrink_iters: 2000, failure_persistence: None, ..ProptestConfig::default() }
 }
 
-// ---- 2a-01 · Ids that survive bytes -------------------------------------------------------------------------------------
+// ---- 2a-01 · Values that survive bytes -----------------------------------------------------------------------------------
 
 /// Encodes `value` at `offset` of a buffer full of 0xAA, checks that exactly `T::SIZE` bytes were written there, and decodes it back.
 fn survives<T: FixedSize + PartialEq + Debug>(value: &T, offset: usize) -> Result<(), TestCaseError> {
@@ -48,12 +48,8 @@ proptest! {
     #![proptest_config(config())]
 
     #[test]
-    fn s2a_01_i32_survives_bytes_at_any_offset(x in any::<i32>(), offset in 0usize..56) {
+    fn s2a_01_integers_survive_bytes_at_any_offset(x in any::<i32>(), a in any::<u32>(), b in any::<i64>(), offset in 0usize..48) {
         survives(&x, offset)?;
-    }
-
-    #[test]
-    fn s2a_01_u32_and_i64_survive_bytes_at_any_offset(a in any::<u32>(), b in any::<i64>(), offset in 0usize..48) {
         survives(&a, offset)?;
         survives(&b, offset)?;
     }
@@ -88,6 +84,8 @@ fn s2a_01_sizes_are_what_a_page_layout_can_count_on() {
         "sizes are what a page layout can count on"
     );
     assert_eq!((<PageId as FixedSize>::SIZE, <Rid as FixedSize>::SIZE), (4, 8), "sizes are what a page layout can count on");
+    assert_eq!(<GenericKey<64> as FixedSize>::SIZE, 64, "a key of N bytes takes N bytes");
+    assert_eq!(<(GenericKey<8>, Rid) as FixedSize>::SIZE, 16, "a pair takes the two sizes added");
 }
 
 #[test]
@@ -97,8 +95,6 @@ fn s2a_01_the_default_rid_names_no_page_and_page_zero_is_a_real_page() {
     assert!(zero.page_id().is_valid(), "the default rid names no page and page zero is a real page: expected `zero.page_id().is_valid()`");
     assert_eq!(Rid::from_i64(zero.get()), zero, "page 0, slot 7 is not confused with an invalid rid");
 }
-
-// ---- 2a-02 · Keys and how to order them ------------------------------------------------------------------------------------
 
 fn key<const N: usize>(n: i64) -> GenericKey<N> {
     let mut k = GenericKey::<N>::default();
@@ -110,16 +106,18 @@ proptest! {
     #![proptest_config(config())]
 
     #[test]
-    fn s2a_02_a_generic_key_holds_any_integer_and_the_rest_of_it_is_zero(n in any::<i64>(), junk in any::<u8>()) {
+    fn s2a_01_a_generic_key_holds_any_integer_and_the_rest_of_it_is_zero(n in any::<i64>(), junk in any::<u8>()) {
         let mut k = GenericKey::<16>::default();
         k.data = [junk; 16];
         k.set_from_integer(n);
         prop_assert_eq!(k.get_as_integer(), n);
         prop_assert!(k.data[8..].iter().all(|&b| b == 0), "set_from_integer clears the key before storing the integer");
+        prop_assert_eq!(key::<64>(n).get_as_integer(), n, "a key of any size holds the integer");
+        prop_assert_eq!(GenericKey::<8>::default().get_as_integer(), 0, "the all-zero key holds 0");
     }
 
     #[test]
-    fn s2a_02_generic_keys_survive_bytes(n in any::<i64>(), offset in 0usize..32) {
+    fn s2a_01_generic_keys_survive_bytes(n in any::<i64>(), offset in 0usize..32) {
         let k = key::<8>(n);
         let mut buf = vec![0x55u8; 64];
         k.encode(&mut buf[offset..offset + <GenericKey<8> as FixedSize>::SIZE]);
@@ -132,14 +130,14 @@ proptest! {
     /// The comparators order keys exactly as the integers inside them are ordered, so sorting by a comparator sorts the integers
     /// (negative numbers before positive ones, which their raw bytes would not).
     #[test]
-    fn s2a_02_comparators_agree_with_integer_order(a in any::<i64>(), b in any::<i64>(), c in any::<i32>(), d in any::<i32>()) {
+    fn s2a_01_comparators_agree_with_integer_order(a in any::<i64>(), b in any::<i64>(), c in any::<i32>(), d in any::<i32>()) {
         let g = GenericComparator::<8>;
         prop_assert_eq!(g.compare(&key(a), &key(b)), a.cmp(&b));
         prop_assert_eq!(IntComparator.compare(&c, &d), c.cmp(&d));
     }
 
     #[test]
-    fn s2a_02_a_comparator_can_drive_a_sort(mut xs in prop::collection::vec(any::<i64>(), 0..60)) {
+    fn s2a_01_a_comparator_can_drive_a_sort(mut xs in prop::collection::vec(any::<i64>(), 0..60)) {
         let g = GenericComparator::<8>;
         let mut keys: Vec<GenericKey<8>> = xs.iter().map(|&n| key(n)).collect();
         keys.sort_by(|a, b| g.compare(a, b));
@@ -148,7 +146,7 @@ proptest! {
     }
 
     #[test]
-    fn s2a_02_a_pair_is_its_two_halves_side_by_side(n in any::<i64>(), rid in rid_strategy(), offset in 0usize..32) {
+    fn s2a_01_a_pair_is_its_two_halves_side_by_side(n in any::<i64>(), rid in rid_strategy(), offset in 0usize..32) {
         type Entry = (GenericKey<8>, Rid);
         prop_assert_eq!(Entry::SIZE, 16);
         survives::<Entry>(&(key(n), rid), offset)?;
@@ -157,7 +155,7 @@ proptest! {
 }
 
 #[test]
-fn s2a_02_array_size_is_what_fits_after_the_metadata() {
+fn s2a_01_array_size_is_what_fits_after_the_metadata() {
     assert_eq!(array_size(8, 16), (BUSTUB_PAGE_SIZE - 8) / 16, "array size is what fits after the metadata");
     assert_eq!(array_size(0, 8192), 1, "array size is what fits after the metadata");
     assert_eq!(
@@ -169,14 +167,7 @@ fn s2a_02_array_size_is_what_fits_after_the_metadata() {
     assert_eq!(AT_COMPILE_TIME, 682, "array size is what fits after the metadata");
 }
 
-#[test]
-fn s2a_02_keys_of_other_sizes_and_a_zero_key() {
-    assert_eq!(GenericKey::<8>::default().get_as_integer(), 0, "keys of other sizes and a zero key");
-    assert_eq!(<GenericKey<64> as FixedSize>::SIZE, 64, "keys of other sizes and a zero key");
-    assert_eq!(key::<64>(-5).get_as_integer(), -5, "keys of other sizes and a zero key");
-}
-
-// ---- 2a-03 · A sorted array inside a page -----------------------------------------------------------------------------------
+// ---- 2a-02 · A page array you can search ------------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
 enum ArrayOp {
@@ -203,7 +194,7 @@ proptest! {
 
     /// Insert, remove and set at arbitrary positions: the array always reads as the `Vec` model, whatever the buffer holds around it.
     #[test]
-    fn s2a_03_an_array_in_a_page_behaves_like_a_vec(ops in array_ops(), pad in 0usize..8) {
+    fn s2a_02_an_array_in_a_page_behaves_like_a_vec(ops in array_ops(), pad in 0usize..8) {
         let mut page = vec![0xEEu8; pad + CAP * 4 + 8];
         let mut model: Vec<i32> = Vec::new();
         {
@@ -225,7 +216,7 @@ proptest! {
     }
 
     #[test]
-    fn s2a_03_pairs_move_whole_and_overlapping_shifts_do_not_smear(values in prop::collection::vec((any::<i64>(), any::<u32>()), 1..14), at in 0usize..14) {
+    fn s2a_02_pairs_move_whole_and_overlapping_shifts_do_not_smear(values in prop::collection::vec((any::<i64>(), any::<u32>()), 1..14), at in 0usize..14) {
         type E = (i64, Rid);
         let entries: Vec<E> = values.iter().map(|&(a, s)| (a, Rid::new(PageId(a as i32), s))).collect();
         let mut array = PageArray::<_, E>::new(vec![0u8; 16 * E::SIZE]);
@@ -242,13 +233,13 @@ proptest! {
 }
 
 #[test]
-fn s2a_03_capacity_counts_whole_entries_only() {
+fn s2a_02_capacity_counts_whole_entries_only() {
     assert_eq!(PageArray::<_, i64>::new(vec![0u8; 100]).capacity(), 12);
     assert_eq!(PageArray::<_, i32>::new(&[0u8; 3][..]).capacity(), 0);
 }
 
 #[test]
-fn s2a_03_it_works_over_a_read_only_view_and_an_owned_buffer() {
+fn s2a_02_it_works_over_a_read_only_view_and_an_owned_buffer() {
     let mut owned = PageArray::<_, u32>::new(vec![0u8; 16]);
     owned.set(2, &77);
     let bytes: Vec<u8> = (0..16).map(|i| i as u8).collect();
@@ -258,7 +249,7 @@ fn s2a_03_it_works_over_a_read_only_view_and_an_owned_buffer() {
 }
 
 #[test]
-fn s2a_03_going_past_the_capacity_is_a_bug_and_panics() {
+fn s2a_02_going_past_the_capacity_is_a_bug_and_panics() {
     let get = std::panic::catch_unwind(|| PageArray::<_, i32>::new(vec![0u8; 8]).get(2));
     assert!(get.is_err(), "get(2) on a capacity of 2");
     let set = std::panic::catch_unwind(|| PageArray::<_, i32>::new(vec![0u8; 8]).set(2, &1));
@@ -277,8 +268,6 @@ fn s2a_03_going_past_the_capacity_is_a_bug_and_panics() {
     assert!(remove.is_err(), "removing entry 1 of a length 1");
 }
 
-// ---- 2a-04 · Searching a page -----------------------------------------------------------------------------------------------
-
 fn sorted_array(values: &[i32]) -> PageArray<Vec<u8>, i32> {
     let mut array = PageArray::new(vec![0u8; values.len().max(1) * 4 + 16]);
     for (i, v) in values.iter().enumerate() {
@@ -292,7 +281,7 @@ proptest! {
 
     /// `lower_bound` is the first position whose entry is not less than the target: exactly `partition_point`, duplicates included.
     #[test]
-    fn s2a_04_lower_bound_is_the_partition_point(mut values in prop::collection::vec(-20i32..20, 0..30), target in -22i32..22) {
+    fn s2a_02_lower_bound_is_the_partition_point(mut values in prop::collection::vec(-20i32..20, 0..30), target in -22i32..22) {
         values.sort();
         let array = sorted_array(&values);
         let got = array.lower_bound(values.len(), |e| e.cmp(&target));
@@ -301,7 +290,7 @@ proptest! {
 
     /// Only the first `len` entries count: stale bytes after them must not be searched.
     #[test]
-    fn s2a_04_entries_past_len_are_not_searched(mut values in prop::collection::vec(-20i32..20, 1..30), cut in 0usize..30, target in -22i32..22) {
+    fn s2a_02_entries_past_len_are_not_searched(mut values in prop::collection::vec(-20i32..20, 1..30), cut in 0usize..30, target in -22i32..22) {
         values.sort();
         let len = cut % (values.len() + 1);
         let array = sorted_array(&values);
@@ -310,7 +299,7 @@ proptest! {
 
     /// Inserting at `lower_bound` keeps an array sorted: the page-sized version of a sorted set.
     #[test]
-    fn s2a_04_inserting_at_the_lower_bound_keeps_the_array_sorted(inserts in prop::collection::vec(-50i32..50, 1..40)) {
+    fn s2a_02_inserting_at_the_lower_bound_keeps_the_array_sorted(inserts in prop::collection::vec(-50i32..50, 1..40)) {
         let mut array = PageArray::<_, i32>::new(vec![0u8; 64 * 4]);
         let mut model: Vec<i32> = Vec::new();
         for v in inserts {
@@ -324,7 +313,7 @@ proptest! {
 
     /// Searching entries that are `(GenericKey, Rid)` with the key comparator, the way a bucket page does.
     #[test]
-    fn s2a_04_a_search_by_key_finds_the_right_entry(mut keys in prop::collection::vec(-100i64..100, 1..25), probe in -102i64..102) {
+    fn s2a_02_a_search_by_key_finds_the_right_entry(mut keys in prop::collection::vec(-100i64..100, 1..25), probe in -102i64..102) {
         type E = (GenericKey<8>, Rid);
         keys.sort();
         keys.dedup();
@@ -342,7 +331,7 @@ proptest! {
 }
 
 #[test]
-fn s2a_04_a_target_larger_than_everything_gives_len() {
+fn s2a_02_a_target_larger_than_everything_gives_len() {
     let array = sorted_array(&[1, 3, 5]);
     assert_eq!(array.lower_bound(3, |e| e.cmp(&9)), 3, "a target larger than everything gives len");
     assert_eq!(array.lower_bound(3, |e| e.cmp(&0)), 0, "a target larger than everything gives len");
@@ -350,19 +339,21 @@ fn s2a_04_a_target_larger_than_everything_gives_len() {
 }
 
 #[test]
-fn s2a_04_the_comparison_closure_is_called_logarithmically_often() {
+fn s2a_02_a_search_of_1024_entries_makes_at_most_12_comparisons() {
     let values: Vec<i32> = (0..1024).collect();
     let array = sorted_array(&values);
-    let mut calls = 0;
-    let at = array.lower_bound(values.len(), |e| {
-        calls += 1;
-        e.cmp(&700)
-    });
-    assert_eq!(at, 700, "the comparison closure is called logarithmically often");
-    assert!(calls <= 12, "binary search on 1024 entries needs about 10 comparisons, yours made {calls}");
+    for target in [-1, 0, 1, 511, 700, 1023, 5000] {
+        let mut calls = 0;
+        let at = array.lower_bound(values.len(), |e| {
+            calls += 1;
+            e.cmp(&target)
+        });
+        assert_eq!(at, values.partition_point(|&v| v < target), "lower_bound({target}) in 0..1024");
+        assert!(calls <= 12, "a search of 1024 entries may make at most 12 comparisons; lower_bound({target}) made {calls}");
+    }
 }
 
-// ---- 2a-05 · Boss: the pieces on a real page ---------------------------------------------------------------------------------
+// ---- 2a-03 · Boss: the pieces on a real page ---------------------------------------------------------------------------------
 
 proptest! {
     #![proptest_config(ProptestConfig { cases: 24, ..config() })]
@@ -371,7 +362,7 @@ proptest! {
     /// living in the buffer pool: after any sequence of inserts and removes, and after the page has been evicted and read back, it still
     /// holds exactly the keys of a `BTreeMap` model.
     #[test]
-    fn s2a_05_a_sorted_bucket_survives_the_buffer_pool(ops in prop::collection::vec((any::<bool>(), 0i64..60), 1..120)) {
+    fn s2a_03_a_sorted_bucket_survives_the_buffer_pool(ops in prop::collection::vec((any::<bool>(), 0i64..60), 1..120)) {
         type Entry = (GenericKey<8>, Rid);
         let (bpm, _disk) = pool_with(Policy::Fifo, 2);
         let page = bpm.new_page();
@@ -418,7 +409,7 @@ proptest! {
 }
 
 #[test]
-fn s2a_05_an_ordering_is_a_total_order_on_the_keys_it_will_index() {
+fn s2a_03_an_ordering_is_a_total_order_on_the_keys_it_will_index() {
     let g = GenericComparator::<8>;
     let ks: Vec<GenericKey<8>> = [-3i64, -1, 0, 0, 5, i64::MIN, i64::MAX].iter().map(|&n| key(n)).collect();
     for a in &ks {
@@ -748,77 +739,3 @@ mod ch_2a_c4 {
     }
 }
 // @@ challenge 2a-c4 end
-
-// @@ challenge 2a-c5 begin
-mod ch_2a_c5 {
-    use proptest::prelude::*;
-
-    use bustub::storage::page::shift_array::{insert_at, remove_at};
-
-    #[test]
-    fn s2a_c5_inserting_in_the_middle_shifts_the_tail_without_smearing() {
-        let mut a = [1, 2, 3, 0];
-        assert_eq!(insert_at(&mut a, 3, 1, 9), 4, "this check");
-        assert_eq!(a, [1, 9, 2, 3], "this check");
-    }
-
-    #[test]
-    fn s2a_c5_inserting_at_the_front_and_at_the_end() {
-        let mut a = [5, 6, 7, 0, 0];
-        assert_eq!(insert_at(&mut a, 3, 0, 1), 4, "this check");
-        assert_eq!(a, [1, 5, 6, 7, 0], "this check");
-        assert_eq!(insert_at(&mut a, 4, 4, 8), 5, "this check");
-        assert_eq!(a, [1, 5, 6, 7, 8], "this check");
-    }
-
-    #[test]
-    fn s2a_c5_removing_closes_the_gap() {
-        let mut a = [1, 9, 2, 3];
-        assert_eq!(remove_at(&mut a, 4, 1), 3, "this check");
-        assert_eq!(&a[..3], &[1, 2, 3], "this check");
-        assert_eq!(remove_at(&mut a, 3, 0), 2, "this check");
-        assert_eq!(&a[..2], &[2, 3], "this check");
-        assert_eq!(remove_at(&mut a, 2, 1), 1, "this check");
-        assert_eq!(&a[..1], &[2], "this check");
-    }
-
-    #[test]
-    fn s2a_c5_inserting_into_a_full_prefix_up_to_capacity_and_removing_everything() {
-        let mut a = [0u32; 6];
-        let mut len = 0;
-        for v in (1..=6).rev() {
-            len = insert_at(&mut a, len, 0, v);
-        }
-        assert_eq!(a, [1, 2, 3, 4, 5, 6], "each insert at the front shifts everything");
-        while len > 0 {
-            len = remove_at(&mut a, len, 0);
-        }
-        assert_eq!(len, 0, "this check");
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
-
-        /// Property: against `Vec::insert` and `Vec::remove` on the live prefix.
-        #[test]
-        fn s2a_c5_property_shifting_matches_a_vec(init in proptest::collection::vec(any::<u32>(), 0..12), ops in proptest::collection::vec((any::<bool>(), 0usize..14, any::<u32>()), 0..30)) {
-            let mut arr = [0u32; 16];
-            arr[..init.len()].copy_from_slice(&init);
-            let mut len = init.len();
-            let mut model = init;
-            for (ins, i, v) in ops {
-                if ins && len < arr.len() {
-                    let at = i % (len + 1);
-                    len = insert_at(&mut arr, len, at, v);
-                    model.insert(at, v);
-                } else if !ins && len > 0 {
-                    let at = i % len;
-                    len = remove_at(&mut arr, len, at);
-                    model.remove(at);
-                }
-                prop_assert_eq!(&arr[..len], &model[..]);
-            }
-        }
-    }
-}
-// @@ challenge 2a-c5 end

@@ -12,6 +12,5 @@ pub mod page_array;
 pub mod page_bytes;
 pub mod page_guard;
 pub mod ranked_array;
-pub mod shift_array;
 pub mod slotted_page;
 pub mod table_page;

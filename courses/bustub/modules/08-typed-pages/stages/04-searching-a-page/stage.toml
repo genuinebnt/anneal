@@ -1,8 +1,0 @@
-id = "2a-04"
-title = "Searching a page"
-kind = "build"
-difficulty = "medium"
-tests = ["stages_2a::s2a_04"]
-learn = ["binary search that returns a position, not a yes/no", "lower_bound as lookup, insert position and range start", "comparing against a reference: partition_point"]
-concepts = ["slices-copy-within-and-binary-search"]
-concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "iterators-and-closures", "errors-2a"]

@@ -163,7 +163,7 @@ fn std_binary_search_variants() {
 
 ### In the exercises
 
-- **2a-03, 2a-04:** shifting a range inside one buffer with `copy_within`, and a binary search that takes a comparison closure and returns a position (the second example is the algorithm).
+- **2a-02:** shifting a range inside one buffer with `copy_within`, and a binary search that takes a comparison closure and returns a position (the second example is the algorithm).
 - **2b-02:** a bucket page may be sorted (insert at `lower_bound`, reject an equal key) or unsorted; both are valid.
 
 ### Where it is used

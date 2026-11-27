@@ -55,7 +55,7 @@ Optional. Predict first, then run.
 
 ## Other designs
 
-None for this stage. The *Other designs* sections of 2a-01 to 2a-04 list the alternatives to compare with yours.
+None for this stage. The *Other designs* sections of 2a-01 and 2a-02 list the alternatives to compare with yours.
 
 ## In BusTub
 

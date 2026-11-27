@@ -1,8 +1,0 @@
-id = "2a-c5"
-title = "Challenge: the smeared slot"
-kind = "challenge"
-difficulty = "easy"
-tests = ["stages_2a::s2a_c5"]
-learn = ["finding an overlapping-copy bug when shifting array elements", "knowing when `copy_within` and a loop differ"]
-concepts = []
-concepts_optional = ["slices-copy-within-and-binary-search", "property-testing-and-fuzzing"]

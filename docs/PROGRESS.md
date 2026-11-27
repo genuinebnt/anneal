@@ -42,6 +42,10 @@ pushed. `git log origin/master..review/bustub-assessment` lists it.
   BUSTUB_RESTRUCTURE.md §4b (all concepts optional), which one stands; the restructure proposals (split 2c-01, a concurrent B+ tree
   module 2e, merge the tiny 2a stages, 4e wires 3k's DbError into the session and shell, promote some challenges to core stages, an
   early end-to-end SQL moment). Indexes inside transactions use only the primary key; secondary indexes would need (key, rid) entries.
+- **Tiny stages merged (branch `review/restructure-merges`):** 2a is now 2a-01 "Values that survive bytes" (old 01 + 02), 2a-02 "A
+  page array you can search" (old 03 + 04) and the boss 2a-03. Challenge 2a-c5 "the smeared slot" is removed: it repeated the overlap
+  lesson of the page array word for word; its id is in 2a-02's `renamed_from`. Ids that still exist with a new meaning cannot be listed
+  in `renamed_from` (the loader refuses a current id); nobody has passed a stage from 2a on, so no progress moves.
 
 ## Cookbook pages: one frame (local, not released; 2026-11-27)
 

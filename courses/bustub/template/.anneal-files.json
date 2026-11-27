@@ -249,7 +249,6 @@
   "src/storage/page/page_array.rs": "2a",
   "src/storage/page/page_guard.rs": "1f",
   "src/storage/page/ranked_array.rs": "2a",
-  "src/storage/page/shift_array.rs": "2a",
   "src/storage/page/slotted_page.rs": "2a",
   "src/storage/page/table_page.rs": "3b",
   "src/storage/table/checksum.rs": "3b",

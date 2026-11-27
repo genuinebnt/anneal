@@ -20,7 +20,7 @@ are far larger than the rest** (section 4). None is a reason to rework the cours
 |---|---|
 | core stages / tests | 169 stages (124 build, 31 boss, 14 learn), 1,389 tests, plus 148 optional challenges at 5 tests or more |
 | tests per learn/build stage | median 8, minimum 5, maximum 18 |
-| boss stages with fewer than 4 tests | 5 (1d-04, 2a-05, 3c-05, 3i-08, 3j-07); each runs a whole script or property, so the count understates them |
+| boss stages with fewer than 4 tests | 5 (1d-04, 2a-03, 3c-05, 3i-08, 3j-07); each runs a whole script or property, so the count understates them |
 | bare assertions | 0 (`tools/add_assert_messages.py --check`) |
 | stages with a model or property test | at least 104 of 164 (by name, an undercount) |
 | concurrency tests / crash-at-every-step tests | about 74 / 21 (counted by pattern, so approximate) |

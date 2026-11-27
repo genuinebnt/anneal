@@ -138,8 +138,8 @@ fn generic_over_the_entry_type() {
 
 ### In the exercises
 
-- **2a-01, 2a-02:** `FixedSize` for the basic types, `GenericKey<N>`, pairs and the `const fn array_size`.
-- **2a-03:** `PageArray<B, T>` is the second example plus `set`, `insert_at` and `remove_at`.
+- **2a-01:** `FixedSize` for the basic types, `GenericKey<N>`, pairs and the `const fn array_size`.
+- **2a-02:** `PageArray<B, T>` is the second example plus `set`, `insert_at` and `remove_at`.
 - **2b-02:** a bucket's capacity is computed from `K::SIZE + V::SIZE` of the `FixedSize` bound.
 
 ### Where it is used
