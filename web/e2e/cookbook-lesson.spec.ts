@@ -465,7 +465,7 @@ for (const width of [2200, 1440, 390]) {
         expect(text.width).toBeLessThanOrEqual(column(width));
         // its tables have a wider frame than its text
         expect(frame.width).toBeLessThanOrEqual(1281);
-        expect(Math.round((await box(page, ".cb-sec .sd-tbl")).width)).toBe(Math.round(frame.width));
+        expect(Math.round((await box(page, ".cb-sec .sd-md > .cb-g-tt")).width)).toBe(Math.round(frame.width));
     });
 }
 

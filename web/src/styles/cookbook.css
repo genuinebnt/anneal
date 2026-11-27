@@ -267,12 +267,6 @@ html.cb-noscroll{overflow:hidden}
 .cb-art .sd-tbl{margin:18px 0;border:1px solid var(--line2);border-radius:14px;padding:4px 6px;overflow-x:auto;scrollbar-width:none}
 .cb-art .sd-tbl table{margin:0;width:100%}
 .cb-art .sd-deeper{margin:16px 0}
-.cb-art .cb-g-pill{font:600 11px var(--mono);padding:1px 8px;border-radius:999px;border:1px solid var(--line)}
-.cb-art .cb-g-src span{margin-left:6px;font:600 10px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:999px;padding:1px 7px}
-.cb-art .cb-g-tip{margin-top:18px}
-.cb-art .cb-g-stages{display:flex;flex-wrap:wrap;gap:6px;list-style:none;padding:0}
-.cb-art .cb-g-stages li{font:600 11px var(--mono);padding:3px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--dim)}
-.cb-art .cb-g-stages li.cb-g-on{color:var(--mac);border-color:var(--mac)}
 .cb-sum{margin-top:26px;padding:18px 22px;border-radius:14px;border:1px solid color-mix(in oklab,var(--c) 30%,transparent);background:color-mix(in oklab,var(--c) 7%,var(--panel))}
 .cb-sum h2{font-size:15px;color:var(--c);letter-spacing:0}
 .cb-sum ul{margin:0;padding-left:18px}
@@ -298,7 +292,7 @@ html.cb-noscroll{overflow:hidden}
     .cb-art.has-margin>*,.cb-read:not(.cb-lesson) .cb-art.has-margin>*{--frame:min(100cqi,1480px);--text:min(calc(var(--fs) * 40),var(--frame) - 388px);--side:clamp(340px,var(--frame) - var(--text) - 96px,480px)}
     .cb-art.has-margin>.cb-margin{display:block}
     /* with no column beside it, a page with code or tables gives them a wider frame; its text stays as wide, on the left edge */
-    .cb-read:not(.cb-lesson) .cb-art:not(.has-margin):has(.cb-view,.sd-code,.sd-tbl,table)>*{--frame:min(100cqi,1280px)}
+    .cb-read:not(.cb-lesson) .cb-art:not(.has-margin):has(.cb-view,.sd-code,.sd-tbl,table,.cb-g-pipe,.cb-g-fig,.cb-g-ladder,.cb-g-rmap,.cb-g-steps)>*{--frame:min(100cqi,1280px)}
 }
 .cb-art>:not(.cb-margin){box-sizing:border-box;width:var(--frame);margin-inline:auto}
 .cb-art>:is(.cb-sum,.cb-short,.cb-glance,.cb-all,.cb-note){width:var(--text);margin-left:calc((100cqi - var(--frame)) / 2);margin-right:auto}
@@ -311,7 +305,7 @@ html.cb-noscroll{overflow:hidden}
 .cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.cb-view,.cb-out,.cb-methods,.cb-cmp,.cb-walk,.sd-code.sd-long,.sd-deeper[open]:has(.cb-cmp,.cb-walk,.cb-view,.sd-long)),
 .cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.cb-cmp,.cb-walk,.sd-code.sd-long){max-width:100%}
 .cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.sd-tbl,pre,.sd-steps-fig,.sd-deeper[open]:has(.sd-tbl,table)),
-.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,table.cb-g-cheat){max-width:100%}
+.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,.cb-g-steps,table.cb-g-cheat){max-width:100%}
 
 /* ---- beside the text ---- */
 .cb-art>.cb-margin{position:absolute;top:0;bottom:0;right:calc((100% - var(--frame)) / 2);width:var(--side);pointer-events:none;font-size:14px;line-height:1.6}
@@ -385,27 +379,6 @@ html.cb-noscroll{overflow:hidden}
 .cb-view-fold{display:block;margin:0 0 6px 16px;padding:4px 10px;border:1px solid var(--line2);border-radius:7px;background:var(--panel);color:var(--dim);font:600 12px var(--mono);cursor:pointer}
 .cb-view-fold:hover{color:var(--fg);border-color:var(--c)}
 
-/* notes from a code file's comments, laid out to be scanned (tools/cookbook/notes.py) */
-.cb-art .cb-g-terms{display:grid;gap:8px;margin:18px 0}
-.cb-art .cb-g-term{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr);gap:6px 22px;padding:16px 20px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
-.cb-art .cb-g-name{font-weight:700;font-size:15px;line-height:1.45;color:var(--c);overflow-wrap:anywhere}
-.cb-art .cb-g-says{min-width:0}
-.cb-art .cb-g-says p{margin:0;line-height:1.7}
-.cb-art .cb-g-says p+p{margin-top:10px}
-.cb-art .cb-g-uses{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px;padding:0;list-style:none}
-.cb-art .sd-md .cb-g-uses li{margin:0;padding:7px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font-size:14.5px;line-height:1.5}
-.cb-art .cb-g-reading{display:grid;gap:8px;margin:6px 0 18px;padding:0;list-style:none}
-.cb-art .sd-md .cb-g-reading li{margin:0;padding:11px 16px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font-size:15px;line-height:1.55}
-@media (max-width:640px){.cb-art .cb-g-term{grid-template-columns:minmax(0,1fr);padding:14px}}
-.cb-art .cb-g-cheat{width:100%;border-collapse:separate;border-spacing:0 4px;margin:6px 0 18px;font-size:14.5px;line-height:1.55}
-.cb-art .cb-g-cheat th{padding:4px 16px;text-align:left;font:600 12px var(--mono);color:var(--dim)}
-.cb-art .cb-g-cheat td{padding:10px 16px;background:var(--panel);vertical-align:top;overflow-wrap:anywhere}
-.cb-art .cb-g-cheat td:first-child{width:44%;border-radius:10px 0 0 10px}
-.cb-art .cb-g-cheat td:last-child{border-radius:0 10px 10px 0}
-.cb-art .cb-g-cheat td code{background:none;padding:0;color:var(--c)}
-.cb-art .cb-g-names{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 18px;padding:0;list-style:none}
-.cb-art .sd-md .cb-g-names li{margin:0;max-width:100%}
-.cb-art .cb-g-names code{display:inline-block;max-width:100%;padding:4px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);font-size:13px;overflow-wrap:anywhere}
 /* room to read: panels use the body's size and open spacing, and list items stand apart */
 .cb-art .sd-call{margin:24px 0;padding:18px 22px;column-gap:16px;row-gap:8px;font-size:15.5px;line-height:1.75}
 .cb-art .sd-call>div{display:grid;gap:10px}
@@ -413,9 +386,6 @@ html.cb-noscroll{overflow:hidden}
 .cb-art .sd-call>div>strong:first-child,.cb-art .sd-call>div>p:first-child>strong:only-child{display:block;font-size:16px}
 .cb-art .sd-md ul,.cb-art .sd-md ol{margin:6px 0 18px;padding-left:22px}
 .cb-art .sd-md li{margin-bottom:10px}
-.cb-art .sd-md .cb-g-uses li,.cb-art .sd-md .cb-g-reading li,.cb-art .sd-md .cb-g-names li{margin:0}
-.cb-art .sd-md ul.cb-g-uses,.cb-art .sd-md ul.cb-g-reading,.cb-art .sd-md ul.cb-g-names{padding-left:0}
-.cb-art .sd-md table.cb-g-cheat{display:table;width:100%;max-width:none;table-layout:auto}
 .cb-crumb{--crumb:var(--c)}
 .cb-art .cb-glance>div{min-width:0}
 .cb-glance dd{min-width:0;overflow-wrap:anywhere}

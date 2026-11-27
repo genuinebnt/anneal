@@ -244,8 +244,9 @@ projects in a page, a title, a link or a commit message.
 ## Known issues to fix in the later phases (found 2026-11-27, after phase 2)
 
 Reported by the owner on `the-pipeline-and-where-tests-attach`: its diagram shows as stacked lines of text, with
-labels glued to their descriptions ("Source&str"). The owner asked to fix this with the planned compiler work,
-not now. Nothing below has been fixed.
+labels glued to their descriptions ("Source&str"). **Fixed locally on 2026-11-27:** the unstyled blocks, the line
+"From the ... guide. Its exercises are left out." and the missing check. Still open: the short pages, lowercase
+openings and short sections below. The lists describe the state before the fix.
 
 **Cause.** Pages converted from the guides keep HTML blocks with `cb-g-*` classes. `web/src/styles` has no rule for
 many of them. `tools/cookbook/convert.py` adds the `cb-g-` prefix; the guides' own styling did not come across.

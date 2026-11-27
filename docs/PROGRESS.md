@@ -9,6 +9,15 @@ the date below. Do not let it drift: a wrong line here costs the next agent more
 
 Last updated: **2026-11-02** (SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
 
+## Cookbook guide blocks repaired (local, not released; 2026-11-27)
+
+Step 0, first half, of [plans/COOKBOOK_CONTENT_PLAN.md](plans/COOKBOOK_CONTENT_PLAN.md): the diagrams, drawings, tables,
+lists and labels that the converter keeps as HTML are styled again, in `web/src/styles/cookbook-guide.css`. A content test
+(`every_class_a_cookbook_page_uses_is_styled`) fails when a page uses a class with no rule there. Two drawings whose
+words did not fit are repaired in the pages and in the converter (`DRAWING_FIXES`). Left from step 0: checking the
+example code for bugs. Note: a full converter run on today's guides and code also changes 25 other generated pages;
+read that diff before committing a run.
+
 ## Cookbook pages: one frame (local, not released; 2026-11-27)
 
 After an independent review of the first balanced-width commit. Each reading page has one frame (up to 1480px) between the

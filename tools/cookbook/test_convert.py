@@ -71,6 +71,17 @@ class Lessons(unittest.TestCase):
             self.assertEqual(self.files(), {place: LESSON})
             (self.out / place).unlink()
 
+    def test_drawings_that_ran_over_are_repaired_on_every_run(self):
+        old, new = convert.DRAWING_FIXES[0]
+        # the guide names its classes without the prefix the converter adds
+        figure = f'<section><h2>Joins</h2><figure class="fig"><svg viewBox="0 0 820 190">{old.replace("cb-g-", "")}</svg></figure></section>'
+        self.write("db.html", figure)
+        self.run_converter()
+        made = self.files()["data/joins.toml"]
+        self.assertNotIn('x=\\"520\\"', made)
+        self.assertIn(">child i holds keys in [key_i, key_{i+1})</text>", made)
+        self.assertEqual(convert.fix_drawings(new), new)
+
 
 if __name__ == "__main__":
     unittest.main()

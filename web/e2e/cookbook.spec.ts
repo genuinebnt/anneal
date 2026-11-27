@@ -270,3 +270,80 @@ test("page titles and descriptions show inline code, not backticks, wherever the
     await expect(page.locator(".cb-rows li").first()).toBeVisible();
     expect(await rawMarkup(page)).toEqual([]);
 });
+
+// The HTML the guide pages keep (styles/cookbook-guide.css). What is checked holds with any font.
+async function guide(page: Page, id: string, width: number) {
+    await page.setViewportSize({ width, height: width < 500 ? 844 : 950 });
+    await page.goto(`/cookbook/p/${id}`);
+    await expect(page.locator(".cb-head h1")).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+}
+
+const boxes = (page: Page, selector: string) => page.locator(selector).evaluateAll((all) => all.map((e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, bottom: r.bottom, width: r.width }; }));
+
+for (const width of [2200, 1440]) {
+    test(`The pipeline diagram is a row of stages with each test under its stage, ${width} wide`, async ({ page }) => {
+        await guide(page, "the-pipeline-and-where-tests-attach", width);
+        const stages = await boxes(page, ".cb-g-node");
+        expect(new Set(stages.map((s) => Math.round(s.y))).size).toBe(1);
+        const tests = await boxes(page, ".cb-g-probe");
+        tests.forEach((t, i) => {
+            expect(Math.abs(t.x - stages[i + 1]!.x)).toBeLessThan(2);
+            expect(t.y).toBeGreaterThanOrEqual(stages[i + 1]!.bottom);
+        });
+        expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+        await expect(page.locator(".cb-art")).not.toContainText("Its exercises are left out");
+    });
+}
+
+test("On a phone the pipeline diagram reads from top to bottom, each stage followed by its tests", async ({ page }) => {
+    await guide(page, "the-pipeline-and-where-tests-attach", 390);
+    const [stages, tests] = [await boxes(page, ".cb-g-node"), await boxes(page, ".cb-g-probe")];
+    stages.slice(1).forEach((s, i) => expect(s.y).toBeGreaterThanOrEqual(stages[i]!.bottom));
+    tests.forEach((t, i) => {
+        expect(t.y).toBeGreaterThanOrEqual(stages[i + 1]!.bottom);
+        if (stages[i + 2]) expect(t.bottom).toBeLessThanOrEqual(stages[i + 2]!.y);
+    });
+    for (const s of stages) expect(s.width).toBeGreaterThan(200);
+    expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+});
+
+for (const theme of ["dark", "light"] as const) {
+    test(`A drawing takes the ${theme} theme's colours, and on a phone it scrolls at a readable size with a fade and no bar`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: theme });
+        await guide(page, "the-dbms-stack", 390);
+        const paint = await page.locator(".cb-g-fig svg").evaluate((svg) => {
+            const of = (s: string) => getComputedStyle(svg.querySelector(s)!).fill;
+            return { box: of("rect.cb-g-box"), words: of("text:not([class])") };
+        });
+        // unstyled shapes and words are painted black
+        expect(paint.box).not.toBe("rgb(0, 0, 0)");
+        expect(paint.words).not.toBe("rgb(0, 0, 0)");
+        expect(paint.words).not.toBe(paint.box);
+        expect((await page.locator(".cb-g-fig svg").boundingBox())!.width).toBeGreaterThanOrEqual(800);
+        const scroller = page.locator(".cb-g-fig-scroll");
+        await expect(scroller).toHaveAttribute("data-more", "");
+        await expect(scroller).toHaveAttribute("tabindex", "0");
+        expect(await scroller.evaluate((e) => [getComputedStyle(e).maskImage !== "none", (e as HTMLElement).offsetHeight - e.clientHeight])).toEqual([true, 0]);
+        await scroller.evaluate((e) => (e.scrollLeft = e.scrollWidth));
+        await expect(scroller).not.toHaveAttribute("data-more", "");
+        // the caption stays in place while the drawing scrolls
+        const [caption, figure] = [(await page.locator(".cb-g-figcap").boundingBox())!, (await page.locator(".cb-g-fig").boundingBox())!];
+        expect(caption.x).toBeGreaterThanOrEqual(figure.x);
+        expect(caption.x + caption.width).toBeLessThanOrEqual(figure.x + figure.width + 1);
+        expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+    });
+}
+
+test("A table the page wrote keeps its own box, and no guide block pushes a phone sideways", async ({ page }) => {
+    for (const id of ["arithmetic", "dp-trees-and-specialized-algorithms", "tooling-around-a-new-language", "backends-hir-mir-llvm-and-cranelift", "reading-map-from-front-end-to-back-end", "the-slice-loop", "glossary-compilers", "how-to-use-this-guide", "recoverable-parsing-and-advanced-compiler-theory"]) {
+        await guide(page, id, 390);
+        const stray = await page.locator(".cb-art table:is(.cb-g-cmp, .cb-g-map)").evaluateAll((all) => all.filter((t) => !t.parentElement!.matches(".cb-g-tt")).length);
+        expect(stray, id).toBe(0);
+        // one box around a table, never a box inside a box
+        await expect(page.locator(".cb-art .cb-g-tt .sd-tbl"), id).toHaveCount(0);
+        // a box that was closed too early leaves what follows it outside the section's text
+        expect(await page.locator(".cb-sec > :not(h2, .sd-md, .sd-code, .sd-deeper, .sd-math, .sd-steps-fig, .cb-methods)").count(), id).toBe(0);
+        expect(await noSideScroll(page), id).toBeLessThanOrEqual(0);
+    }
+});

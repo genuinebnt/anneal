@@ -1,9 +1,18 @@
-// Code that is wider than its box scrolls sideways with no bar. This marks such a box while there is more to its right, and
-// the stylesheet fades that edge. The compare block marks its own (Lesson.tsx), since it also names them for the keyboard.
+// Code, a table or a drawing that is wider than its box scrolls sideways with no bar. This marks such a box while there is
+// more to its right, and the stylesheet fades that edge. A table or drawing that scrolls can also take the keyboard's focus,
+// so the arrow keys reach the rest. The compare block marks its own (Lesson.tsx), since it also names them for the keyboard.
 import { useEffect, type RefObject } from "react";
 
-const mark = (pre: HTMLElement) => pre.toggleAttribute("data-more", pre.clientWidth > 0 && pre.scrollLeft + pre.clientWidth < pre.scrollWidth - 1);
+const mark = (box: HTMLElement) => {
+    box.toggleAttribute("data-more", box.clientWidth > 0 && box.scrollLeft + box.clientWidth < box.scrollWidth - 1);
+    if (!box.matches(BLOCKS)) return;
+    if (box.clientWidth > 0 && box.scrollWidth > box.clientWidth + 1) box.tabIndex = 0;
+    else box.removeAttribute("tabindex");
+};
 const OWN = ".cb-cmp pre";
+/** The boxes of tables and drawings (cookbook-guide.css). */
+const BLOCKS = ".sd-tbl, .cb-g-tt, .cb-g-pipe-wrap, .cb-g-fig-scroll";
+const BOXES = `pre, ${BLOCKS}`;
 
 export function useCodeFades(article: RefObject<HTMLElement | null>) {
     useEffect(() => {
@@ -12,14 +21,14 @@ export function useCodeFades(article: RefObject<HTMLElement | null>) {
         let raf = 0;
         const all = () => {
             raf = 0;
-            for (const pre of art.querySelectorAll("pre")) if (!pre.matches(OWN)) mark(pre);
+            for (const box of art.querySelectorAll<HTMLElement>(BOXES)) if (!box.matches(OWN)) mark(box);
         };
         const soon = () => {
             if (!raf) raf = requestAnimationFrame(all);
         };
         const scrolled = (e: Event) => {
             const el = e.target as HTMLElement;
-            if (el.tagName === "PRE" && !el.matches(OWN)) mark(el);
+            if (el.matches(BOXES) && !el.matches(OWN)) mark(el);
         };
         // new content, an opened fold, another file, a text size or "Wrap code" can each change what fits
         const content = new MutationObserver(soon);

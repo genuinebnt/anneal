@@ -433,6 +433,83 @@ mod tests {
         }
     }
 
+    /// Classes in a page's HTML that need no rule of their own. Keep it short: a class belongs here only when the block
+    /// reads right without any style for it.
+    const NEEDS_NO_STYLE: &[&str] = &[];
+
+    /// The classes of the HTML in a page's Markdown. Code, fenced or inline, is only text.
+    fn classes_in(markdown: &str) -> BTreeSet<String> {
+        let mut found = BTreeSet::new();
+        let mut fenced = false;
+        for line in markdown.lines() {
+            if line.starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            if fenced {
+                continue;
+            }
+            // every other piece between backticks is inline code
+            let prose: String = line.split('`').step_by(2).collect();
+            for tag in prose.split('<').skip(1).filter(|t| t.starts_with(|c: char| c.is_ascii_alphabetic())) {
+                let tag = tag.split('>').next().unwrap_or_default();
+                for quote in ['"', '\''] {
+                    for value in tag.split(&format!(" class={quote}")).skip(1) {
+                        found.extend(value.split(quote).next().unwrap_or_default().split_whitespace().map(str::to_owned));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// The class names that a stylesheet's selectors mention.
+    fn classes_styled(css: &str) -> BTreeSet<String> {
+        let mut plain = String::new();
+        let mut rest = css;
+        while let Some((before, after)) = rest.split_once("/*") {
+            plain.push_str(before);
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        }
+        plain.push_str(rest);
+        plain
+            .split('.')
+            .skip(1)
+            .map(|t| t.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect())
+            .collect()
+    }
+
+    #[test]
+    fn classes_are_read_from_html_and_not_from_code() {
+        let md = "<div class=\"a b\"><span class='c'>x</span></div>\n`<p class=\"inline\">`\n```html\n<p class=\"fenced\">\n```\nif a < b the class=\"prose\"";
+        assert_eq!(classes_in(md).into_iter().collect::<Vec<_>>(), ["a", "b", "c"]);
+        assert!(classes_styled("/* .no */ .a .b-c:hover{x:1.5em}").contains("b-c"));
+        assert!(!classes_styled("/* .no */ .a{}").contains("no"));
+    }
+
+    /// The converter keeps HTML from the guides, whose own styling does not come with it: a class with no rule in
+    /// `cookbook-guide.css` shows as run-together lines of text, or as a black drawing.
+    #[test]
+    fn every_class_a_cookbook_page_uses_is_styled() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let css = fs::read_to_string(root.join("web/src/styles/cookbook-guide.css")).unwrap();
+        let styled = classes_styled(&css);
+        let mut issues = Vec::new();
+        let cookbook = load(&root.join("content"), &mut issues);
+        assert!(!cookbook.pages.is_empty());
+        let mut bare: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        for (id, page) in &cookbook.pages {
+            for section in &page.sections {
+                for class in classes_in(&section.body) {
+                    if !styled.contains(&class) && !NEEDS_NO_STYLE.contains(&class.as_str()) {
+                        bare.entry(class).or_default().push(id);
+                    }
+                }
+            }
+        }
+        assert!(bare.is_empty(), "classes with no rule in web/src/styles/cookbook-guide.css, and the pages that use them: {bare:#?}");
+    }
+
     const PAGE: &str = "title = \"T\"\nmodule = \"M\"\nchapter = \"C\"\norder = 1\nkind = \"guide\"\nlede = \"L\"\n[[sections]]\nheading = \"H\"\nbody = \"> [!RUST]\\n> yes\"\n";
 
     fn load_dir(d: &Dir) -> (Cookbook, Vec<String>) {

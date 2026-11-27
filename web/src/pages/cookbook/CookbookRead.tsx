@@ -119,7 +119,6 @@ function Head({ page, subject, place }: { page: CbPage; subject: string; place: 
                 {page.status === "draft" && <span className="cb-draft">Draft: not yet reviewed by a person</span>}
             </div>
             {topics ? <ul className="cb-topics" aria-label="What the page covers">{topics.map((t) => <li key={t}>{t}</li>)}</ul> : <p className="cb-dek" dangerouslySetInnerHTML={inline(page.lede)} />}
-            {page.origin && <p className="cb-dim">From the {page.origin.toLowerCase()}. Its exercises are left out.</p>}
         </header>
     );
 }

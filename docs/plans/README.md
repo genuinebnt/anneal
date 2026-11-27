@@ -8,6 +8,3 @@ FlowForge workspace, so some paths and file names inside them refer to that work
 | `SERIES_ROADMAP.md` | Practice series: the FlowForge series, topic progressions, advanced series and database design foundations |
 | `SENTINEL_SERIES.md` | A backend and parsing series based on a private project |
 | `COOKBOOK_CONTENT_PLAN.md` | The next Cookbook content phases, their order and known broken pages |
-
-**Private.** `SENTINEL_SERIES.md` describes a proprietary project. It was added while this repository was private.
-Before this repository is ever made public again, note that removing the file does not remove it from git history.
