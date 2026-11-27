@@ -157,6 +157,9 @@ function MathBlock({ tex }: { tex: string }) {
     return html ? <div className="sd-math" dangerouslySetInnerHTML={{ __html: html }} /> : <div className="sd-math sd-math-wait">{tex}</div>;
 }
 
+/** About the most columns of code that fit a column of text. */
+const LONG_LINE = 74;
+
 /** Code with its language, a file name, tabs when several blocks form a group, Copy, and line numbers that copy a link to the
  *  line (`#<block>-L13`); a link like that opens with the line lit. */
 export function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
@@ -183,7 +186,8 @@ export function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
         );
     };
     return (
-        <figure ref={ref} className="sd-code" id={id}>
+        // a page with a narrow reading column gives code with long lines more room
+        <figure ref={ref} className={`sd-code${blocks.some((x) => x.code.split("\n").some((l) => l.length > LONG_LINE)) ? " sd-long" : ""}`} id={id}>
             <div className="sd-code-h">
                 <span className="sd-code-l">{CODE_LANGS[b.lang]?.label ?? b.lang}</span>
                 {b.title && <span className="sd-code-t">{b.title}</span>}

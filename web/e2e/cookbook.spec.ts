@@ -160,17 +160,22 @@ test("Every cookbook page renders with its code and no leftover page syntax", as
     expect(errors).toEqual([]);
 });
 
-test("On a wide screen text and panels are as wide as the code", async ({ page }) => {
+test("On a wide screen notes keep the reading column, and code and tables are never narrower than it", async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1000 });
     for (const id of ["concurrent-memory", "mvcc-snapshot-isolation", "join-algorithms"]) {
         await page.goto(`/cookbook/p/${id}`);
         await page.locator(".cb-art .sd-md").first().waitFor();
-        const gap = await page.evaluate(() => {
-            const widest = (sel: string) => Math.max(0, ...[...document.querySelectorAll(sel)].map((e) => e.getBoundingClientRect().width));
-            const full = widest(".cb-art .cb-head");
-            return [".cb-art .sd-md", ".cb-art .sd-code, .cb-art .cb-view", ".cb-art .sd-call"].map((sel) => (widest(sel) ? Math.round(full - widest(sel)) : 0));
+        const found = await page.evaluate(() => {
+            const widths = (sel: string) => [...document.querySelectorAll(sel)].map((e) => Math.round(e.getBoundingClientRect().width)).filter((w) => w > 0);
+            return {
+                column: widths(".cb-art > .cb-head")[0]!,
+                // the page's own flow only: a note or a paragraph inside a card is the card's business
+                reading: widths(".cb-sec > .sd-call, .cb-sec > .sd-md > .sd-call, .cb-sec > .sd-md > p"),
+                code: widths(".cb-sec > .sd-code, .cb-sec > .sd-md > .sd-tbl, .cb-art > .cb-lab > .cb-view"),
+            };
         });
-        expect(Math.max(...gap), `${id}: text, code and notes short of the column by ${gap}`).toBeLessThanOrEqual(2);
+        expect(found.reading.filter((w) => Math.abs(w - found.column) > 2), `${id}: reading blocks off the column of ${found.column}`).toEqual([]);
+        expect(found.code.filter((w) => w < found.column), `${id}: code narrower than the column`).toEqual([]);
     }
 });
 

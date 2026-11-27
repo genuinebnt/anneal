@@ -25,10 +25,10 @@ test("A lesson opens with In short, and its ways to the code and the parts move 
     const errors = await open(page);
     const short = page.getByRole("region", { name: "In short" });
     await expect(short).toContainText("A fixture summary");
-    // beside the "On this page" panel the box lists no parts of its own, and is only as wide as its text
+    // beside the "On this page" panel the box lists no parts of its own, and keeps to the reading column
     const parts = short.getByRole("navigation", { name: "Jump to" });
     await expect(parts).toBeHidden();
-    expect((await short.boundingBox())!.width).toBeLessThanOrEqual(682);
+    expect((await short.boundingBox())!.width).toBeLessThanOrEqual(664);
     // without the panel (hidden, or a narrower window) it does
     await page.keyboard.press("]");
     await expect(parts).toBeVisible();
@@ -157,7 +157,8 @@ test("A lesson keeps its text to a readable line, fits every width and stores no
         await page.setViewportSize({ width, height: 900 });
         expect(await sideways(page), `${width}`).toBeLessThanOrEqual(0);
         const line = await page.locator("#cb-how-it-works .sd-md > p").first().evaluate((e) => e.getBoundingClientRect().width);
-        expect(line, `text at ${width}`).toBeLessThanOrEqual(630);
+        // 39 times the text size, about 80 characters; the text is a little larger on a very wide screen
+        expect(line, `text at ${width}`).toBeLessThanOrEqual(width >= 1900 ? 703 : 664);
     }
     // on a phone the controls are big enough to touch
     for (const name of ["← Back", "Next →", "Restart"]) expect((await page.getByRole("button", { name }).boundingBox())!.height, name).toBeGreaterThanOrEqual(44);
@@ -291,6 +292,89 @@ test("On a phone the stepper's controls and lanes fit on the screen together, an
         const box = (await tick.boundingBox())!;
         expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
     }
+});
+
+/** Every block in the article's flow, with the room left and right of it inside the article. What is inside a component
+ *  (a card's words, a viewer's lines) is the component's own business and is not listed. */
+const gaps = (page: Page) =>
+    page.evaluate(() => {
+        const art = document.querySelector(".cb-art")!.getBoundingClientRect();
+        const flow = ".cb-art > :not(.cb-sec, .cb-lab), :is(.cb-sec, .cb-lab) > :not(.sd-md), :is(.cb-sec, .cb-lab) > .sd-md > *";
+        return [...document.querySelectorAll<HTMLElement>(flow)]
+            .filter((e) => e.getBoundingClientRect().width > 2 && getComputedStyle(e).position !== "absolute")
+            .map((e) => ({ what: `${e.tagName.toLowerCase()}.${e.classList[0] ?? ""}`, left: e.getBoundingClientRect().left - art.left, right: art.right - e.getBoundingClientRect().right }));
+    });
+
+async function read(page: Page, id: string, width: number) {
+    await page.setViewportSize({ width, height: width < 500 ? 844 : 950 });
+    await page.goto(`/cookbook/p/${id}`);
+    await expect(page.locator(".cb-head h1")).toBeVisible();
+    await page.evaluate(() => document.fonts.ready.then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))));
+}
+
+/** Each block sits in the middle, and between them they use no more than two widths: reading, and the wider one. */
+async function expectBalanced(page: Page, where: string) {
+    const all = await gaps(page);
+    expect(all.length, where).toBeGreaterThan(8);
+    expect(all.filter((b) => Math.abs(b.left - b.right) > 1.5).map((b) => `${b.what} ${Math.round(b.left)} | ${Math.round(b.right)}`), `lopsided blocks, ${where}`).toEqual([]);
+    const edges = [...new Set(all.map((b) => Math.round(b.left)))].sort((a, b) => a - b);
+    expect(edges.length, `left edges ${edges.join(", ")}, ${where}`).toBeLessThanOrEqual(2);
+    // two widths either match or are plainly different: a few pixels apart would look like a mistake
+    if (edges.length === 2) expect(edges[1]! - edges[0]!, where).toBeGreaterThanOrEqual(32);
+    expect(await sideways(page), where).toBeLessThanOrEqual(0);
+}
+
+for (const width of [2200, 1440, 390]) {
+    test(`A lesson is balanced and its blocks share their edges, ${width} wide`, async ({ page }) => {
+        await read(page, "bounded-channel", width);
+        await expectBalanced(page, `${width}`);
+        const box = async (s: string) => (await page.locator(s).first().boundingBox())!;
+        const text = await box("#cb-why-put-a-limit-on-a-queue .sd-md > p");
+        // reading blocks have exactly the edges of the text
+        for (const s of [".cb-head", ".cb-short", ".cb-step", ".sd-tbl", ".cb-conn", ".cb-sources", ".cb-pn"]) {
+            const b = await box(s);
+            expect([Math.round(b.x), Math.round(b.width)], s).toEqual([Math.round(text.x), Math.round(text.width)]);
+        }
+        // and the blocks that need room have one pair of edges between them, with two programs side by side when it is wide
+        const wide = await box(".cb-cmp");
+        for (const s of [".cb-walk", ".cb-lab .cb-view"]) {
+            const b = await box(s);
+            expect([Math.round(b.x), Math.round(b.width)], s).toEqual([Math.round(wide.x), Math.round(wide.width)]);
+        }
+        const [a, b] = [await box(".cb-cmp-side.wrong"), await box(".cb-cmp-side.fixed")];
+        expect(Math.round(a.y) === Math.round(b.y)).toBe(width === 2200);
+        if (width > 1180) {
+            // the page as a whole is in the middle too: the panels leave the same room at both sides
+            const [l, r] = [await box(".cb-left"), await box(".cb-right")];
+            expect(Math.abs(l.x - (width - r.x - r.width))).toBeLessThanOrEqual(1);
+        }
+    });
+
+    test(`A guide page follows the same two widths, ${width} wide`, async ({ page }) => {
+        await read(page, "how-to-use-this-guide", width);
+        await expectBalanced(page, `${width}`);
+        const line = (await page.locator(".cb-sec .sd-md > p").first().boundingBox())!.width;
+        expect(line).toBeLessThanOrEqual(width >= 1900 ? 703 : 664);
+    });
+}
+
+test("With the panels hidden or the text larger, a lesson stays balanced", async ({ page }) => {
+    await read(page, "bounded-channel", 1440);
+    for (const key of ["[", "]", "["]) {
+        await page.keyboard.press(key);
+        await expectBalanced(page, `after ${key}`);
+    }
+    await page.keyboard.press("]");
+    await page.getByRole("button", { name: "Larger text" }).click();
+    await expectBalanced(page, "larger text");
+    await page.getByRole("button", { name: "Larger text" }).click();
+});
+
+test("Full window takes the whole window, not the article's column", async ({ page }) => {
+    await read(page, "bounded-channel", 1440);
+    await page.locator(".cb-lab").getByRole("button", { name: "Full window" }).click();
+    const box = (await page.locator(".cb-view.full").boundingBox())!;
+    expect([box.x, box.width].map(Math.round)).toEqual([10, 1420]);
 });
 
 test("A page that is not a lesson has none of this", async ({ page }) => {

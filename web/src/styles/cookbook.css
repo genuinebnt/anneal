@@ -139,9 +139,8 @@
 .cb-left,.cb-right{position:sticky;top:calc(var(--hdr-h,52px) + 12px);max-height:calc(100vh - var(--hdr-h,52px) - 24px);min-width:0}
 .cb-right{overflow-y:auto;scrollbar-width:none;display:flex;flex-direction:column;gap:12px}
 .cb-right>*{flex:none}
-.cb-art{min-width:0;width:100%;padding:12px clamp(0px,1.6vw,22px) 40px;font-size:16.5px;line-height:1.75}
-/* text, panels, tables and code share one width: the shared page style caps text at 78 characters, which left it short of the code */
-.cb-art .sd-md{font-size:16.5px;line-height:1.75;max-width:none}
+.cb-art{--fs:17px;container-type:inline-size;min-width:0;width:100%;padding:12px 0 40px;font-size:16.5px;line-height:1.75}
+.cb-art .sd-md{font-size:var(--fs);line-height:1.75;max-width:none}
 .cb-art .sd-deeper,.cb-art .sd-math,.cb-art .sd-call,.cb-art .sd-tbl,.cb-art .sd-steps-fig{max-width:none}
 .cb-art .sd-md p,.cb-art .sd-md ul,.cb-art .sd-md ol,.cb-art .sd-call{max-width:none}
 .cb-head .cb-where{display:flex;flex-wrap:wrap;gap:10px;margin:0;font:700 12px var(--mono);letter-spacing:.04em;color:var(--c)}
@@ -251,7 +250,7 @@ html.cb-noscroll{overflow:hidden}
 /* wrap long lines, or make text and code larger */
 .cb-read.wrap .cb-art .sd-md .sd-ln{grid-template-columns:46px minmax(0,1fr);width:auto}
 .cb-read.wrap .cb-art .sd-md .sd-ln>span,.cb-read.wrap .cb-out pre{white-space:pre-wrap;overflow-wrap:anywhere}
-.cb-read.big .cb-art .sd-md{font-size:18.5px}
+.cb-read.big .cb-art{--fs:19px}
 .cb-read.big .cb-art .sd-md .sd-code pre,.cb-read.big .cb-out pre{font-size:15.5px}
 
 /* content the guides and samples draw */
@@ -277,10 +276,39 @@ html.cb-noscroll{overflow:hidden}
 .cb-sum{margin-top:26px;padding:18px 22px;border-radius:14px;border:1px solid color-mix(in oklab,var(--c) 30%,transparent);background:color-mix(in oklab,var(--c) 7%,var(--panel))}
 .cb-sum h2{font-size:15px;color:var(--c);letter-spacing:0}
 .cb-sum ul{margin:0;padding-left:18px}
-.cb-art .cb-glance{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0}
-.cb-art .cb-glance>div{flex:1 1 220px;padding:11px 15px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+.cb-art .cb-glance{display:flex;flex-wrap:wrap;gap:10px;margin:14px auto 0}
+.cb-art .cb-glance>div{flex:1 1 max(240px,40%);padding:11px 15px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
 .cb-glance dt{font:600 12px var(--mono);color:var(--dim)}
 .cb-glance dd{margin:3px 0 0;font-size:14px}
+
+/* ---- the page's two widths ----
+   Everything in the article is centred between the side panels, on one of two widths. Reading (the head, headings, prose,
+   notes and cards) keeps to a column about 80 characters wide. Blocks that need room (code beside its words, the file
+   viewer, two programs side by side, code with long lines; on pages that are not lessons also all code, tables and diagrams) may be wider, by the
+   same amount on each side. A new block is as narrow as the text until it is named here. */
+.cb-art>*{--wide:100cqi;--text:100cqi}
+@container (min-width:700px){
+    /* when there is room, the two widths differ by enough to look meant */
+    .cb-art>*{--wide:min(1240px,100cqi);--text:min(calc(var(--fs) * 39),100cqi - 64px)}
+}
+.cb-art>*{box-sizing:border-box;width:var(--wide);margin-inline:auto}
+.cb-art>:not(.cb-sec,.cb-lab,.cb-methods){width:var(--text)}
+/* the same inside the parts that hold both kinds: a section, the code block and a fold, and the prose in each. Only the page's
+   own flow is sized, never what is inside a block. (The specificity beats each block's own side margins.) */
+.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:not(summary,.sd-md,.cb-methods),
+.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>*{box-sizing:border-box;max-width:var(--text);margin-inline:auto}
+.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.cb-view,.cb-out,.cb-methods,.cb-cmp,.cb-walk,.sd-code.sd-long,.sd-deeper[open]:has(.cb-cmp,.cb-walk,.cb-view,.sd-long)),
+.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.cb-cmp,.cb-walk,.sd-code.sd-long){max-width:var(--wide)}
+.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.sd-code,.sd-tbl,pre,.sd-steps-fig,.sd-deeper[open]:has(.sd-code,.sd-tbl,table)),
+.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-code,.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,table.cb-g-cheat){max-width:var(--wide)}
+/* "Full window" is the whole window, whatever column the viewer came from */
+.cb-art .cb-view.full{width:auto!important;max-width:none!important;margin:0!important}
+@media (min-width:1900px){
+    .cb-art{--fs:18px}
+    .cb-read.big .cb-art{--fs:20px}
+}
+/* on a very wide screen the panels stay near what they describe: the page stops growing and sits in the middle */
+.cb-bar,.cb-lay{max-width:1920px;margin-inline:auto}
 
 @media (max-width:1180px){
     .cb-lay,.cb-read.no-left .cb-lay,.cb-read.no-right .cb-lay,.cb-read.no-left.no-right .cb-lay{grid-template-columns:minmax(0,1fr)}
