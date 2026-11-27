@@ -89,7 +89,7 @@ pub enum CourseCmd {
     Show {
         /// A stage id, e.g. 1a-03.
         stage: Option<String>,
-        /// Open the Nth hint of the stage. The website records that the stage was helped, so this needs `anneal course login`.
+        /// Open the Nth hint of the stage. The website records that the stage was helped; offline the hint comes from your copy of the stage and the mark is sent with the next sync.
         #[arg(long, value_name = "N")]
         hint: Option<usize>,
         /// Print everything at once instead of through a pager (the `PAGER` environment variable picks the pager).
@@ -130,7 +130,7 @@ pub enum CourseCmd {
     Guide,
     /// Check the tools and the setup a learner needs: rust, git, curl, the hook, the login, the queue, the build directory.
     Doctor,
-    /// Send the test runs that could not be reported earlier (no network, an expired session).
+    /// Send the test runs and hint opens that could not be reported earlier (no network, an expired session, not signed in).
     Sync,
     /// Install (or reinstall) the git hooks in this repo.
     Hooks,
@@ -1531,7 +1531,7 @@ fn doctor() -> anyhow::Result<ExitCode> {
             }
             let queued = course_sync::queued_runs(&repo);
             if queued > 0 {
-                line(None, "queued runs", format!("{queued} waiting: `anneal course sync`"));
+                line(None, "queued", format!("{queued} runs or hint opens waiting: `anneal course sync`"));
             }
             let target = dir_size(&repo.join("target"));
             let gb = target as f64 / 1e9;
@@ -1635,21 +1635,43 @@ fn show(stage: Option<&str>, hint: Option<usize>, no_pager: bool, answers: bool)
         None => current(&course, &progress).context("every stage is done")?,
     };
     match hint {
-        Some(n) => print_hint(&course.meta.id, s, n, no_pager)?,
+        Some(n) => print_hint(&repo, &course.meta.id, s, n, no_pager)?,
         None => print_stage(&repo, &course, &progress, s, no_pager, answers),
     }
     Ok(ExitCode::SUCCESS)
 }
 
-/// One hint, opened through the server so that the website knows the stage was helped.
-fn print_hint(course_id: &str, s: &Stage, n: usize, no_pager: bool) -> anyhow::Result<()> {
-    let (title, md, opened) = course_sync::open_hint(course_id, &s.def.id, n)?;
-    if opened {
-        eprintln!("Hint {n} opened. When stage {} passes, the website will count it as passed with help.", s.def.id);
-    }
+/// One hint, opened through the server so that the website knows the stage was helped. When the server cannot be asked (nobody is
+/// signed in, no network), the hint comes from the learner's copy of the stage and the "helped" mark waits in the outbox for the next sync.
+fn print_hint(repo: &Path, course_id: &str, s: &Stage, n: usize, no_pager: bool) -> anyhow::Result<()> {
+    let (title, md) = match course_sync::open_hint(course_id, &s.def.id, n)? {
+        course_sync::HintOpen::Online { title, md, opened } => {
+            if opened {
+                eprintln!("Hint {n} opened. When stage {} passes, the website will count it as passed with help.", s.def.id);
+            }
+            (title, md)
+        }
+        course_sync::HintOpen::Offline(why) => {
+            let hint = local_hint(&s.readme, &s.def.id, n)?;
+            course_sync::queue_hint(repo, course_id, &s.def.id, n);
+            let when = if course_sync::app_url().is_some() { "with the next sync (`anneal course sync` or your next test run)" } else { "once you sign in (`anneal course login <url>`) and sync" };
+            eprintln!("Hint {n} from your copy of the stage ({why}). The website learns that stage {} was helped {when}.", s.def.id);
+            hint
+        }
+    };
     let text = format!("{}\n\n{}", term::bold(&format!("Stage {} · hint {n}: {title}", s.def.id)), render::render_page(&md, term::text_width(), term::color_on(), &s.def.id, false));
     term::page(&text, no_pager);
     Ok(())
+}
+
+/// The `n`th (1-based) hint of a stage page, as (title, markdown), read from the `## Hints` section.
+fn local_hint(readme: &str, stage: &str, n: usize) -> anyhow::Result<(String, String)> {
+    let hints = render::split_hints(readme).1;
+    match hints.len() {
+        0 => bail!("stage {stage} has no hints written yet"),
+        total if n == 0 || n > total => bail!("stage {stage} has {total} hint{}: pick 1 to {total}", if total == 1 { "" } else { "s" }),
+        _ => Ok(hints.into_iter().nth(n - 1).expect("n is in range")),
+    }
 }
 
 /// Stages that count towards the course: the core stages, the path `current` walks. Challenges (extra practice) and the stages of
@@ -2753,6 +2775,20 @@ mod learner_screens {
         assert_eq!(stage_test_names(&dir, &stage(&["stages_9z"])).len(), 3);
         assert!(stage_test_names(&dir, &stage(&["stages_missing"])).is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hint_is_read_from_the_stage_page_when_the_app_cannot_be_asked() {
+        let page = "Intro.\n\n## The task\n\nDo it.\n\n## Hints\n\n### Where to start\n\nLook at `read_at`.\n\n### The trap\n\nA short read.\n\n```rust\n### not a hint\n```\n\n## Performance\n\nFast.\n";
+        assert_eq!(local_hint(page, "1a-01", 1).unwrap(), ("Where to start".to_owned(), "Look at `read_at`.".to_owned()));
+        let (title, md) = local_hint(page, "1a-01", 2).unwrap();
+        assert_eq!(title, "The trap");
+        assert!(md.starts_with("A short read.") && md.contains("### not a hint") && !md.contains("Fast."), "{md}");
+        for n in [0, 3] {
+            let err = local_hint(page, "1a-01", n).unwrap_err().to_string();
+            assert!(err.contains("has 2 hints: pick 1 to 2"), "{err}");
+        }
+        assert!(local_hint("No hints here.\n", "1a-01", 1).unwrap_err().to_string().contains("no hints"));
     }
 }
 

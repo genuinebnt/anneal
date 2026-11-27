@@ -119,7 +119,9 @@ struct TestReport<'a> {
     detail: &'a str,
 }
 
-/// Where runs wait when the app cannot be reached: one JSON line per run, in the learner's repo.
+/// Where reports wait when the app cannot be reached: one JSON line each, in the learner's repo. A line is a run
+/// (`{"kind":"run","course":..,"body":{..}}`; lines written before kinds existed have no `kind` and are runs) or a hint opened
+/// offline (`{"kind":"hint","course":..,"stage":..,"n":..}`).
 fn outbox_path(repo: &Path) -> PathBuf {
     repo.join(".anneal").join("outbox.jsonl")
 }
@@ -134,6 +136,34 @@ fn save_queue(repo: &Path, lines: &[String]) {
         let _ = fs::remove_file(path);
     } else {
         let _ = fs::write(path, lines.join("\n") + "\n");
+    }
+}
+
+/// One line of the outbox.
+#[derive(Debug, PartialEq)]
+enum Queued {
+    /// A test run: the body of `POST /api/courses/<course>/runs`.
+    Run { course: String, body: String },
+    /// Hints 1 to `n` of a stage were opened while the app could not be asked.
+    Hint { course: String, stage: String, n: usize },
+}
+
+fn run_line(course: &str, body: &serde_json::Value) -> String {
+    serde_json::json!({ "kind": "run", "course": course, "body": body }).to_string()
+}
+
+fn hint_line(course: &str, stage: &str, n: usize) -> String {
+    serde_json::json!({ "kind": "hint", "course": course, "stage": stage, "n": n }).to_string()
+}
+
+/// Reads one outbox line; `None` for a line that is not JSON or names an unknown kind.
+fn parse_line(line: &str) -> Option<Queued> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let course = v["course"].as_str().unwrap_or("").to_owned();
+    match v.get("kind").and_then(|k| k.as_str()) {
+        None | Some("run") => Some(Queued::Run { course, body: v["body"].to_string() }),
+        Some("hint") => Some(Queued::Hint { course, stage: v["stage"].as_str()?.to_owned(), n: usize::try_from(v["n"].as_u64()?).ok()? }),
+        Some(_) => None,
     }
 }
 
@@ -155,28 +185,82 @@ fn send(s: &Session, course: &str, body: &str) -> Sent {
     }
 }
 
-/// Sends the queued runs, oldest first, stopping at the first one that cannot be delivered right now. Returns (sent, refused, left).
-fn flush(repo: &Path, s: &Session) -> (usize, usize, usize) {
-    let lines = queued(repo);
-    let (mut sent, mut refused) = (0, 0);
-    let mut left: Vec<String> = Vec::new();
-    for (k, line) in lines.iter().enumerate() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            refused += 1;
-            continue;
+/// What a flush of the outbox did.
+#[derive(Debug, Default, PartialEq)]
+struct Flushed {
+    runs: usize,
+    hints: usize,
+    refused: usize,
+    /// The lines still waiting, in the order they will be sent.
+    left: Vec<String>,
+    /// Why the first line still waiting could not be sent.
+    why: Option<String>,
+}
+
+impl Flushed {
+    fn hint_waiting(&self) -> bool {
+        self.left.iter().any(|l| matches!(parse_line(l), Some(Queued::Hint { .. })))
+    }
+}
+
+/// Sends queued lines, stopping at the first one that cannot be delivered right now. Hint opens go first, then runs, each oldest
+/// first: a stage's "helped" mark must reach the app before a run that passes it, or the app would count the stage as passed without help.
+fn flush_lines(lines: &[String], send_hint: &mut dyn FnMut(&str, &str, usize) -> Sent, send_run: &mut dyn FnMut(&str, &str) -> Sent) -> Flushed {
+    let mut ordered: Vec<(&String, Queued)> = Vec::new();
+    let mut f = Flushed::default();
+    for line in lines {
+        match parse_line(line) {
+            Some(q) => ordered.push((line, q)),
+            None => f.refused += 1,
+        }
+    }
+    ordered.sort_by_key(|(_, q)| matches!(q, Queued::Run { .. }));
+    for (k, (_, q)) in ordered.iter().enumerate() {
+        let sent = match q {
+            Queued::Hint { course, stage, n } => send_hint(course, stage, *n),
+            Queued::Run { course, body } => send_run(course, body),
         };
-        let (course, body) = (v["course"].as_str().unwrap_or(""), v["body"].to_string());
-        match send(s, course, &body) {
-            Sent::Delivered => sent += 1,
-            Sent::Refused(_) => refused += 1,
-            Sent::Retry(_) => {
-                left.extend(lines[k..].iter().cloned());
+        match sent {
+            Sent::Delivered if matches!(q, Queued::Hint { .. }) => f.hints += 1,
+            Sent::Delivered => f.runs += 1,
+            Sent::Refused(_) => f.refused += 1,
+            Sent::Retry(why) => {
+                f.left = ordered[k..].iter().map(|(l, _)| (*l).clone()).collect();
+                f.why = Some(why);
                 break;
             }
         }
     }
-    save_queue(repo, &left);
-    (sent, refused, left.len())
+    f
+}
+
+/// Sends the queued hint opens and runs (see `flush_lines`) and keeps what is left in the outbox.
+fn flush(repo: &Path, s: &Session) -> Flushed {
+    let f = flush_lines(
+        &queued(repo),
+        &mut |course, stage, n| match reveal_hints(s, course, stage, n, false) {
+            Ok(_) => Sent::Delivered,
+            Err(e) => e,
+        },
+        &mut |course, body| send(s, course, body),
+    );
+    save_queue(repo, &f.left);
+    f
+}
+
+/// Remembers that hints 1 to `n` of `stage` were read from the learner's copy, so the next sync tells the app the stage was helped.
+/// Nothing is added when a waiting line already covers it.
+pub fn queue_hint(repo: &Path, course: &str, stage: &str, n: usize) {
+    let mut q = queued(repo);
+    let covered = q.iter().any(|l| matches!(parse_line(l), Some(Queued::Hint { course: c, stage: st, n: m }) if c == course && st == stage && m >= n));
+    if !covered {
+        q.push(hint_line(course, stage, n));
+        save_queue(repo, &q);
+    }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 /// Tells the app a run is starting, so the stage page shows "Running…" until the report arrives. Quiet, quick and never fails the caller.
@@ -221,20 +305,32 @@ pub fn set_repo_remote(course: &str, url: &str) -> Option<anyhow::Result<()>> {
 }
 
 /// Reports one stage run, if a session exists. Never fails the caller. A run that cannot be delivered now is queued in
-/// `.anneal/outbox.jsonl` and goes out with the next report or `anneal course sync`.
+/// `.anneal/outbox.jsonl` and goes out with the next report or `anneal course sync`. So is a run while a hint opened offline is still
+/// waiting: the hint has to reach the app first.
 pub fn report_run(repo: &Path, course: &str, stage: &str, tests: &[(String, bool, String)], problem: Option<&str>, commit: &str, ms: u64) {
     let Some(s) = load_session() else { return };
     let tests: Vec<TestReport> = tests.iter().map(|(n, ok, d)| TestReport { name: n.rsplit("::").next().unwrap_or(n), ok: *ok, detail: d }).collect();
     let body = serde_json::json!({ "stage_id": stage, "tests": tests, "problem": problem, "commit": commit, "duration_ms": ms });
-    let (earlier, ..) = flush(repo, &s);
-    match send(&s, course, &body.to_string()) {
+    let earlier = flush(repo, &s);
+    let sent = match &earlier.why {
+        Some(why) if earlier.hint_waiting() => Sent::Retry(format!("a hint opened offline has to reach {} first ({why})", s.url)),
+        _ => send(&s, course, &body.to_string()),
+    };
+    match sent {
         Sent::Delivered => {
-            let more = if earlier > 0 { format!(" (and {earlier} earlier queued run{})", if earlier == 1 { "" } else { "s" }) } else { String::new() };
+            let mut also = Vec::new();
+            if earlier.runs > 0 {
+                also.push(format!("{} earlier queued", plural(earlier.runs, "run", "runs")));
+            }
+            if earlier.hints > 0 {
+                also.push(plural(earlier.hints, "hint opened offline", "hints opened offline"));
+            }
+            let more = if also.is_empty() { String::new() } else { format!(" (and {})", also.join(" and ")) };
             println!("\nReported to {}{more}", s.url);
         }
         Sent::Retry(why) => {
             let mut q = queued(repo);
-            q.push(serde_json::json!({ "course": course, "body": body }).to_string());
+            q.push(run_line(course, &body));
             let n = q.len();
             save_queue(repo, &q);
             println!("\nNot reported yet: {why}.\nQueued ({n} waiting); `anneal course sync` or your next test run sends them.");
@@ -243,7 +339,7 @@ pub fn report_run(repo: &Path, course: &str, stage: &str, tests: &[(String, bool
     }
 }
 
-/// `anneal course sync`: sends what is queued.
+/// `anneal course sync`: sends what is queued (hint opens first, then runs).
 pub fn sync(repo: &Path) -> anyhow::Result<()> {
     let s = load_session().context("not signed in: run `anneal course login <url>` first")?;
     let waiting = queued(repo).len();
@@ -251,13 +347,17 @@ pub fn sync(repo: &Path) -> anyhow::Result<()> {
         println!("Nothing waiting to be reported.");
         return Ok(());
     }
-    let (sent, refused, left) = flush(repo, &s);
-    println!("Sent {sent} of {waiting} queued run{} to {}.", if waiting == 1 { "" } else { "s" }, s.url);
-    if refused > 0 {
-        println!("{refused} the server refused and dropped (an unknown stage, for example).");
+    let f = flush(repo, &s);
+    let mut sent = vec![plural(f.runs, "run", "runs")];
+    if f.hints > 0 {
+        sent.push(plural(f.hints, "hint opened offline", "hints opened offline"));
     }
-    if left > 0 {
-        bail!("{left} still waiting: the server can't be reached or the session expired (`anneal course login {}`)", s.url);
+    println!("Sent {} of {waiting} waiting to {}.", sent.join(" and "), s.url);
+    if f.refused > 0 {
+        println!("{} the server refused and dropped (an unknown stage, for example).", f.refused);
+    }
+    if !f.left.is_empty() {
+        bail!("{} still waiting: {}", f.left.len(), f.why.as_deref().unwrap_or("the server can't be reached"));
     }
     Ok(())
 }
@@ -344,41 +444,69 @@ pub fn session_status() -> Option<(String, anyhow::Result<u16>)> {
     Some((s.url, answer))
 }
 
-/// For `anneal course doctor`: how many runs wait to be reported.
+/// For `anneal course doctor`: how many runs and hint opens wait to be reported.
 pub fn queued_runs(repo: &Path) -> usize {
     queued(repo).len()
 }
 
-/// Opens hints up to the `n`th (1-based) through the server, which records that the stage was helped, and returns the `n`th as
-/// (title, markdown) with whether this call opened it. Needs the sign-in from `anneal course login`.
-pub fn open_hint(course: &str, stage: &str, n: usize) -> anyhow::Result<(String, String, bool)> {
-    let s = load_session().context("opening a hint is recorded on the website: sign in first with `anneal course login <url>`")?;
+/// What `anneal course show --hint` got: the hint from the app, which recorded that the stage was helped, or why the app could not be
+/// asked (nobody is signed in, no network, a server error, an expired session), in which case the caller reads the learner's copy.
+pub enum HintOpen {
+    Online { title: String, md: String, opened: bool },
+    Offline(String),
+}
+
+/// Opens hints up to the `n`th (1-based) through the server, which records that the stage was helped, and returns the `n`th with whether
+/// this call opened it. A refusal from the app (no such stage, no such hint) is an error.
+pub fn open_hint(course: &str, stage: &str, n: usize) -> anyhow::Result<HintOpen> {
+    let Some(s) = load_session() else { return Ok(HintOpen::Offline("not signed in".into())) };
+    match reveal_hints(&s, course, stage, n, true) {
+        Ok((page, opened)) => {
+            let hint = &page["hints"]["revealed"][n - 1];
+            Ok(HintOpen::Online { title: hint["title"].as_str().unwrap_or("").to_owned(), md: hint["md"].as_str().unwrap_or("").to_owned(), opened })
+        }
+        Err(Sent::Retry(why)) => Ok(HintOpen::Offline(why)),
+        Err(Sent::Refused(why)) => bail!("{why}"),
+        Err(Sent::Delivered) => unreachable!("an error is never a delivery"),
+    }
+}
+
+/// Asks the app to reveal the hints of `stage` until at least `n` are revealed: it reveals them one at a time, in order, and records
+/// that the stage was helped. Reads the current count first, so hints already revealed are not asked for again. Returns the stage page
+/// as the app sends it and whether this call revealed any. With `exact`, an `n` past the stage's hints is refused; without it (a hint
+/// opened offline, from a copy of the stage that may differ from the app's), every hint up to `n` that the app has is revealed.
+fn reveal_hints(s: &Session, course: &str, stage: &str, n: usize, exact: bool) -> Result<(serde_json::Value, bool), Sent> {
     let base = format!("{}/api/courses/{course}/stages/{stage}", s.url.trim_end_matches('/'));
-    let read = |status: u16, body: &str| -> anyhow::Result<serde_json::Value> {
-        match status {
-            200 => Ok(serde_json::from_str(body)?),
-            401 => bail!("the session expired: run `anneal course login {}`", s.url),
-            404 => bail!("the server does not publish stage {stage} yet"),
-            _ => bail!("the server answered {status}: {}", body.trim()),
+    let read = |reply: anyhow::Result<(u16, String, String)>| -> Result<serde_json::Value, Sent> {
+        match reply {
+            Ok((200, _, body)) => serde_json::from_str(&body).map_err(|e| Sent::Retry(format!("the server sent a page that does not read: {e}"))),
+            Ok((401, ..)) => Err(Sent::Retry(format!("the session at {} expired: run `anneal course login {}`", s.url, s.url))),
+            Ok((404, ..)) => Err(Sent::Refused(format!("the server does not publish stage {stage} yet"))),
+            Ok((st, _, body)) if st >= 500 => Err(Sent::Retry(format!("the server answered {st}: {}", body.trim()))),
+            Ok((st, _, body)) => Err(Sent::Refused(format!("the server answered {st}: {}", body.trim()))),
+            Err(e) => Err(Sent::Retry(format!("can't reach {}: {e}", s.url))),
         }
     };
-    let (status, _, body) = curl("GET", &base, Some(&s.token), None)?;
-    let mut page = read(status, &body)?;
+    let mut page = read(curl("GET", &base, Some(&s.token), None))?;
     let total = page["hints"]["total"].as_u64().unwrap_or(0) as usize;
     if total == 0 {
-        bail!("stage {stage} has no hints written yet");
+        return Err(Sent::Refused(format!("stage {stage} has no hints written yet")));
     }
-    if n == 0 || n > total {
-        bail!("stage {stage} has {total} hint{}: pick 1 to {total}", if total == 1 { "" } else { "s" });
+    if exact && (n == 0 || n > total) {
+        return Err(Sent::Refused(format!("stage {stage} has {total} hint{}: pick 1 to {total}", if total == 1 { "" } else { "s" })));
     }
+    let goal = n.clamp(1, total);
+    let revealed = |p: &serde_json::Value| p["hints"]["revealed"].as_array().map_or(0, Vec::len);
     let mut opened = false;
-    while page["hints"]["revealed"].as_array().map_or(0, Vec::len) < n {
-        let (status, _, body) = curl("POST", &format!("{base}/hints"), Some(&s.token), Some("{}"))?;
-        page = read(status, &body)?;
+    while revealed(&page) < goal {
+        let before = revealed(&page);
+        page = read(curl("POST", &format!("{base}/hints"), Some(&s.token), Some("{}")))?;
         opened = true;
+        if revealed(&page) <= before {
+            return Err(Sent::Refused(format!("the server did not reveal hint {} of stage {stage}", before + 1)));
+        }
     }
-    let hint = &page["hints"]["revealed"][n - 1];
-    Ok((hint["title"].as_str().unwrap_or("").to_owned(), hint["md"].as_str().unwrap_or("").to_owned(), opened))
+    Ok((page, opened))
 }
 
 /// `anneal course adopt`: opens the stage's solution in the app (which marks the stage as helped) and returns its files: (path, diff lines).
@@ -401,4 +529,87 @@ pub fn open_solution(course: &str, stage: &str) -> anyhow::Result<Vec<(String, V
             (path, lines)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outbox_lines_name_their_kind_and_old_run_lines_still_read_as_runs() {
+        let old = r#"{"course":"bustub","body":{"stage_id":"1a-01","tests":[],"problem":null,"commit":"abc","duration_ms":5}}"#;
+        match parse_line(old) {
+            Some(Queued::Run { course, body }) => {
+                assert_eq!(course, "bustub");
+                let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(v["stage_id"], "1a-01", "the body is sent as it was queued");
+            }
+            other => panic!("an old line is a run: {other:?}"),
+        }
+        let body = serde_json::json!({ "stage_id": "1a-02" });
+        let run = run_line("bustub", &body);
+        assert!(run.contains(r#""kind":"run""#), "{run}");
+        assert_eq!(parse_line(&run), Some(Queued::Run { course: "bustub".into(), body: body.to_string() }));
+        let hint = hint_line("bustub", "1a-03", 2);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&hint).unwrap()["kind"], "hint");
+        assert_eq!(parse_line(&hint), Some(Queued::Hint { course: "bustub".into(), stage: "1a-03".into(), n: 2 }));
+        assert_eq!(parse_line("not json"), None);
+        assert_eq!(parse_line(r#"{"kind":"later","course":"bustub"}"#), None, "a kind from a newer anneal is not taken for a run");
+    }
+
+    #[test]
+    fn queued_hint_opens_are_sent_before_queued_runs() {
+        let lines = vec![
+            run_line("bustub", &serde_json::json!({ "stage_id": "1a-01" })),
+            hint_line("bustub", "1a-02", 1),
+            r#"{"course":"bustub","body":{"stage_id":"1a-02"}}"#.to_owned(),
+            hint_line("bustub", "1a-03", 2),
+        ];
+        let calls = std::cell::RefCell::new(Vec::<String>::new());
+        let f = flush_lines(
+            &lines,
+            &mut |_, stage, n| {
+                calls.borrow_mut().push(format!("hint {stage} {n}"));
+                Sent::Delivered
+            },
+            &mut |_, body| {
+                let v: serde_json::Value = serde_json::from_str(body).unwrap();
+                calls.borrow_mut().push(format!("run {}", v["stage_id"].as_str().unwrap()));
+                Sent::Delivered
+            },
+        );
+        assert_eq!(calls.into_inner(), ["hint 1a-02 1", "hint 1a-03 2", "run 1a-01", "run 1a-02"]);
+        assert_eq!((f.hints, f.runs, f.refused, f.left.len()), (2, 2, 0, 0));
+    }
+
+    #[test]
+    fn a_hint_that_cannot_be_sent_holds_back_every_run() {
+        let lines = vec![run_line("bustub", &serde_json::json!({ "stage_id": "1a-02" })), hint_line("bustub", "1a-02", 1)];
+        let mut runs = 0;
+        let f = flush_lines(&lines, &mut |_, _, _| Sent::Retry("offline".into()), &mut |_, _| {
+            runs += 1;
+            Sent::Delivered
+        });
+        assert_eq!(runs, 0, "a passing run must not reach the app before the stage's helped mark");
+        assert_eq!(f.left, [lines[1].clone(), lines[0].clone()], "both stay, the hint first");
+        assert!(f.hint_waiting());
+        assert_eq!(f.why.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn a_hint_opened_offline_is_queued_once() {
+        let repo = std::env::temp_dir().join(format!("anneal-outbox-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&repo);
+        fs::create_dir_all(repo.join(".anneal")).unwrap();
+        fs::write(outbox_path(&repo), r#"{"course":"bustub","body":{"stage_id":"1a-01"}}"#.to_owned() + "\n").unwrap();
+        queue_hint(&repo, "bustub", "1a-02", 2);
+        queue_hint(&repo, "bustub", "1a-02", 1);
+        queue_hint(&repo, "bustub", "1a-02", 2);
+        queue_hint(&repo, "bustub", "1a-02", 3);
+        let q = queued(&repo);
+        assert_eq!(q.len(), 3, "the old run, hint 2, then hint 3 (hint 1 and a second hint 2 are covered): {q:?}");
+        assert!(matches!(parse_line(&q[0]), Some(Queued::Run { .. })), "the old line is kept as it was");
+        assert_eq!(parse_line(&q[2]), Some(Queued::Hint { course: "bustub".into(), stage: "1a-02".into(), n: 3 }));
+        let _ = fs::remove_dir_all(&repo);
+    }
 }
