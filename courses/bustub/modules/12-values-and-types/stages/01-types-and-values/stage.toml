@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "easy"
 tests = ["stages_3a::s3a_01"]
 learn = ["an enum with data for a tagged union", "a reserved number as the stored form of NULL", "tables you must get exactly right: sizes, names, coercion"]
-concepts = []
-concepts_optional = ["enums-with-data-and-match", "sql-types-and-three-valued-logic", "integers-and-casts", "errors-as-values-with-result", "reading-compiler-errors", "errors-3a"]
+concepts = ["enums-with-data-and-match"]
+concepts_optional = ["sql-types-and-three-valued-logic", "integers-and-casts", "errors-as-values-with-result", "reading-compiler-errors", "errors-3a"]

@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_1d::s1d_01"]
 learn = ["a replacer's contract before its policy", "tracking per-frame state in a map", "the entry API and Option-returning lookups", "panics for caller bugs, silence for harmless requests"]
-concepts = []
-concepts_optional = ["lru-k-and-scan-resistance", "logical-clocks-and-timestamps", "collections-as-tables", "option-and-result-combinators", "model-based-testing", "errors-1d"]
+concepts = ["lru-k-and-scan-resistance"]
+concepts_optional = ["logical-clocks-and-timestamps", "collections-as-tables", "option-and-result-combinators", "model-based-testing", "errors-1d"]

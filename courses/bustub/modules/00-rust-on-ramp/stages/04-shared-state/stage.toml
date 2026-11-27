@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_r::sr_04"]
 learn = ["a Mutex and Condvar pair: waiting for a condition and being woken", "closing a queue so that waiters stop waiting", "an atomic counter shared by &self", "scoped threads that borrow their input"]
-concepts = []
-concepts_optional = ["condvars-and-blocking-queues", "mutex-owns-its-data", "moving-data-across-threads", "send-and-sync", "atomics-ordering-and-the-log", "errors-r"]
+concepts = ["condvars-and-blocking-queues"]
+concepts_optional = ["mutex-owns-its-data", "moving-data-across-threads", "send-and-sync", "atomics-ordering-and-the-log", "errors-r"]

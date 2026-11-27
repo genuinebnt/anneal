@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3h::s3h_01"]
 learn = ["a rewrite rule over a plan tree", "recognising equi-join keys in a predicate", "a rewrite must not change the answer: it must only make it faster"]
-concepts = []
-concepts_optional = ["rule-based-query-optimization", "predicate-pushdown", "join-algorithms", "enums-with-data-and-match", "model-based-testing", "errors-3h"]
+concepts = ["rule-based-query-optimization"]
+concepts_optional = ["predicate-pushdown", "join-algorithms", "enums-with-data-and-match", "model-based-testing", "errors-3h"]

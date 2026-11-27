@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4a::s4a_03"]
 learn = ["undo logs as deltas that turn a version into the previous one", "following a version chain until a visible version", "reconstructing a tuple from the table's version and logs", "what a reader at timestamp T sees"]
-concepts = []
-concepts_optional = ["version-chains-and-undo-logs", "multi-version-concurrency-control", "snapshot-isolation", "model-based-testing", "property-testing-and-fuzzing", "errors-4a"]
+concepts = ["version-chains-and-undo-logs"]
+concepts_optional = ["multi-version-concurrency-control", "snapshot-isolation", "model-based-testing", "property-testing-and-fuzzing", "errors-4a"]

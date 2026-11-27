@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_2b::s2b_04"]
 learn = ["undoing a split: merge an empty bucket into its split image", "shrinking the directory when no bucket needs its last bit", "freeing pages the table no longer uses"]
-concepts = []
-concepts_optional = ["extendible-hashing", "checking-invariants", "model-based-testing", "deadlock-and-lock-ordering", "errors-2b"]
+concepts = ["extendible-hashing"]
+concepts_optional = ["checking-invariants", "model-based-testing", "deadlock-and-lock-ordering", "errors-2b"]

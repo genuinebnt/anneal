@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1b::s1b_04"]
 learn = ["stopping a worker: a stop signal, then join", "Drop as the shutdown hook", "a panic at a boundary: catch_unwind", "errors from a disk travel through the future"]
-concepts = []
-concepts_optional = ["clean-shutdown-drop-and-join", "worker-threads-and-the-stop-signal", "panics-unwinding-and-catch-unwind", "rust-io-errors", "testing-with-fakes", "ownership-of-files-and-raii", "errors-1b"]
+concepts = ["clean-shutdown-drop-and-join"]
+concepts_optional = ["worker-threads-and-the-stop-signal", "panics-unwinding-and-catch-unwind", "rust-io-errors", "testing-with-fakes", "ownership-of-files-and-raii", "errors-1b"]

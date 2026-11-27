@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "easy"
 tests = ["stages_2a::s2a_02"]
 learn = ["a key as opaque bytes, ordered by a comparator", "why bytes order differently from integers", "pairs as a value with a size", "computing capacity at compile time"]
-concepts = []
-concepts_optional = ["const-generics-for-page-layouts", "sort-keys-and-null-ordering", "bytes-endianness-and-views", "eq-hash-ord-contracts", "generics-and-static-dispatch", "errors-2a"]
+concepts = ["const-generics-for-page-layouts"]
+concepts_optional = ["sort-keys-and-null-ordering", "bytes-endianness-and-views", "eq-hash-ord-contracts", "generics-and-static-dispatch", "errors-2a"]

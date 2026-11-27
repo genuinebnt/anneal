@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4b::s4b_04"]
 learn = ["undoing in-place writes with the undo logs", "what to restore for each kind of change", "doing a read-modify-write under one page latch"]
-concepts = []
-concepts_optional = ["rolling-back-with-undo-logs", "version-chains-and-undo-logs", "errors-4b"]
+concepts = ["rolling-back-with-undo-logs"]
+concepts_optional = ["version-chains-and-undo-logs", "errors-4b"]

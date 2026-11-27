@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_r::sr_01"]
 learn = ["turning a struct into bytes and back with explicit endianness", "reading and writing a file at an offset, with no seek and no &mut", "a read that returns fewer bytes than asked for"]
-concepts = []
-concepts_optional = ["bytes-endianness-and-views", "positional-io-and-short-reads", "rust-io-errors", "ownership-of-files-and-raii", "errors-r"]
+concepts = ["bytes-endianness-and-views"]
+concepts_optional = ["positional-io-and-short-reads", "rust-io-errors", "ownership-of-files-and-raii", "errors-r"]

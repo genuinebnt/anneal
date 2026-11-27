@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3d::s3d_03"]
 learn = ["SQL's three-valued truth tables", "why FALSE AND NULL is FALSE", "case mapping is not a byte operation", "a NULL string stays a NULL string"]
-concepts = []
-concepts_optional = ["sql-types-and-three-valued-logic", "unicode-and-case-mapping", "expression-trees", "checking-invariants", "enums-with-data-and-match", "property-testing-and-fuzzing", "errors-3d"]
+concepts = ["sql-types-and-three-valued-logic"]
+concepts_optional = ["unicode-and-case-mapping", "expression-trees", "checking-invariants", "enums-with-data-and-match", "property-testing-and-fuzzing", "errors-3d"]

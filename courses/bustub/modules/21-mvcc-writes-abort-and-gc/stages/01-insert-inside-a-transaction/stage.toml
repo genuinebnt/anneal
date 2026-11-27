@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4b::s4b_01"]
 learn = ["writing a tuple with a temporary timestamp", "the write set as a to-do list for commit and abort", "routing an executor on whether it runs in a transaction"]
-concepts = []
-concepts_optional = ["multi-version-concurrency-control", "halloween-problem", "option-and-result-combinators", "errors-4b"]
+concepts = ["multi-version-concurrency-control"]
+concepts_optional = ["halloween-problem", "option-and-result-combinators", "errors-4b"]

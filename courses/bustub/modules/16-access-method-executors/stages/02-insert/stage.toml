@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3e::s3e_02"]
 learn = ["an executor that answers with one row: how many it changed", "a child that produces the rows to insert", "keeping every index of the table in step", "doing the work exactly once"]
-concepts = []
-concepts_optional = ["maintaining-indexes-on-writes", "the-iterator-model", "the-catalog", "errors-as-values-with-result", "model-based-testing", "errors-3e"]
+concepts = ["maintaining-indexes-on-writes"]
+concepts_optional = ["the-iterator-model", "the-catalog", "errors-as-values-with-result", "model-based-testing", "errors-3e"]

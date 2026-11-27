@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3h::s3h_03"]
 learn = ["recognising a point lookup in a predicate", "using an index only when it exists", "keeping the whole predicate as a filter", "what an index can and cannot answer"]
-concepts = []
-concepts_optional = ["rule-based-query-optimization", "access-paths-index-vs-seq-scan", "predicate-pushdown", "model-based-testing", "errors-3h"]
+concepts = ["rule-based-query-optimization"]
+concepts_optional = ["access-paths-index-vs-seq-scan", "predicate-pushdown", "model-based-testing", "errors-3h"]

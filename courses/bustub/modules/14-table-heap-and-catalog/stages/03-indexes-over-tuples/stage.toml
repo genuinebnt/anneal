@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3c::s3c_03"]
 learn = ["a trait that hides which index it is", "turning a key tuple into fixed-size bytes", "ordering keys by their columns, not their bytes"]
-concepts = []
-concepts_optional = ["trait-objects-and-the-disk-seam", "tuple-layout-fixed-and-variable-parts", "lifetimes-in-structs", "model-based-testing", "eq-hash-ord-contracts", "errors-3c"]
+concepts = ["trait-objects-and-the-disk-seam"]
+concepts_optional = ["tuple-layout-fixed-and-variable-parts", "lifetimes-in-structs", "model-based-testing", "eq-hash-ord-contracts", "errors-3c"]

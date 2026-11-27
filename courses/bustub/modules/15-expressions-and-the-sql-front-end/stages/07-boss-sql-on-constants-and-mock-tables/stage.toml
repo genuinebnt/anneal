@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "hard"
 tests = ["stages_3d::s3d_07", "slt_expressions_test"]
 retest = true
-concepts = []
-concepts_optional = ["the-sql-pipeline", "model-based-testing", "property-testing-and-fuzzing", "errors-3d"]
+concepts = ["the-sql-pipeline"]
+concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "errors-3d"]

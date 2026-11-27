@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_2b::s2b_02"]
 learn = ["designing three page types (header, directory, bucket) from a described behaviour", "following a hash through a header, a directory and a bucket under guards", "an invariant checker you write yourself"]
-concepts = []
-concepts_optional = ["extendible-hashing", "latching-a-hash-table", "raii-guards-and-lifetimes", "bytes-endianness-and-views", "repr-c-layouts-and-const-asserts", "checking-invariants", "reading-compiler-errors", "errors-2b"]
+concepts = ["extendible-hashing"]
+concepts_optional = ["latching-a-hash-table", "raii-guards-and-lifetimes", "bytes-endianness-and-views", "repr-c-layouts-and-const-asserts", "checking-invariants", "reading-compiler-errors", "errors-2b"]

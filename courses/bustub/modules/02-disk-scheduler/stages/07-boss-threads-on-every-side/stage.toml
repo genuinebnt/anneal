@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_1b::s1b_07", "disk_scheduler_test", "rwlatch_test"]
 retest = true
-concepts = []
-concepts_optional = ["testing-concurrent-code-with-loom-and-miri", "deadlock-and-lock-ordering", "performance-tests-and-measuring", "errors-1b"]
+concepts = ["deadlock-and-lock-ordering"]
+concepts_optional = ["testing-concurrent-code-with-loom-and-miri", "performance-tests-and-measuring", "errors-1b"]

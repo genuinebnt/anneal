@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_r::sr_02"]
 learn = ["an error type as an enum that carries what went wrong", "Display, Error and source() so that an error explains itself", "From and ? to convert one error into another", "a parser that never panics on bad bytes"]
-concepts = []
-concepts_optional = ["errors-as-values-with-result", "designing-error-types", "rust-io-errors", "option-and-result-combinators", "errors-r"]
+concepts = ["designing-error-types"]
+concepts_optional = ["errors-as-values-with-result", "rust-io-errors", "option-and-result-combinators", "errors-r"]

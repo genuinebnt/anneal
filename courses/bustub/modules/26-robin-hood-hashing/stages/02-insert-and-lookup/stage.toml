@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_0c::s0c_02"]
 learn = ["Robin Hood displacement", "why a lookup may not stop early once tombstones exist", "a full table must refuse before it touches anything"]
-concepts = []
-concepts_optional = ["robin-hood-hashing-and-open-addressing", "hash-functions-and-murmur3", "allocation-and-cache-friendly-code", "errors-0c"]
+concepts = ["robin-hood-hashing-and-open-addressing"]
+concepts_optional = ["hash-functions-and-murmur3", "allocation-and-cache-friendly-code", "errors-0c"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_0d::s0d_03"]
 learn = ["trailing zeros instead of leading ones", "packing a register into dense and overflow parts", "pinning an algorithm with exact expected values"]
-concepts = []
-concepts_optional = ["hyperloglog-and-distinct-counting", "shifts-masks-and-bit-tricks", "testing-concurrent-code-with-loom-and-miri", "errors-0d"]
+concepts = ["hyperloglog-and-distinct-counting"]
+concepts_optional = ["shifts-masks-and-bit-tricks", "testing-concurrent-code-with-loom-and-miri", "errors-0d"]

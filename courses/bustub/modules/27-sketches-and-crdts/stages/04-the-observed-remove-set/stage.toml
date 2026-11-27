@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_0d::s0d_04"]
 learn = ["tagging every add with a unique id", "removing only what was observed", "a set of pairs as a data model", "merge as union", "commutative, associative, idempotent", "add wins"]
-concepts = []
-concepts_optional = ["crdts-and-observed-remove-sets", "ordered-sets-as-priority-queues", "eq-hash-ord-contracts", "errors-0d"]
+concepts = ["crdts-and-observed-remove-sets"]
+concepts_optional = ["ordered-sets-as-priority-queues", "eq-hash-ord-contracts", "errors-0d"]

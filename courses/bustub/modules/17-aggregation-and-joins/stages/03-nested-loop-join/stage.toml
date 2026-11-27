@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3f::s3f_03"]
 learn = ["a join as a loop inside a loop with a predicate over the pair", "re-initialising the inner child for each outer row", "LEFT join: an unmatched left row appears once, padded with NULLs", "the predicate can be anything"]
-concepts = []
-concepts_optional = ["join-algorithms", "the-iterator-model", "sql-types-and-three-valued-logic", "model-based-testing", "property-testing-and-fuzzing", "errors-3f"]
+concepts = ["join-algorithms"]
+concepts_optional = ["the-iterator-model", "sql-types-and-three-valued-logic", "model-based-testing", "property-testing-and-fuzzing", "errors-3f"]

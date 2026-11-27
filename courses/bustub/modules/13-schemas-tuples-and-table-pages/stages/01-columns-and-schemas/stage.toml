@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "easy"
 tests = ["stages_3b::s3b_01"]
 learn = ["a schema as the layout of a row: running offsets", "private fields with accessors", "panics for misuse, Option for \"not found\""]
-concepts = []
-concepts_optional = ["structs-and-accessors", "tuple-layout-fixed-and-variable-parts", "integers-and-casts", "reading-compiler-errors", "errors-3b"]
+concepts = ["structs-and-accessors"]
+concepts_optional = ["tuple-layout-fixed-and-variable-parts", "integers-and-casts", "reading-compiler-errors", "errors-3b"]

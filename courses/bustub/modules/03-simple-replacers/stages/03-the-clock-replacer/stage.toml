@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1c::s1c_03"]
 learn = ["the second-chance algorithm and a hand that sweeps", "keeping a position valid while elements are removed", "the same trait, a different policy: the general contract"]
-concepts = []
-concepts_optional = ["the-clock-algorithm", "replacement-policies", "checking-invariants", "iterators-and-closures", "slices-copy-within-and-binary-search", "errors-1c"]
+concepts = ["the-clock-algorithm"]
+concepts_optional = ["replacement-policies", "checking-invariants", "iterators-and-closures", "slices-copy-within-and-binary-search", "errors-1c"]

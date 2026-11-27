@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1c::s1c_02"]
 learn = ["the replacer interface: unpin, pin, victim, size", "least recently used, defined by a model", "a trait as the seam between components", "a cost budget enforced by a test"]
-concepts = []
-concepts_optional = ["replacement-policies", "arenas-and-generational-handles", "collections-as-tables", "trait-objects-and-the-disk-seam", "model-based-testing", "property-testing-and-fuzzing", "errors-1c"]
+concepts = ["replacement-policies"]
+concepts_optional = ["arenas-and-generational-handles", "collections-as-tables", "trait-objects-and-the-disk-seam", "model-based-testing", "property-testing-and-fuzzing", "errors-1c"]

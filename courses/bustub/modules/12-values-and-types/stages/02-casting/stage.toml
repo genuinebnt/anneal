@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3a::s3a_02"]
 learn = ["range-checked conversions and what to do when they fail", "parsing the leading number in a string, like C++'s stoi", "what a NULL becomes when it is cast"]
-concepts = []
-concepts_optional = ["parsing-numbers-from-text", "integers-and-casts", "overflow-and-checked-arithmetic", "errors-as-values-with-result", "reading-compiler-errors", "errors-3a"]
+concepts = ["parsing-numbers-from-text"]
+concepts_optional = ["integers-and-casts", "overflow-and-checked-arithmetic", "errors-as-values-with-result", "reading-compiler-errors", "errors-3a"]

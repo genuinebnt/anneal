@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1e::s1e_02"]
 learn = ["two lists: seen once, seen at least twice", "a hit promotes a frame in O(1)", "evicting the oldest evictable frame, skipping pinned ones"]
-concepts = []
-concepts_optional = ["adaptive-replacement-cache", "replacement-policies", "arenas-and-generational-handles", "model-based-testing", "performance-tests-and-measuring", "errors-1e"]
+concepts = ["adaptive-replacement-cache"]
+concepts_optional = ["replacement-policies", "arenas-and-generational-handles", "model-based-testing", "performance-tests-and-measuring", "errors-1e"]

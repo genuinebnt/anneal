@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_1a::s1a_05", "disk_manager_test"]
 retest = true
-concepts = []
-concepts_optional = ["durability-and-fsync", "mutex-owns-its-data", "ownership-of-files-and-raii", "errors-1a"]
+concepts = ["durability-and-fsync"]
+concepts_optional = ["mutex-owns-its-data", "ownership-of-files-and-raii", "errors-1a"]

@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "hard"
 tests = ["stages_4c::s4c_08"]
 retest = true
-concepts = []
-concepts_optional = ["aries-recovery", "write-ahead-logging", "testing-with-fakes", "property-testing-and-fuzzing", "errors-4c"]
+concepts = ["aries-recovery"]
+concepts_optional = ["write-ahead-logging", "testing-with-fakes", "property-testing-and-fuzzing", "errors-4c"]

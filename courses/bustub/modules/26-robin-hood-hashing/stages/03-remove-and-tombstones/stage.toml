@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_0c::s0c_03"]
 learn = ["deleting from open addressing without breaking chains", "reusing tombstones", "a model check against a standard HashSet"]
-concepts = []
-concepts_optional = ["robin-hood-hashing-and-open-addressing", "tombstones-and-lazy-deletion", "errors-0c"]
+concepts = ["robin-hood-hashing-and-open-addressing"]
+concepts_optional = ["tombstones-and-lazy-deletion", "errors-0c"]

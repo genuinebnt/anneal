@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_3h::s3h_02"]
 learn = ["a rule that matches a two-node shape", "keeping the schema of the node you replace", "the same rows with far less memory"]
-concepts = []
-concepts_optional = ["rule-based-query-optimization", "top-n-with-a-bounded-heap", "model-based-testing", "errors-3h"]
+concepts = ["rule-based-query-optimization"]
+concepts_optional = ["top-n-with-a-bounded-heap", "model-based-testing", "errors-3h"]

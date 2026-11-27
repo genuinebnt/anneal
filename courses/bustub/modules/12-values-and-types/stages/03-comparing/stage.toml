@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3a::s3a_03"]
 learn = ["three-valued logic as a type", "a comparison that can be unknown", "laws a comparison must obey: opposites, symmetry, transitivity"]
-concepts = []
-concepts_optional = ["sql-types-and-three-valued-logic", "enums-with-data-and-match", "eq-hash-ord-contracts", "model-based-testing", "errors-as-values-with-result", "errors-3a"]
+concepts = ["sql-types-and-three-valued-logic"]
+concepts_optional = ["enums-with-data-and-match", "eq-hash-ord-contracts", "model-based-testing", "errors-as-values-with-result", "errors-3a"]

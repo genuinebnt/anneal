@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_2b::s2b_03"]
 learn = ["the rule that makes the table extendible: split, and double the directory only if needed", "redistributing entries by one more hash bit", "failure that leaves the table unchanged"]
-concepts = []
-concepts_optional = ["extendible-hashing", "shifts-masks-and-bit-tricks", "checking-invariants", "model-based-testing", "errors-2b"]
+concepts = ["extendible-hashing"]
+concepts_optional = ["shifts-masks-and-bit-tricks", "checking-invariants", "model-based-testing", "errors-2b"]

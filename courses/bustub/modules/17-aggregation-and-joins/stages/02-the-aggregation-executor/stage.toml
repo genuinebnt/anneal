@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3f::s3f_02"]
 learn = ["a pipeline breaker: read all input before producing any output", "one group even for empty input, when there is no GROUP BY", "output rows laid out as group values then aggregate values"]
-concepts = []
-concepts_optional = ["hash-aggregation", "the-iterator-model", "model-based-testing", "property-testing-and-fuzzing", "errors-3f"]
+concepts = ["hash-aggregation"]
+concepts_optional = ["the-iterator-model", "model-based-testing", "property-testing-and-fuzzing", "errors-3f"]

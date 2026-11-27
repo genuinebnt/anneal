@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_2a::s2a_05"]
 retest = true
-concepts = []
-concepts_optional = ["slotted-pages", "model-based-testing", "checking-invariants", "errors-2a"]
+concepts = ["slotted-pages"]
+concepts_optional = ["model-based-testing", "checking-invariants", "errors-2a"]

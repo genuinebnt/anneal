@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1d::s1d_03"]
 learn = ["an ordered set as a priority queue with deletion", "keeping an index in step with the state it indexes", "a time budget as a test"]
-concepts = []
-concepts_optional = ["ordered-sets-as-priority-queues", "performance-tests-and-measuring", "model-based-testing", "checking-invariants", "collections-as-tables", "errors-1d"]
+concepts = ["ordered-sets-as-priority-queues"]
+concepts_optional = ["performance-tests-and-measuring", "model-based-testing", "checking-invariants", "collections-as-tables", "errors-1d"]

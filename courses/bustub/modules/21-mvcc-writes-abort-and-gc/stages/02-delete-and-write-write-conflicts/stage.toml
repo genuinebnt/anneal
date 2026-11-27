@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4b::s4b_02"]
 learn = ["first-updater-wins conflict detection", "the first change of a tuple: a full undo log, a link, a tombstone", "tainting a transaction"]
-concepts = []
-concepts_optional = ["snapshot-isolation", "tombstones-and-lazy-deletion", "version-chains-and-undo-logs", "designing-error-types", "rust-anti-patterns-in-practice", "testing-concurrent-code-with-loom-and-miri", "errors-4b"]
+concepts = ["snapshot-isolation"]
+concepts_optional = ["tombstones-and-lazy-deletion", "version-chains-and-undo-logs", "designing-error-types", "rust-anti-patterns-in-practice", "testing-concurrent-code-with-loom-and-miri", "errors-4b"]

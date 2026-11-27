@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_0d::s0d_02"]
 learn = ["splitting a hash into an index and a rank", "leading_zeros as the position of the first 1", "keeping a maximum under a lock", "a harmonic mean", "floating point powers of two", "what a small sketch's estimate looks like"]
-concepts = []
-concepts_optional = ["hyperloglog-and-distinct-counting", "shifts-masks-and-bit-tricks", "lock-free-basics-and-false-sharing", "errors-0d"]
+concepts = ["hyperloglog-and-distinct-counting"]
+concepts_optional = ["shifts-masks-and-bit-tricks", "lock-free-basics-and-false-sharing", "errors-0d"]

@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_2d::s2d_03", "b_plus_tree_tombstone_test", "b_plus_tree_tombstone_variants_test"]
 retest = true
-concepts = []
-concepts_optional = ["model-based-testing", "testing-concurrent-code-with-loom-and-miri", "tombstones-and-lazy-deletion", "errors-2d"]
+concepts = ["tombstones-and-lazy-deletion"]
+concepts_optional = ["model-based-testing", "testing-concurrent-code-with-loom-and-miri", "errors-2d"]

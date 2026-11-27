@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_r::sr_05"]
 learn = ["a fixed-capacity ring buffer with wrap-around indexes", "a property test that runs random operations on the real thing and on a model, and compares", "reading a shrunk counterexample"]
-concepts = []
-concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "checking-invariants", "newtypes-and-type-driven-design", "errors-r"]
+concepts = ["model-based-testing"]
+concepts_optional = ["property-testing-and-fuzzing", "checking-invariants", "newtypes-and-type-driven-design", "errors-r"]

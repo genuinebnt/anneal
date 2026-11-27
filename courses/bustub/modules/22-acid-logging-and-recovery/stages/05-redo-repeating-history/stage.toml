@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4c::s4c_05"]
 learn = ["analysis: who finished and who was running", "redo in log order, including the losers", "why every starting state of the pages works"]
-concepts = []
-concepts_optional = ["aries-recovery", "write-ahead-logging", "checking-invariants", "property-testing-and-fuzzing", "model-based-testing", "errors-4c"]
+concepts = ["aries-recovery"]
+concepts_optional = ["write-ahead-logging", "checking-invariants", "property-testing-and-fuzzing", "model-based-testing", "errors-4c"]

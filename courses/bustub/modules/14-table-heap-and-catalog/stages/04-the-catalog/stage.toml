@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3c::s3c_04"]
 learn = ["a registry of tables and indexes by name and by number", "building an index over a table that already has rows", "errors that are values, and answers that are None"]
-concepts = []
-concepts_optional = ["the-catalog", "structs-and-accessors", "trait-objects-and-the-disk-seam", "model-based-testing", "errors-as-values-with-result", "errors-3c"]
+concepts = ["the-catalog"]
+concepts_optional = ["structs-and-accessors", "trait-objects-and-the-disk-seam", "model-based-testing", "errors-as-values-with-result", "errors-3c"]

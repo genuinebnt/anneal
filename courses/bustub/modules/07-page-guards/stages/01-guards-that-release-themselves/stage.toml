@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1g::s1g_01"]
 learn = ["RAII: a value whose destruction undoes what its creation did", "pin and latch, released in the right order", "a guard that gives access through Deref", "idempotent release"]
-concepts = []
-concepts_optional = ["raii-guards-and-lifetimes", "ownership-of-files-and-raii", "lifetimes-in-structs", "reader-writer-latches", "smart-pointers-box-rc-arc", "reading-compiler-errors", "errors-1g"]
+concepts = ["raii-guards-and-lifetimes"]
+concepts_optional = ["ownership-of-files-and-raii", "lifetimes-in-structs", "reader-writer-latches", "smart-pointers-box-rc-arc", "reading-compiler-errors", "errors-1g"]

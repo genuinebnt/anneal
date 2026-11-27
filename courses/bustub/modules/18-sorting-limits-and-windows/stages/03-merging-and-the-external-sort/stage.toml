@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_3g::s3g_03"]
 learn = ["a K-way merge of sorted runs", "stability: equal keys keep their input order", "passes until one run remains", "output in batches from a run on pages"]
-concepts = []
-concepts_optional = ["external-merge-sort", "sort-keys-and-null-ordering", "ordered-sets-as-priority-queues", "model-based-testing", "property-testing-and-fuzzing", "errors-3g"]
+concepts = ["external-merge-sort"]
+concepts_optional = ["sort-keys-and-null-ordering", "ordered-sets-as-priority-queues", "model-based-testing", "property-testing-and-fuzzing", "errors-3g"]

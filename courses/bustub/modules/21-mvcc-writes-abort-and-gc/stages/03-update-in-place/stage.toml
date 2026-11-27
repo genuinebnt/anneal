@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4b::s4b_03"]
 learn = ["updating a row in place while keeping the old version reachable", "one growing undo log per tuple per transaction", "collecting changes before applying them"]
-concepts = []
-concepts_optional = ["version-chains-and-undo-logs", "snapshot-isolation", "errors-4b"]
+concepts = ["version-chains-and-undo-logs"]
+concepts_optional = ["snapshot-isolation", "errors-4b"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_3f::s3f_04"]
 learn = ["building a hash table on one input and probing with the other", "join keys as AggregateKeys: the same equality as grouping", "a NULL key matches nothing", "LEFT join padding again"]
-concepts = []
-concepts_optional = ["join-algorithms", "hash-aggregation", "eq-hash-ord-contracts", "hashing-values-and-keys", "model-based-testing", "errors-3f"]
+concepts = ["join-algorithms"]
+concepts_optional = ["hash-aggregation", "eq-hash-ord-contracts", "hashing-values-and-keys", "model-based-testing", "errors-3f"]

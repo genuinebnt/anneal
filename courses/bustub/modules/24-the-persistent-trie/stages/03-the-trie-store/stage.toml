@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_0a::s0a_03"]
 learn = ["publishing a new version by swapping one pointer", "one writer at a time, readers never block", "values that outlive removal"]
-concepts = []
-concepts_optional = ["persistent-data-structures-and-path-copying", "mutex-owns-its-data", "send-and-sync", "smart-pointers-box-rc-arc", "lock-poisoning-and-the-unwrap-policy", "rust-anti-patterns-in-practice", "testing-concurrent-code-with-loom-and-miri", "errors-0a"]
+concepts = ["persistent-data-structures-and-path-copying"]
+concepts_optional = ["mutex-owns-its-data", "send-and-sync", "smart-pointers-box-rc-arc", "lock-poisoning-and-the-unwrap-policy", "rust-anti-patterns-in-practice", "testing-concurrent-code-with-loom-and-miri", "errors-0a"]

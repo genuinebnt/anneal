@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "easy"
 tests = ["stages_1b::s1b_05"]
 learn = ["many readers or one writer", "a latch that owns what it protects", "poisoning, and why page latches ignore it"]
-concepts = []
-concepts_optional = ["reader-writer-latches", "lock-poisoning-and-the-unwrap-policy", "interior-mutability-cell-refcell-mutex", "testing-concurrent-code-with-loom-and-miri", "errors-1b"]
+concepts = ["reader-writer-latches"]
+concepts_optional = ["lock-poisoning-and-the-unwrap-policy", "interior-mutability-cell-refcell-mutex", "testing-concurrent-code-with-loom-and-miri", "errors-1b"]

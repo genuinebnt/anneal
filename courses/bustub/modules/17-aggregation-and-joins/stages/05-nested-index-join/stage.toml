@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3f::s3f_05"]
 learn = ["joining through an index instead of scanning or building", "probing a B+ tree once per outer row", "the heap is the truth about which inner rows are alive"]
-concepts = []
-concepts_optional = ["join-algorithms", "access-paths-index-vs-seq-scan", "maintaining-indexes-on-writes", "model-based-testing", "errors-3f"]
+concepts = ["join-algorithms"]
+concepts_optional = ["access-paths-index-vs-seq-scan", "maintaining-indexes-on-writes", "model-based-testing", "errors-3f"]

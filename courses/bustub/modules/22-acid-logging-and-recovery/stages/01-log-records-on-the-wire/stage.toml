@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4c::s4c_01"]
 learn = ["a record format with a length and a checksum", "recognising a torn or damaged record as the end of the log", "an enum as a wire format"]
-concepts = []
-concepts_optional = ["write-ahead-logging", "serialization-of-values", "bytes-endianness-and-views", "durability-and-fsync", "property-testing-and-fuzzing", "errors-4c"]
+concepts = ["write-ahead-logging"]
+concepts_optional = ["serialization-of-values", "bytes-endianness-and-views", "durability-and-fsync", "property-testing-and-fuzzing", "errors-4c"]

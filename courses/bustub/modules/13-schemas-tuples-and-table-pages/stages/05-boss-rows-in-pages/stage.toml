@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_3b::s3b_05", "table_page_test"]
 retest = true
-concepts = []
-concepts_optional = ["slotted-pages", "model-based-testing", "tuple-layout-fixed-and-variable-parts", "errors-3b"]
+concepts = ["slotted-pages"]
+concepts_optional = ["model-based-testing", "tuple-layout-fixed-and-variable-parts", "errors-3b"]

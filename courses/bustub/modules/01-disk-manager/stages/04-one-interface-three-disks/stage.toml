@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_1a::s1a_04"]
 learn = ["traits and trait objects (dyn) in place of virtual methods", "Send + Sync as a promise to the compiler", "test doubles: a disk that lives in memory", "differential testing: three implementations, one model"]
-concepts = []
-concepts_optional = ["trait-objects-and-the-disk-seam", "testing-with-fakes", "panics-unwinding-and-catch-unwind", "mutex-owns-its-data", "collections-as-tables", "errors-1a"]
+concepts = ["trait-objects-and-the-disk-seam"]
+concepts_optional = ["testing-with-fakes", "panics-unwinding-and-catch-unwind", "mutex-owns-its-data", "collections-as-tables", "errors-1a"]

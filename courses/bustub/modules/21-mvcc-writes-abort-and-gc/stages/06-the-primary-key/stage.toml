@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4b::s4b_06"]
 learn = ["unique-key checks against tombstones", "reusing a rid instead of inserting a duplicate tuple", "arbitration by the index when two transactions race", "why a key change is a delete plus an insert", "ordering two phases to reuse tombstones", "detecting a key change"]
-concepts = []
-concepts_optional = ["unique-indexes-and-tombstone-reuse", "maintaining-indexes-on-writes", "rolling-back-with-undo-logs", "halloween-problem", "errors-4b"]
+concepts = ["unique-indexes-and-tombstone-reuse"]
+concepts_optional = ["maintaining-indexes-on-writes", "rolling-back-with-undo-logs", "halloween-problem", "errors-4b"]

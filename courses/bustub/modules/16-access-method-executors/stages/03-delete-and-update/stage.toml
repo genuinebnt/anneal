@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_3e::s3e_03"]
 learn = ["a delete that marks, not removes", "an update as a delete plus an insert", "every new value computed from the OLD row", "indexes that follow the row, including when the key changes"]
-concepts = []
-concepts_optional = ["maintaining-indexes-on-writes", "halloween-problem", "the-iterator-model", "tombstones-and-lazy-deletion", "model-based-testing", "property-testing-and-fuzzing", "errors-3e"]
+concepts = ["maintaining-indexes-on-writes"]
+concepts_optional = ["halloween-problem", "the-iterator-model", "tombstones-and-lazy-deletion", "model-based-testing", "property-testing-and-fuzzing", "errors-3e"]

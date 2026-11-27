@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4b::s4b_07"]
 learn = ["remembering what a transaction read", "rebuilding the tuple as of two timestamps", "aborting at commit instead of at write"]
-concepts = []
-concepts_optional = ["serializable-validation-by-predicates", "snapshot-isolation", "errors-4b"]
+concepts = ["serializable-validation-by-predicates"]
+concepts_optional = ["snapshot-isolation", "errors-4b"]

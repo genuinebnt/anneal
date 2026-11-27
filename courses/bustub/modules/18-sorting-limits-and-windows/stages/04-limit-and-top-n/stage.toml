@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3g::s3g_04"]
 learn = ["stopping early: a limit never reads the rest of its child", "a bounded heap keeps the best N rows of an unbounded input", "ties keep the earlier row, as in a stable sort"]
-concepts = []
-concepts_optional = ["top-n-with-a-bounded-heap", "ordered-sets-as-priority-queues", "the-iterator-model", "model-based-testing", "errors-3g"]
+concepts = ["top-n-with-a-bounded-heap"]
+concepts_optional = ["ordered-sets-as-priority-queues", "the-iterator-model", "model-based-testing", "errors-3g"]

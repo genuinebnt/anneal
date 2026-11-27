@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3a::s3a_04"]
 learn = ["checked arithmetic in a wider type", "result types: the wider of the two", "NULL propagation and errors for division by zero"]
-concepts = []
-concepts_optional = ["overflow-and-checked-arithmetic", "sql-types-and-three-valued-logic", "integers-and-casts", "errors-as-values-with-result", "model-based-testing", "errors-3a"]
+concepts = ["overflow-and-checked-arithmetic"]
+concepts_optional = ["sql-types-and-three-valued-logic", "integers-and-casts", "errors-as-values-with-result", "model-based-testing", "errors-3a"]

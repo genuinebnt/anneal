@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_1f::s1f_01"]
 learn = ["a fixed set of frames and a table from page to frame", "pinning: a count that says \"in use\"", "one lock for the bookkeeping and one latch per frame", "injecting a trait object: any FrameReplacer fits"]
-concepts = []
-concepts_optional = ["buffer-pool-anatomy", "pin-counts-and-dirty-pages", "mutex-owns-its-data", "trait-objects-and-the-disk-seam", "smart-pointers-box-rc-arc", "interior-mutability-cell-refcell-mutex", "reading-compiler-errors", "errors-1f"]
+concepts = ["buffer-pool-anatomy"]
+concepts_optional = ["pin-counts-and-dirty-pages", "mutex-owns-its-data", "trait-objects-and-the-disk-seam", "smart-pointers-box-rc-arc", "interior-mutability-cell-refcell-mutex", "reading-compiler-errors", "errors-1f"]

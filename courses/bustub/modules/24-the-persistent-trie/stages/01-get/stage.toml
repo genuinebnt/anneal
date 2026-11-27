@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_0a::s0a_01"]
 learn = ["following a key through a tree of nodes", "reading a value of a requested type back from type-erased storage", "telling a node that leads somewhere from one that holds a value"]
-concepts = []
-concepts_optional = ["tries", "persistent-data-structures-and-path-copying", "option-and-result-combinators", "eq-hash-ord-contracts", "errors-0a"]
+concepts = ["tries"]
+concepts_optional = ["persistent-data-structures-and-path-copying", "option-and-result-combinators", "eq-hash-ord-contracts", "errors-0a"]

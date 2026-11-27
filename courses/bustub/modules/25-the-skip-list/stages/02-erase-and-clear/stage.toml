@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_0b::s0b_02"]
 learn = ["unlinking a node from every level", "lowering the list's height", "reusing arena slots"]
-concepts = []
-concepts_optional = ["skip-lists", "arenas-and-generational-handles", "errors-0b"]
+concepts = ["skip-lists"]
+concepts_optional = ["arenas-and-generational-handles", "errors-0b"]

@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_2b::s2b_01"]
 learn = ["porting a published hash function, checked against its C++ output", "wrapping arithmetic and rotations", "why the low and the high bits of a hash are used differently"]
-concepts = []
-concepts_optional = ["hash-functions-and-murmur3", "hashing-values-and-keys", "integers-and-casts", "shifts-masks-and-bit-tricks", "bytes-endianness-and-views", "reading-compiler-errors", "errors-2b"]
+concepts = ["hash-functions-and-murmur3"]
+concepts_optional = ["hashing-values-and-keys", "integers-and-casts", "shifts-masks-and-bit-tricks", "bytes-endianness-and-views", "reading-compiler-errors", "errors-2b"]

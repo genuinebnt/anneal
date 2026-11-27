@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "hard"
 tests = ["stages_3g::s3g_06", "sql_sort_and_window_test"]
 retest = true
-concepts = []
-concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "external-merge-sort", "errors-3g"]
+concepts = ["external-merge-sort"]
+concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "errors-3g"]

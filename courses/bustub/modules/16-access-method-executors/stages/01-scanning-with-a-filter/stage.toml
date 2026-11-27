@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3e::s3e_01"]
 learn = ["the executor protocol: init, then next until it says no", "batches instead of one row at a time", "WHERE keeps only TRUE: FALSE and NULL are both dropped", "a scan that skips deleted tuples"]
-concepts = []
-concepts_optional = ["the-iterator-model", "access-paths-index-vs-seq-scan", "sql-types-and-three-valued-logic", "iterators-and-closures", "lifetimes-in-structs", "model-based-testing", "errors-3e"]
+concepts = ["the-iterator-model"]
+concepts_optional = ["access-paths-index-vs-seq-scan", "sql-types-and-three-valued-logic", "iterators-and-closures", "lifetimes-in-structs", "model-based-testing", "errors-3e"]

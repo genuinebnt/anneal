@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_1f::s1f_04", "buffer_pool_manager_classic_test"]
 retest = true
-concepts = []
-concepts_optional = ["testing-concurrent-code-with-loom-and-miri", "deadlock-and-lock-ordering", "performance-tests-and-measuring", "errors-1f"]
+concepts = ["deadlock-and-lock-ordering"]
+concepts_optional = ["testing-concurrent-code-with-loom-and-miri", "performance-tests-and-measuring", "errors-1f"]

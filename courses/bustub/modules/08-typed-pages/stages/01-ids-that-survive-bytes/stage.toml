@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "easy"
 tests = ["stages_2a::s2a_01"]
 learn = ["a trait that fixes a value's size and byte encoding", "to_le_bytes / from_le_bytes and why try_into is needed", "packing two numbers into one i64 without losing the sign"]
-concepts = []
-concepts_optional = ["bytes-endianness-and-views", "traits-with-associated-consts", "integers-and-casts", "shifts-masks-and-bit-tricks", "newtypes-and-type-driven-design", "reading-compiler-errors", "errors-2a"]
+concepts = ["bytes-endianness-and-views"]
+concepts_optional = ["traits-with-associated-consts", "integers-and-casts", "shifts-masks-and-bit-tricks", "newtypes-and-type-driven-design", "reading-compiler-errors", "errors-2a"]

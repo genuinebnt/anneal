@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "hard"
 tests = ["stages_3h::s3h_04", "sql_optimizer_test"]
 retest = true
-concepts = []
-concepts_optional = ["rule-based-query-optimization", "model-based-testing", "property-testing-and-fuzzing", "errors-3h"]
+concepts = ["rule-based-query-optimization"]
+concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "errors-3h"]

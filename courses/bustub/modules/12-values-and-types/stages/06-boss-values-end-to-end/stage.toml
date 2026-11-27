@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_3a::s3a_06", "type_test"]
 retest = true
-concepts = []
-concepts_optional = ["model-based-testing", "sql-types-and-three-valued-logic", "serialization-of-values", "errors-3a"]
+concepts = ["sql-types-and-three-valued-logic"]
+concepts_optional = ["model-based-testing", "serialization-of-values", "errors-3a"]

@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_1c::s1c_01"]
 learn = ["why a linked list is hard in safe Rust", "an arena of indices, and handles that notice staleness", "a Vec model as the oracle for a data structure"]
-concepts = []
-concepts_optional = ["arenas-and-generational-handles", "model-based-testing", "collections-as-tables", "checking-invariants", "smart-pointers-box-rc-arc", "reading-compiler-errors", "errors-1c"]
+concepts = ["arenas-and-generational-handles"]
+concepts_optional = ["model-based-testing", "collections-as-tables", "checking-invariants", "smart-pointers-box-rc-arc", "reading-compiler-errors", "errors-1c"]

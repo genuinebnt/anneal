@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3e::s3e_04"]
 learn = ["reading a table through an index: rid by rid", "key order for free", "point lookups from a list of keys", "an index finds rows; the heap says if they are still alive"]
-concepts = []
-concepts_optional = ["access-paths-index-vs-seq-scan", "the-iterator-model", "range-scans-and-the-leaf-chain", "model-based-testing", "errors-3e"]
+concepts = ["access-paths-index-vs-seq-scan"]
+concepts_optional = ["the-iterator-model", "range-scans-and-the-leaf-chain", "model-based-testing", "errors-3e"]

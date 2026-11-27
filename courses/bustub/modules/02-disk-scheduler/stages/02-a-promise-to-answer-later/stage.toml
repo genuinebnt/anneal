@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_1b::s1b_02"]
 learn = ["a one-shot result: a Promise is the writing end, a Future the reading end", "state shared by two owners with Arc", "Drop as the place to say that no answer is coming"]
-concepts = []
-concepts_optional = ["promises-and-futures", "smart-pointers-box-rc-arc", "interior-mutability-cell-refcell-mutex", "ownership-of-files-and-raii", "async-versus-threads", "moving-data-across-threads", "errors-1b"]
+concepts = ["promises-and-futures"]
+concepts_optional = ["smart-pointers-box-rc-arc", "interior-mutability-cell-refcell-mutex", "ownership-of-files-and-raii", "async-versus-threads", "moving-data-across-threads", "errors-1b"]

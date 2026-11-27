@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_3g::s3g_05"]
 learn = ["an aggregate that keeps every row", "partitions, and running aggregates over ordered peers", "rank with ties and gaps"]
-concepts = []
-concepts_optional = ["window-functions", "hash-aggregation", "sort-keys-and-null-ordering", "model-based-testing", "property-testing-and-fuzzing", "errors-3g"]
+concepts = ["window-functions"]
+concepts_optional = ["hash-aggregation", "sort-keys-and-null-ordering", "model-based-testing", "property-testing-and-fuzzing", "errors-3g"]

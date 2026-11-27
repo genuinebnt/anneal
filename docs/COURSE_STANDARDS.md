@@ -7,8 +7,9 @@ them. **Read this before changing anything under `courses/` or the Courses pages
 ## The decisions
 
 1. **A learning track as well as a project track.** The goal is to teach an idea and have the learner use it to solve the exercise. Every
-   stage names what it teaches (`learn = [...]` in `stage.toml`), links at least two concept articles (`concepts = [...]`, files in `courses/<id>/concepts/`; articles are shared between stages and modules),
-   and the exercise uses that concept. The concept comes first on the page ("Read first").
+   stage names what it teaches (`learn = [...]` in `stage.toml`) and links at least two concept articles (files in `courses/<id>/concepts/`;
+   articles are shared between stages and modules): **one** in `concepts`, the idea the stage leans on most, shown first on the page as
+   "Read first" but never required to pass, and the rest in `concepts_optional` (owner, 2026-11-27; see BUSTUB_RESTRUCTURE.md §4b).
 2. **Stage size.** *"not too small but self contained exercises"*, *"i am not looking for one or two line change exercise"*, *"6 - 10 exercises
    is sweetspot but not a hard requirement"*. A stage is a self-contained exercise: tens of lines and a design decision, passable on its own.
    Group tiny pieces; split a chapter. About 6 to 10 stages per module; the last stage of a module is BusTub's own test, ported (kind `boss`).

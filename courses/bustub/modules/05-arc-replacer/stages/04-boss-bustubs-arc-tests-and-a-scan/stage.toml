@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_1e::s1e_04", "arc_replacer_test", "arc_replacer_performance_test"]
 retest = true
-concepts = []
-concepts_optional = ["adaptive-replacement-cache", "performance-tests-and-measuring", "model-based-testing", "errors-1e"]
+concepts = ["adaptive-replacement-cache"]
+concepts_optional = ["performance-tests-and-measuring", "model-based-testing", "errors-1e"]

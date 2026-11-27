@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_0d::s0d_01"]
 learn = ["a matrix of counters indexed by hashes", "taking the minimum of independent estimates", "lock-free counting with atomics", "combining sketches from different streams", "ranking candidates by estimated count", "stable sorting for ties"]
-concepts = []
-concepts_optional = ["count-min-sketch-and-frequency-estimation", "atomics-ordering-and-the-log", "send-and-sync", "interior-mutability", "newtypes-and-type-driven-design", "lock-free-basics-and-false-sharing", "hash-functions-and-murmur3", "iterators-and-closures", "errors-0d"]
+concepts = ["count-min-sketch-and-frequency-estimation"]
+concepts_optional = ["atomics-ordering-and-the-log", "send-and-sync", "interior-mutability", "newtypes-and-type-driven-design", "lock-free-basics-and-false-sharing", "hash-functions-and-murmur3", "iterators-and-closures", "errors-0d"]

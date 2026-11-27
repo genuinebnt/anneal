@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3d::s3d_04"]
 learn = ["grouping characters into tokens with one character of lookahead", "longest match: <= is one token", "properties for a parser front end: print then lex gives the tokens back"]
-concepts = []
-concepts_optional = ["lexers-and-precedence-climbing", "the-sql-pipeline", "unicode-and-case-mapping", "parsing-numbers-from-text", "property-testing-and-fuzzing", "iterators-and-closures", "errors-3d"]
+concepts = ["lexers-and-precedence-climbing"]
+concepts_optional = ["the-sql-pipeline", "unicode-and-case-mapping", "parsing-numbers-from-text", "property-testing-and-fuzzing", "iterators-and-closures", "errors-3d"]

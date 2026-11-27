@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4c::s4c_06"]
 learn = ["undoing newest first from before images", "logging every undo so a second crash makes progress", "a recovery that can run twice"]
-concepts = []
-concepts_optional = ["aries-recovery", "rolling-back-with-undo-logs", "write-ahead-logging", "model-based-testing", "property-testing-and-fuzzing", "errors-4c"]
+concepts = ["aries-recovery"]
+concepts_optional = ["rolling-back-with-undo-logs", "write-ahead-logging", "model-based-testing", "property-testing-and-fuzzing", "errors-4c"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1f::s1f_03"]
 learn = ["flush: make the disk match memory on demand", "delete: pages that stop existing", "state transitions that must leave every table consistent"]
-concepts = []
-concepts_optional = ["pin-counts-and-dirty-pages", "buffer-pool-anatomy", "durability-and-fsync", "model-based-testing", "errors-1f"]
+concepts = ["pin-counts-and-dirty-pages"]
+concepts_optional = ["buffer-pool-anatomy", "durability-and-fsync", "model-based-testing", "errors-1f"]

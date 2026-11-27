@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4a::s4a_01"]
 learn = ["the oldest timestamp anybody can still read at", "an ordered map of counts", "why a watermark is the key to garbage collection"]
-concepts = []
-concepts_optional = ["watermarks-and-garbage-collection", "multi-version-concurrency-control", "logical-clocks-and-timestamps", "model-based-testing", "errors-4a"]
+concepts = ["watermarks-and-garbage-collection"]
+concepts_optional = ["multi-version-concurrency-control", "logical-clocks-and-timestamps", "model-based-testing", "errors-4a"]

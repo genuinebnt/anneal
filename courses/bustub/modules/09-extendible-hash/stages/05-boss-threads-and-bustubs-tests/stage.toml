@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_2b::s2b_05", "extendible_htable_test", "extendible_htable_concurrent_test"]
 retest = true
-concepts = []
-concepts_optional = ["latching-a-hash-table", "deadlock-and-lock-ordering", "testing-concurrent-code-with-loom-and-miri", "errors-2b"]
+concepts = ["latching-a-hash-table"]
+concepts_optional = ["deadlock-and-lock-ordering", "testing-concurrent-code-with-loom-and-miri", "errors-2b"]

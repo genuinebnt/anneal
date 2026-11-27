@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_4a::s4a_04"]
 learn = ["the delta that restores the version a change replaced", "folding a transaction's later changes into its first log", "which log a reader needs when one transaction writes a tuple many times"]
-concepts = []
-concepts_optional = ["version-chains-and-undo-logs", "rolling-back-with-undo-logs", "multi-version-concurrency-control", "model-based-testing", "property-testing-and-fuzzing", "errors-4a"]
+concepts = ["version-chains-and-undo-logs"]
+concepts_optional = ["rolling-back-with-undo-logs", "multi-version-concurrency-control", "model-based-testing", "property-testing-and-fuzzing", "errors-4a"]

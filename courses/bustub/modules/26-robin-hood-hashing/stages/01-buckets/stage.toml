@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_0c::s0c_01"]
 learn = ["a hash set's bookkeeping: capacity, size, load factor", "modular arithmetic that wraps around", "fallible constructors"]
-concepts = []
-concepts_optional = ["robin-hood-hashing-and-open-addressing", "hash-functions-and-murmur3", "newtypes-and-type-driven-design", "eq-hash-ord-contracts", "errors-0c"]
+concepts = ["robin-hood-hashing-and-open-addressing"]
+concepts_optional = ["hash-functions-and-murmur3", "newtypes-and-type-driven-design", "eq-hash-ord-contracts", "errors-0c"]

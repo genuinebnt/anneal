@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3g::s3g_01"]
 learn = ["a sort key is the values of the ORDER BY expressions", "NULL is the smallest value unless told otherwise", "the first key that differs decides", "a comparator that is a total preorder"]
-concepts = []
-concepts_optional = ["sort-keys-and-null-ordering", "eq-hash-ord-contracts", "sql-types-and-three-valued-logic", "model-based-testing", "property-testing-and-fuzzing", "errors-3g"]
+concepts = ["sort-keys-and-null-ordering"]
+concepts_optional = ["eq-hash-ord-contracts", "sql-types-and-three-valued-logic", "model-based-testing", "property-testing-and-fuzzing", "errors-3g"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_r::sr_03"]
 learn = ["moving a value out of a place with Option::take and mem::replace", "a recursive structure that owns its next node, and dropping it without recursion", "referring to a value by handle instead of by reference", "a generation number so that a stale handle never finds a new value"]
-concepts = []
-concepts_optional = ["smart-pointers-box-rc-arc", "arenas-and-generational-handles", "ownership-of-files-and-raii", "interior-mutability", "errors-r"]
+concepts = ["smart-pointers-box-rc-arc"]
+concepts_optional = ["arenas-and-generational-handles", "ownership-of-files-and-raii", "interior-mutability", "errors-r"]

@@ -4,5 +4,5 @@ kind = "learn"
 difficulty = "medium"
 tests = ["stages_1b::s1b_01"]
 learn = ["a Mutex plus a Condvar as a blocking queue", "waiting for a condition, never for a moment", "Option as an in-band stop signal"]
-concepts = []
-concepts_optional = ["condvars-and-blocking-queues", "mutex-owns-its-data", "lock-poisoning-and-the-unwrap-policy", "worker-threads-and-the-stop-signal", "option-and-result-combinators", "reading-compiler-errors", "errors-1b"]
+concepts = ["condvars-and-blocking-queues"]
+concepts_optional = ["mutex-owns-its-data", "lock-poisoning-and-the-unwrap-policy", "worker-threads-and-the-stop-signal", "option-and-result-combinators", "reading-compiler-errors", "errors-1b"]

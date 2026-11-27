@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4c::s4c_02"]
 learn = ["a buffer of records not yet durable", "LSNs as positions in the log", "flush, flush_to and the durable end", "restarting after a torn tail"]
-concepts = []
-concepts_optional = ["write-ahead-logging", "durability-and-fsync", "ownership-of-files-and-raii", "interior-mutability-cell-refcell-mutex", "model-based-testing", "errors-4c"]
+concepts = ["write-ahead-logging"]
+concepts_optional = ["durability-and-fsync", "ownership-of-files-and-raii", "interior-mutability-cell-refcell-mutex", "model-based-testing", "errors-4c"]

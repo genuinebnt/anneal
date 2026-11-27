@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3c::s3c_02"]
 learn = ["a cursor that walks a chain of pages", "the Halloween problem and a scan that stops where the table was", "an iterator that returns deleted tuples too"]
-concepts = []
-concepts_optional = ["halloween-problem", "lifetimes-in-structs", "range-scans-and-the-leaf-chain", "iterators-and-closures", "model-based-testing", "errors-3c"]
+concepts = ["halloween-problem"]
+concepts_optional = ["lifetimes-in-structs", "range-scans-and-the-leaf-chain", "iterators-and-closures", "model-based-testing", "errors-3c"]

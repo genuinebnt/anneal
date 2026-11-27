@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "hard"
 tests = ["stages_3e::s3e_05", "sql_access_methods_test"]
 retest = true
-concepts = []
-concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "the-sql-pipeline", "errors-3e"]
+concepts = ["the-sql-pipeline"]
+concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "errors-3e"]

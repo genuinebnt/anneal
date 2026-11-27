@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_1d::s1d_04", "lru_k_replacer_test"]
 retest = true
-concepts = []
-concepts_optional = ["lru-k-and-scan-resistance", "model-based-testing", "performance-tests-and-measuring", "errors-1d"]
+concepts = ["lru-k-and-scan-resistance"]
+concepts_optional = ["model-based-testing", "performance-tests-and-measuring", "errors-1d"]

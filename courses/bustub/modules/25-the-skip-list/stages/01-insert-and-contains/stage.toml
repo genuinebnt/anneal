@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_0b::s0b_01"]
 learn = ["searching with an update vector", "splicing a node into several levels", "index links in an arena"]
-concepts = []
-concepts_optional = ["skip-lists", "arenas-and-generational-handles", "generics-and-static-dispatch", "allocation-and-cache-friendly-code", "errors-0b"]
+concepts = ["skip-lists"]
+concepts_optional = ["arenas-and-generational-handles", "generics-and-static-dispatch", "allocation-and-cache-friendly-code", "errors-0b"]

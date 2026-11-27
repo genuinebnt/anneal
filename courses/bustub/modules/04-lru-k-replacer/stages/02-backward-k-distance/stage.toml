@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1d::s1d_02"]
 learn = ["the LRU-K rule: evict the largest backward k-distance", "infinite distance, and the tie-break by first access", "properties that follow from a policy: k = 1 is LRU, scans lose to hot frames"]
-concepts = []
-concepts_optional = ["lru-k-and-scan-resistance", "logical-clocks-and-timestamps", "model-based-testing", "iterators-and-closures", "checking-invariants", "errors-1d"]
+concepts = ["lru-k-and-scan-resistance"]
+concepts_optional = ["logical-clocks-and-timestamps", "model-based-testing", "iterators-and-closures", "checking-invariants", "errors-1d"]

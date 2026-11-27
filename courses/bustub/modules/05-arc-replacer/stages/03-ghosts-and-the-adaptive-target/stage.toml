@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_1e::s1e_03"]
 learn = ["ghost lists: remembering what you evicted", "a feedback rule that moves a target", "bounded memory: limits on the four lists"]
-concepts = []
-concepts_optional = ["adaptive-replacement-cache", "model-based-testing", "checking-invariants", "replacement-policies", "errors-1e"]
+concepts = ["adaptive-replacement-cache"]
+concepts_optional = ["model-based-testing", "checking-invariants", "replacement-policies", "errors-1e"]

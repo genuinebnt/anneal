@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3b::s3b_02"]
 learn = ["encoding a row of values as bytes under a schema", "a fixed part with offsets and a variable part for text", "round trip as the specification"]
-concepts = []
-concepts_optional = ["tuple-layout-fixed-and-variable-parts", "serialization-of-values", "bytes-endianness-and-views", "sql-types-and-three-valued-logic", "model-based-testing", "errors-3b"]
+concepts = ["tuple-layout-fixed-and-variable-parts"]
+concepts_optional = ["serialization-of-values", "bytes-endianness-and-views", "sql-types-and-three-valued-logic", "model-based-testing", "errors-3b"]

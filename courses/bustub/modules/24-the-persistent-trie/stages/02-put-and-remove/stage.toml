@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_0a::s0a_02"]
 learn = ["path copying: new nodes on the path, shared nodes elsewhere", "recursion that returns the replacement node", "Arc::ptr_eq to prove sharing", "removing without mutating", "pruning nodes that lead nowhere", "returning a result that can mean nothing is left"]
-concepts = []
-concepts_optional = ["persistent-data-structures-and-path-copying", "tries", "smart-pointers-box-rc-arc", "errors-0a"]
+concepts = ["persistent-data-structures-and-path-copying"]
+concepts_optional = ["tries", "smart-pointers-box-rc-arc", "errors-0a"]

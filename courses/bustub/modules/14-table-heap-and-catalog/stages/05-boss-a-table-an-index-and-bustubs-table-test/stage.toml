@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_3c::s3c_05", "tuple_test"]
 retest = true
-concepts = []
-concepts_optional = ["the-catalog", "heap-files", "model-based-testing", "errors-3c"]
+concepts = ["the-catalog"]
+concepts_optional = ["heap-files", "model-based-testing", "errors-3c"]

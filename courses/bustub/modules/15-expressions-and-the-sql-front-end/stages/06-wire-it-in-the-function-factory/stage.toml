@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_3d::s3d_06"]
 learn = ["how a SQL function name becomes an expression node", "errors for wrong names, argument counts and types", "reading an EXPLAIN plan"]
-concepts = []
-concepts_optional = ["the-sql-pipeline", "name-resolution-and-the-binder", "expression-trees", "errors-as-values-with-result", "errors-3d"]
+concepts = ["the-sql-pipeline"]
+concepts_optional = ["name-resolution-and-the-binder", "expression-trees", "errors-as-values-with-result", "errors-3d"]

@@ -4,5 +4,5 @@ kind = "boss"
 difficulty = "easy"
 tests = ["stages_1c::s1c_04", "lru_replacer_test", "clock_replacer_test"]
 retest = true
-concepts = []
-concepts_optional = ["replacement-policies", "model-based-testing", "performance-tests-and-measuring", "errors-1c"]
+concepts = ["replacement-policies"]
+concepts_optional = ["model-based-testing", "performance-tests-and-measuring", "errors-1c"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_1a::s1a_03"]
 learn = ["atomic counters and why Relaxed is enough for them", "an append-only log read back by byte offset", "why an empty write is not a flush", "zero-filling a short read"]
-concepts = []
-concepts_optional = ["atomics-ordering-and-the-log", "durability-and-fsync", "rust-io-errors", "positional-io-and-short-reads", "ownership-of-files-and-raii", "errors-1a"]
+concepts = ["atomics-ordering-and-the-log"]
+concepts_optional = ["durability-and-fsync", "rust-io-errors", "positional-io-and-short-reads", "ownership-of-files-and-raii", "errors-1a"]

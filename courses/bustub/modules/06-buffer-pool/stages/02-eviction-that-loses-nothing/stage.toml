@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_1f::s1f_02"]
 learn = ["choosing a victim through the replacer", "dirty pages: write back before reuse, never write clean ones", "an invariant you can state: what you wrote is what you read, whatever was evicted"]
-concepts = []
-concepts_optional = ["eviction-and-write-back-ordering", "pin-counts-and-dirty-pages", "buffer-pool-anatomy", "model-based-testing", "checking-invariants", "errors-1f"]
+concepts = ["eviction-and-write-back-ordering"]
+concepts_optional = ["pin-counts-and-dirty-pages", "buffer-pool-anatomy", "model-based-testing", "checking-invariants", "errors-1f"]

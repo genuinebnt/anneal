@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "easy"
 tests = ["stages_3d::s3d_01"]
 learn = ["an expression as a tree evaluated against a row", "a trait object behind Arc: BusTub's virtual base class", "two inputs: the left and the right side of a join"]
-concepts = []
-concepts_optional = ["expression-trees", "the-sql-pipeline", "trait-objects-and-the-disk-seam", "structs-and-accessors", "generics-and-static-dispatch", "errors-3d"]
+concepts = ["expression-trees"]
+concepts_optional = ["the-sql-pipeline", "trait-objects-and-the-disk-seam", "structs-and-accessors", "generics-and-static-dispatch", "errors-3d"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "hard"
 tests = ["stages_3b::s3b_03"]
 learn = ["designing a page layout that never moves a tuple", "the slotted page", "a page is only its bytes: state in the page, not in the struct"]
-concepts = []
-concepts_optional = ["slotted-pages", "bytes-endianness-and-views", "checking-invariants", "model-based-testing", "structs-and-accessors", "errors-3b"]
+concepts = ["slotted-pages"]
+concepts_optional = ["bytes-endianness-and-views", "checking-invariants", "model-based-testing", "structs-and-accessors", "errors-3b"]

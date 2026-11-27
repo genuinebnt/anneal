@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4c::s4c_03"]
 learn = ["describing a change as a state, not an operation", "idempotence: doing it twice is doing it once", "a store over heap pages opened from page ids"]
-concepts = []
-concepts_optional = ["aries-recovery", "slotted-pages", "errors-as-values-with-result", "lifetimes-in-structs", "model-based-testing", "errors-4c"]
+concepts = ["aries-recovery"]
+concepts_optional = ["slotted-pages", "errors-as-values-with-result", "lifetimes-in-structs", "model-based-testing", "errors-4c"]
