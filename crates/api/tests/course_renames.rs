@@ -212,6 +212,8 @@ async fn a_stage_writes_its_own_row_and_from_then_on_its_own_row_wins(db: PgPool
     let page = get(&app, "/api/courses/rn/stages/1b-01").await;
     assert_eq!(page["state"], "assisted");
     assert_eq!(page["runs"].as_array().unwrap().len(), 1, "its own runs replace the old ones in the history");
+    let paths: Vec<&str> = page["solution"]["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, ["src/b.rs", "src/c.rs"], "a merged stage shows the solutions of both halves");
 
     // a stage's own row wins over the stages it replaces, whatever they hold
     sqlx::query("INSERT INTO course_stage_state (course, stage_id) VALUES ('rn', '1a-03')").execute(&db).await.unwrap();

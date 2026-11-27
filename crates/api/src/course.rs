@@ -107,11 +107,13 @@ async fn solution_files(s: &AppState, c: &Course, x: &Stage) -> ApiResult<Option
     if let Some(own) = rows.get(&x.id) {
         return Ok(Some(own.clone()));
     }
-    let files: Vec<Value> = former_states(&x.renamed_from, |id| rows.get(id))
-        .into_iter()
-        .flatten()
-        .flat_map(|v| v.as_array().cloned().unwrap_or_default())
-        .collect();
+    let mut from: Vec<&str> = Vec::new();
+    for id in former_states(&x.renamed_from, |id| rows.get_key_value(id).map(|(k, _)| k.as_str())).into_iter().flatten() {
+        if !from.contains(&id) {
+            from.push(id);
+        }
+    }
+    let files: Vec<Value> = from.iter().flat_map(|id| rows[*id].as_array().cloned().unwrap_or_default()).collect();
     Ok((!files.is_empty()).then_some(Value::Array(files)))
 }
 
@@ -135,7 +137,7 @@ pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> 
     // a stage with no runs of its own counts the runs of the stages it replaces
     let run_count = |x: &Stage| match runs.get(&x.id) {
         Some(n) => *n,
-        None => former_ids(&x.renamed_from).filter_map(|id| runs.get(id)).sum(),
+        None => former_ids(&x.renamed_from).collect::<std::collections::BTreeSet<_>>().into_iter().filter_map(|id| runs.get(id)).sum(),
     };
     let mut done = 0;
     let mut challenges = 0;
