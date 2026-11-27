@@ -11,18 +11,16 @@ In this MVCC the table holds the **newest** version of every tuple, with the tim
 
 In `src/execution/execution_common.rs`:
 
-`reconstruct_tuple(schema, base_tuple, base_meta, undo_logs) -> Option<Tuple>`: start from the values of `base_tuple`; the tuple does not exist if `base_meta.is_deleted`; apply **every** log in `undo_logs`, front first, whatever its timestamp; a log with `is_deleted` makes the tuple not exist; any other log writes its old values into the columns where `modified_fields[i]` is true (the log's tuple holds *only* those columns, in table order, under `get_undo_log_schema(schema, &log.modified_fields)`, given); if the tuple does not exist when a restoring log comes (a deleted base, or after a deleting log) start from all NULLs (`null_values(schema)`, given) and then apply it; return `None` if the tuple does not exist at the end, else `Some`.
+- **`reconstruct_tuple(schema, base_tuple, base_meta, undo_logs)` is the version that applying every log in `undo_logs` to the base gives**, front first, whatever the logs' timestamps. A log with `is_deleted` makes the tuple not exist; any other log restores its columns' old values (its tuple holds *only* the columns where `modified_fields[i]` is true, in table order, under `get_undo_log_schema(schema, &log.modified_fields)`, given). A restoring log applied to a tuple that does not exist (a deleted base, or after a deleting log) starts from all NULLs, so nothing left in a deleted tuple's slot leaks into the result. `None` if the tuple does not exist at the end.
+- **`collect_undo_logs(rid, base_meta, base_tuple, undo_link, txn, txn_mgr)` is the list of logs that takes the table's version to the newest version `txn` may see.** It is empty when the table's version is visible (committed at or before `txn.read_ts()`, or written by `txn` itself); otherwise it is the chain from `undo_link` up to and including the first log at or before the read timestamp. It is `None` when the tuple did not exist for `txn`: the chain (possibly empty: `None` or an invalid link) ends without such a log, or a log of it cannot be fetched because it was garbage collected.
 
-`collect_undo_logs(rid, base_meta, base_tuple, undo_link, txn, txn_mgr) -> Option<Vec<UndoLog>>`: if the table's version is visible to `txn` (`base_meta.ts <= txn.read_ts()`, or `base_meta.ts == txn.temp_ts()`: it wrote it itself) return `Some(vec![])`; otherwise follow the chain from `undo_link` (`None` or an invalid link is an empty chain): fetch each log with `txn_mgr.get_undo_log_optional(link)`, add it to the result and, if its `ts <= txn.read_ts()`, stop and return the logs, else continue with its `prev_version`; if the chain ends without a visible version, or a log cannot be fetched (garbage collected), return `None`: the tuple did not exist for this transaction.
+> [!ASIDE] The steps, if you would rather not work them out
+> `reconstruct_tuple(schema, base_tuple, base_meta, undo_logs) -> Option<Tuple>`: start from the values of `base_tuple`; the tuple does not exist if `base_meta.is_deleted`; apply **every** log in `undo_logs`, front first, whatever its timestamp; a log with `is_deleted` makes the tuple not exist; any other log writes its old values into the columns where `modified_fields[i]` is true (the log's tuple holds *only* those columns, in table order, under `get_undo_log_schema(schema, &log.modified_fields)`, given); if the tuple does not exist when a restoring log comes (a deleted base, or after a deleting log) start from all NULLs (`null_values(schema)`, given) and then apply it; return `None` if the tuple does not exist at the end, else `Some`.
+>
+> `collect_undo_logs(rid, base_meta, base_tuple, undo_link, txn, txn_mgr) -> Option<Vec<UndoLog>>`: if the table's version is visible to `txn` (`base_meta.ts <= txn.read_ts()`, or `base_meta.ts == txn.temp_ts()`: it wrote it itself) return `Some(vec![])`; otherwise follow the chain from `undo_link` (`None` or an invalid link is an empty chain): fetch each log with `txn_mgr.get_undo_log_optional(link)`, add it to the result and, if its `ts <= txn.read_ts()`, stop and return the logs, else continue with its `prev_version`; if the chain ends without a visible version, or a log cannot be fetched (garbage collected), return `None`: the tuple did not exist for this transaction.
 
 > [!ASIDE] Why not rebuild the tuple after every log?
-> Applying the logs to a list of values and building the tuple once at the end is cheaper and simpler than creating a tuple per log:
->
-> ```rust
-> let mut values: Vec<Value> = (0..n).map(|i| base.get_value(schema, i)).collect();
-> for log in undo_logs { /* overwrite the columns this log restores */ }
-> Tuple::new(values, schema)
-> ```
+> Applying the logs to a list of values and building the tuple once at the end is cheaper and simpler than creating a tuple per log: each log only overwrites some entries of the list, and one tuple is encoded at the end.
 
 The tests: exact scenarios for `reconstruct_tuple` (no logs gives the base; a deleted base with no logs does not exist; a full log brings a deleted tuple back; stale bytes in the slot of a deleted tuple do not leak; partial logs restore only their columns; the last log wins; a deleting log) and `collect_undo_logs` (committed at or before the read timestamp needs no logs; the transaction's own write needs none; a newer tuple without a chain did not exist yet; another transaction's uncommitted tuple is not visible; the chain is followed until a version old enough; a chain of only newer versions; a garbage-collected log ends the search), and a property: **for a row with a random history** (updates, deletes, re-inserts, columns going to and from NULL, optionally an uncommitted version) **a reader at every timestamp collects and reconstructs exactly the newest version at or before its timestamp**, a reader before the first version sees nothing, and the writer sees its own uncommitted version while everyone else sees the history.
 
@@ -32,13 +30,13 @@ How you walk the chain (a loop, recursion), and how you build the tuple (a `Vec<
 
 ## The Rust toolbox
 
-**A loop on an `Option`.** `let mut link = undo_link; while let Some(l) = link.filter(|l| l.is_valid()) { let log = txn_mgr.get_undo_log_optional(l)?; link = Some(log.prev_version); ... }`: `?` on an `Option` returns `None` for the whole function when a log is gone.
+**A loop on an `Option`.** `while let Some(id) = next { let node = nodes.get(&id)?; next = node.parent; ... }` walks a chain of ids until it ends; `?` on an `Option` returns `None` for the whole function when a link points at nothing, and `Option::filter` turns a sentinel value into `None` before the loop sees it.
 
 **Early `return Some(..)` inside the loop** when a log is old enough; `None` after the loop for "the chain ended".
 
-**Partial tuples.** `get_undo_log_schema(schema, &modified)` is the schema of the columns that changed; `log.tuple.get_value(&partial, k)` reads the k-th changed column; keep a counter `k` that advances only for modified columns.
+**Partial tuples.** `get_undo_log_schema(schema, &modified)` is the schema of the columns that changed, so a log's tuple is read with that schema, not the table's: its k-th value belongs to the k-th column whose flag is `true`, and a second index that advances only on those columns pairs them up.
 
-**Building values.** `let mut values: Vec<Value> = (0..n).map(|i| base.get_value(schema, i)).collect();` then overwrite entries; `Tuple::new(&values, schema)` at the end.
+**Building values.** `let mut cells: Vec<String> = (0..width).map(|i| row.cell(i)).collect();` collects a row into a list you can overwrite by index (`cells[i] = ..`); build the final value from the list once, at the end.
 
 **`Option` as "did it exist".** Return `None` for a deleted result; callers use `?` or `match`.
 
