@@ -29,7 +29,7 @@ export function HintsTab({ page, onOpen, pending }: { page: Page; onOpen: () => 
     const { hints, state } = page;
     // The hints you have already opened start open; the one you open now opens with the same slide.
     const [shut, setShut] = useState<Set<number>>(() => new Set());
-    if (hints.total === 0) return <div className="k-empty">No hints written for this stage yet.</div>;
+    if (hints.total === 0) return <div className="k-empty">{page.stage.kind === "challenge" ? "Challenges have no hints, by design: solve it with what this module and the ones before it taught." : "No hints written for this stage yet."}</div>;
     return (
         <>
             <p className="k-quiet" style={{ margin: "0 0 14px", color: "var(--mut)", maxWidth: "62ch" }}>
