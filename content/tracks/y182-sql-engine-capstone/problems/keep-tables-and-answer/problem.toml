@@ -1,0 +1,32 @@
+slug = "keep-tables-and-answer"
+title = "Keep tables and answer questions"
+mode = "write"
+level = "hard"
+stage = "engine"
+order = 4
+status = "ready"
+tags = ["database", "query planning", "atomic updates", "stable sort"]
+teaches = [
+  "A statement is checked completely before it does anything. So a wrong query fails the same way on an empty table, on a full one and with LIMIT 0.",
+  "All or nothing is easy when you build the new rows aside and add them only when every one is ready.",
+  "The order of the steps decides which work happens: filter, sort, cut, and only then compute the output. Without a sort, the first rows can leave before the rest are read.",
+]
+follow_up = "1) How would you answer `ORDER BY x LIMIT 10` without sorting every row? 2) What would you change so that one thread reads while another inserts? 3) Where would an index help, and what would it cost an insert?"
+related = ["Y181", "S4", "L8"]
+
+[[hints]]
+kind = "approach"
+text = "Do each statement in two phases: everything that can be refused from the definitions alone, then the work on rows. For a SELECT, decide first whether the order of the answer depends on rows you have not seen."
+
+[[hints]]
+kind = "rust"
+text = "`collect::<Result<Vec<_>, _>>()` stops at the first error and gives you nothing half done. `sort_by` is stable, and `Ordering::reverse` turns one comparison round. Sorting a `Vec<&Vec<Value>>` moves references, not rows. The given `compile`, `column` and `need` do the checking."
+
+[[hints]]
+kind = "edge"
+text = "Equal sort keys keep insertion order in **both** directions. `LIMIT 0` runs nothing, with or without ORDER BY. `ORDER BY` may name a column that is not selected. `INSERT INTO t VALUES (NULL = 1)` into an `INT` column is refused."
+
+[solution]
+explanation = "Creating checks the table name, then the column names, and only then stores the table. Inserting builds every row into a new list, so the first fault leaves the table untouched.\n\nA query compiles its condition, finds the sort column and compiles every item before it looks at a row.\n\nWithout ORDER BY, one loop filters, computes and stops at the limit. With it, the loop filters references to rows, a stable sort orders them, and only the first rows up to the limit are computed."
+time = "O(r) per query of r rows; O(k log k) more to sort the k rows that pass"
+space = "O(k) for the references to sort, plus the result"

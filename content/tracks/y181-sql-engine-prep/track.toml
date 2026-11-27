@@ -1,0 +1,21 @@
+code = "Y181"
+name = "SQL engine: preparation"
+section = "Y"
+tier = "sde3"
+order = 181
+summary = "Small exercises on the ideas a small SQL engine needs, each on a different task."
+
+[[stages]]
+slug = "read"
+name = "Read a request"
+band = "medium"
+
+[[stages]]
+slug = "check"
+name = "Refuse it early"
+band = "medium"
+
+[[stages]]
+slug = "run"
+name = "Do only what is needed"
+band = "medium"

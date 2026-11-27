@@ -1,0 +1,32 @@
+slug = "read-one-exported-line"
+title = "Read one exported line"
+mode = "write"
+level = "medium"
+stage = "read"
+order = 2
+status = "ready"
+tags = ["quoted text", "scanning", "error positions"]
+teaches = [
+  "Inside quotes the separator is ordinary text, so you cannot cut at commas first. One reader has to know which side of a quote it is on.",
+  "A doubled quote is how the closing character writes itself: after a quote, look at the next character before you decide that the text has ended.",
+  "\"Nothing was written\" and \"an empty text was written\" are different answers. An `Option<String>` keeps them apart.",
+]
+follow_up = "1) How would you handle a field that runs over several lines of a file? 2) How could you return fields without copying when nothing needs changing? 3) What changes if the quote and the comma can be chosen by the caller?"
+related = ["Y182", "S2", "L3"]
+
+[[hints]]
+kind = "approach"
+text = "Read one field at a time from a position in the line. First decide which of the two kinds it is by its first character. After either kind, only a comma or the end may follow."
+
+[[hints]]
+kind = "rust"
+text = "`find` on a slice of the line jumps to the next quote or comma and gives a byte offset. `push_str` copies the run before it. `Cow` is not needed."
+
+[[hints]]
+kind = "edge"
+text = "A line that ends with a comma has one more, missing, field. `\"\"` is an empty text, and `\"\"\"` never closes. The character after a closing quote may be several bytes long."
+
+[solution]
+explanation = "A position moves along the line. A field that starts with a quote is copied from quote to quote; two quotes together add one, and a single one ends it. A plain field runs to the next comma and may hold no quote. After the field comes a comma, which starts another round, or the end."
+time = "O(n) in the length of the line"
+space = "O(n) for the fields"

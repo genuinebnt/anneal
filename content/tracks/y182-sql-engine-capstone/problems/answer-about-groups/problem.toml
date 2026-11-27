@@ -1,0 +1,32 @@
+slug = "answer-about-groups"
+title = "Answer questions about groups"
+mode = "write"
+level = "hard"
+stage = "engine"
+order = 5
+status = "ready"
+tags = ["aggregation", "GROUP BY", "query validation", "database"]
+teaches = [
+  "An aggregate never needs all the rows of its group at once. A small state per group, fed one row at a time, is enough.",
+  "A grouped query has new rows with new columns. So `ORDER BY` after it speaks about the output, not about the table.",
+  "The edge rules matter: no input still gives one row when there is no GROUP BY, and zero rows when there is one. The sum of nothing is unknown, but its count is 0.",
+]
+follow_up = "1) How would you add an average, and what must its state keep? 2) The groups do not fit in memory. What could you do? 3) If the rows already arrive sorted by the key, what can you drop?"
+related = ["Y181", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "First check the query and turn each select item into a recipe: the group's key, or aggregate number i. Then walk the rows once, keeping one state per group and per aggregate. Build the output rows at the end."
+
+[[hints]]
+kind = "rust"
+text = "A `BTreeMap<Value, Vec<State>>` finds a row's group and also keeps the groups in key order. `entry(..).or_insert_with(..)` makes a new group. The given `sort_rows` works on the finished rows."
+
+[[hints]]
+kind = "edge"
+text = "NULL keys form one group. `COUNT(col)` skips NULL and `COUNT(*)` does not. `MIN` works on texts and booleans too. Without GROUP BY, make the one group before reading any row."
+
+[solution]
+explanation = "The checks resolve the group column, turn each item into either the key or a numbered aggregate, and find the ORDER BY name among the output names.\n\nOne pass over the rows that pass the condition finds each row's group in an ordered map and feeds every aggregate of that group. A sum adds with the checked addition of step 3. The map gives the groups in key order; a stable sort and the limit come last."
+time = "O(r log g) for r rows and g groups, plus O(g log g) to sort"
+space = "O(g × aggregates)"

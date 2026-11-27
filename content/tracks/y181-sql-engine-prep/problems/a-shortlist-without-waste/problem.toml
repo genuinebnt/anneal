@@ -1,0 +1,32 @@
+slug = "a-shortlist-without-waste"
+title = "A shortlist that does no needless work"
+mode = "write"
+level = "medium"
+stage = "run"
+order = 5
+status = "ready"
+tags = ["lazy evaluation", "early exit", "errors", "stable sort"]
+teaches = [
+  "When a step can fail, how much work you do decides which errors can happen. Doing less is not only faster: it changes the answer.",
+  "In the order the entries arrive, you can finish each one and stop. As soon as the best must come first, every entry has to be seen before the first answer.",
+  "The expensive last step still belongs after the cut: sort first, keep n, and only then do the work for what you kept.",
+]
+follow_up = "1) With a ranking and n = 10 over a million entries, how would you avoid keeping all of them? 2) Which of these calls could safely run in parallel? 3) How would you tell the caller that more answers exist, without paying for them?"
+related = ["Y182", "S6"]
+
+[[hints]]
+kind = "approach"
+text = "Treat the two cases separately. For each, ask for every call you plan: can the answer be known without it? If so, it must not happen."
+
+[[hints]]
+kind = "rust"
+text = "A plain `for` loop with `?` and `break` is clear. If you use iterator adapters, remember that they are lazy, and that where `take` stands decides what runs. `sort_by_key` keeps equal keys in their order."
+
+[[hints]]
+kind = "edge"
+text = "`n` can be 0, and then nothing is called. After the n-th caption there is no reason to look at the next entry. With a ranking, an entry is scored right after it qualifies."
+
+[solution]
+explanation = "Without a ranking, one loop asks about an entry, captions it if it qualifies, and leaves as soon as it has n captions. The check is made right after the push, so no further entry is looked at. With a ranking, a first loop collects the score of every entry that qualifies. A stable sort by score keeps ties in arrival order, and only the first n are captioned."
+time = "O(m) calls without a ranking, where m entries are needed; O(k log k) with one, for k that qualify"
+space = "O(n) without a ranking; O(k) with one"

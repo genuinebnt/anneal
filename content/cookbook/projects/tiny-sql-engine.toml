@@ -24,7 +24,7 @@ body = """
 [[sections]]
 heading = "Why it matters"
 body = """
-every database is this pipeline at a different scale; seeing it in &#126;450 lines makes DataFusion or SQLite readable.
+every database is this pipeline at a different scale; seeing it in one file of about 1200 lines (tests not counted) makes DataFusion or SQLite readable.
 """
 
 [[sections]]
@@ -45,6 +45,8 @@ execute  volcano model: every operator implements `next() -> Result<Option<Row>>
 **Null semantics** (three-valued logic): any comparison or arithmetic with **null** is **null**; `NULL AND false` = false, `NULL AND true` = **null**, `NULL OR true` = true, `NULL OR false` = **null**, `NOT NULL` = **null**; **where** keeps a row only when the predicate is exactly **true**.
 
 NULLs sort first in ASC order (last in DESC); aggregates ignore NULLs; SUM/MIN/MAX of nothing is **null**, **count** of nothing is 0. **Errors** are values: parse errors carry a span and render compiler-style with a caret line; type, catalog and runtime (division by zero, overflow) errors are `SqlError` variants. Nothing in the engine panics on user input.
+
+**Limits.** An expression tree may be 100 nodes tall, and nesting is bounded too. **And** and **or** evaluate both sides, so `false AND 1 / 0 = 1` is a runtime error. **order by** takes one column name, with no expressions or aliases, so a result cannot be ordered by `count(*)`. The smallest integer cannot be written as a literal. SUM fails if the running total overflows, even if the final total would fit. Everything lives in memory, and nothing bounds a table's size.
 """
 
 [[sections]]

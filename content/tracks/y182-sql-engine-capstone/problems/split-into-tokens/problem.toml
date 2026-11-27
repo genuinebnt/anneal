@@ -1,0 +1,32 @@
+slug = "split-into-tokens"
+title = "Cut a statement into tokens"
+mode = "write"
+level = "medium"
+stage = "front"
+order = 1
+status = "ready"
+tags = ["lexing", "quoted text", "error spans"]
+teaches = [
+  "A first pass turns characters into words, numbers, texts and symbols, each with its place. The next pass never has to look at a character.",
+  "Where one symbol begins another, try the longer one first, or `<=` falls apart into two tokens.",
+  "Inside quotes the usual rules stop. A doubled quote is how the closing character writes itself.",
+]
+follow_up = "1) How would you add comments, and where could a comment mark hide? 2) How would you avoid copying each text? 3) How would you hand out one token at a time?"
+related = ["Y181", "L3", "S2"]
+
+[[hints]]
+kind = "approach"
+text = "Keep one byte position. Look at the byte there, decide which kind of token starts, and read to its end. Every branch moves the position forward."
+
+[[hints]]
+kind = "rust"
+text = "`as_bytes` with `is_ascii_digit` and `is_ascii_alphabetic` classifies. `to_ascii_lowercase` and `str::parse::<i64>` do the rest. Inside a text, `sql[at..].find` jumps to the next quote."
+
+[[hints]]
+kind = "edge"
+text = "A slice must start and end between characters, so a bad character's range is `len_utf8` bytes wide. `''` alone is an empty text, and `'''` never closes."
+
+[solution]
+explanation = "One loop looks at the byte under the position. White space is skipped; digits, word characters and quotes each read to their end; otherwise the symbols are tried with the two-character ones first.\n\nA text is copied in pieces from quote to quote, and a quote followed by a quote adds one and goes on. Anything left is a bad character."
+time = "O(n) in the length of the text"
+space = "O(n) for the tokens"
