@@ -95,6 +95,9 @@ pub enum CourseCmd {
         /// Print everything at once instead of through a pager (the `PAGER` environment variable picks the pager).
         #[arg(long)]
         no_pager: bool,
+        /// Also print the answers and nudges of the stage's check-yourself questions (hidden by default: try them first).
+        #[arg(long)]
+        answers: bool,
     },
     /// Run a stage's tests (default: the current stage, then the earlier stages as a regression check).
     Test {
@@ -848,7 +851,7 @@ pub fn run(cmd: CourseCmd) -> anyhow::Result<ExitCode> {
             }
             done
         }
-        CourseCmd::Show { stage, hint, no_pager } => show(stage.as_deref(), hint, no_pager),
+        CourseCmd::Show { stage, hint, no_pager, answers } => show(stage.as_deref(), hint, no_pager, answers),
         CourseCmd::Test { stage, all, only, verbose, filter, watch } => {
             let done = test_command(stage.as_deref(), TestOpts { all, only, verbose, hook: false }, filter.as_deref(), watch);
             if !watch {
@@ -1601,7 +1604,7 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn show(stage: Option<&str>, hint: Option<usize>, no_pager: bool) -> anyhow::Result<ExitCode> {
+fn show(stage: Option<&str>, hint: Option<usize>, no_pager: bool, answers: bool) -> anyhow::Result<ExitCode> {
     let repo = find_repo()?;
     let course = learner_course(&repo)?;
     let progress = load_progress(&repo);
@@ -1611,7 +1614,7 @@ fn show(stage: Option<&str>, hint: Option<usize>, no_pager: bool) -> anyhow::Res
     };
     match hint {
         Some(n) => print_hint(&course.meta.id, s, n, no_pager)?,
-        None => print_stage(&repo, &course, &progress, s, no_pager),
+        None => print_stage(&repo, &course, &progress, s, no_pager, answers),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1783,7 +1786,7 @@ fn stage_files(repo: &Path, id: &str) -> Vec<(String, usize)> {
     out
 }
 
-fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_pager: bool) {
+fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_pager: bool, answers: bool) {
     let (body, hints) = render::split_hints(&s.readme);
     let (color, width) = (term::color_on(), term::text_width());
     let mut text = format!("{}\n\n", crate::ui::stage_banner(&stage_info(course, progress, s)));
@@ -1792,7 +1795,7 @@ fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_
         let list = files.iter().map(|(f, n)| format!("  {f}  ({n} place{})", if *n == 1 { "" } else { "s" })).collect::<Vec<_>>().join("\n");
         text.push_str(&format!("{}\n{list}\n{}\n\n", term::bold("Where to work"), term::dim(&format!("each place is a stub marked {}: find them with  grep -rn '{}:' src", s.def.id, s.def.id))));
     }
-    text.push_str(&render::render(body, width, color));
+    text.push_str(&if answers { render::render_with_answers(body, width, color) } else { render::render(body, width, color) });
     text.push('\n');
     text.push_str(&render::render("Your way: the tests call only the public items named above. How you build the inside is up to you; change the given structs and helpers if you want a different design.", width, color));
     if !s.resources.is_empty() {
@@ -1813,7 +1816,7 @@ fn next() -> anyhow::Result<ExitCode> {
     maybe_unlock(&repo, &course, &progress)?;
     match current(&course, &progress) {
         Some(s) => {
-            print_stage(&repo, &course, &progress, s, false);
+            print_stage(&repo, &course, &progress, s, false, false);
             Ok(ExitCode::SUCCESS)
         }
         None => {

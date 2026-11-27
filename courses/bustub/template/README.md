@@ -16,7 +16,8 @@ git commit -am "..." && git push    # the pre-push hook runs `anneal course test
 Work in `src/`. Every function you have to write is `todo!()` until its stage. `tests/` holds the stage tests (`stages_*.rs`) and
 BusTub's own tests, ported (`*_test.rs`); they are yours to read. macOS and Linux only (the disk manager uses `pread`/`pwrite`).
 
-Unit of work: a **stage** is a handful of lines. Stages of a component are grouped into a **module** (the disk manager, the buffer
-pool, ...); the last stage of a module is BusTub's own test for it.
+Unit of work: a **stage** is one self-contained piece of a component: tens of lines and at least one design decision, with its own
+tests. Stages of a component are grouped into a **module** (the disk manager, the buffer pool, ...); the last stage of a module is
+BusTub's own test for it. Stages numbered 90 and up are optional challenges: no solution, their own tally, skip them freely.
 
 Tests and parts of the structure are adapted from BusTub, Copyright (c) 2015-2025 Carnegie Mellon University Database Group, MIT licence.

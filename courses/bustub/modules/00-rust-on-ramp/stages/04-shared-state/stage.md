@@ -100,4 +100,4 @@ BusTub's `Channel<T>` (`common/channel.h`) is this queue (a mutex, a condition v
 
 ## Learn more
 
-- [`Condvar`](https://doc.rust-lang.org/std/sync/struct.Condvar.html) · [`thread::scope`](https://doc.rust-lang.org/std/thread/fn.scope.html) · [`AtomicU64`](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU64.html)
+- [`Condvar`](https://doc.rust-lang.org/std/sync/struct.Condvar.html) · [`thread::scope`](https://doc.rust-lang.org/std/thread/fn.scope.html) · [`AtomicU64`](https://doc.rust-lang.org/std/sync/atomic/type.AtomicU64.html)

@@ -5,9 +5,20 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-/// Renders `md` in lines of at most `width` columns (a long unbreakable word or a code line may be longer).
+/// Renders `md` in lines of at most `width` columns (a long unbreakable word or a code line may be longer). The answers and nudges of
+/// `> [!CHECK]` questions are left out, so the reader tries first.
 pub fn render(md: &str, width: usize, color: bool) -> String {
-    let (md, notes) = prepare(md);
+    render_checks(md, width, color, false)
+}
+
+/// As [`render`], with the answers and nudges of `> [!CHECK]` questions printed.
+pub fn render_with_answers(md: &str, width: usize, color: bool) -> String {
+    render_checks(md, width, color, true)
+}
+
+fn render_checks(md: &str, width: usize, color: bool, answers: bool) -> String {
+    let md = checks(md, answers);
+    let (md, notes) = prepare(&md);
     let md = md.as_str();
     let mut r = Renderer { width: width.max(30), color, ..Renderer::default() };
     let mut opts = Options::empty();
@@ -85,6 +96,85 @@ fn prepare(md: &str) -> (String, Vec<String>) {
         out.push_str(rest);
     }
     (out, notes)
+}
+
+/// `> [!CHECK] Question` opens a question the reader answers before looking: the answer is in `||spoiler||` marks and the nudges are the
+/// list that follows. The question becomes a bold lead. Without `answers`, the answer and nudges are replaced by one line saying how
+/// to see them; with it, the answer is labelled and the nudges stay as a list. Code fences are left alone.
+fn checks(md: &str, answers: bool) -> String {
+    let mut out = String::with_capacity(md.len());
+    let (mut in_check, mut hidden_answer, mut nudges, mut fence) = (false, false, 0usize, false);
+    let close = |out: &mut String, hidden_answer: bool, nudges: usize| {
+        if answers || (!hidden_answer && nudges == 0) {
+            return;
+        }
+        let what = match (hidden_answer, nudges) {
+            (true, 0) => "The answer is".to_owned(),
+            (true, n) => format!("The answer and {n} nudge{} are", if n == 1 { "" } else { "s" }),
+            (false, n) => format!("{n} nudge{} {}", if n == 1 { "" } else { "s" }, if n == 1 { "is" } else { "are" }),
+        };
+        out.push_str(&format!(">\n> *Try it first. {what} hidden: `anneal course show --answers` prints them.*\n"));
+    };
+    for line in md.split_inclusive('\n') {
+        let t = line.trim_start();
+        if !in_check && t.starts_with("```") {
+            fence = !fence;
+        }
+        if fence {
+            out.push_str(line);
+            continue;
+        }
+        if let Some(question) = line.strip_prefix("> [!CHECK]") {
+            if in_check {
+                close(&mut out, hidden_answer, nudges);
+            }
+            (in_check, hidden_answer, nudges) = (true, false, 0);
+            out.push_str(&format!("> **Check yourself:** {}\n>\n", question.trim()));
+            continue;
+        }
+        if in_check && !line.starts_with('>') {
+            close(&mut out, hidden_answer, nudges);
+            in_check = false;
+        }
+        if !in_check {
+            out.push_str(line);
+            continue;
+        }
+        let body = line[1..].trim();
+        if body.starts_with("- ") || body.starts_with("* ") {
+            if answers {
+                out.push_str(line);
+            } else {
+                nudges += 1;
+            }
+        } else if body.contains("||") {
+            if answers {
+                let shown = body.replacen("||", "**Answer:** ", 1).replace("||", "");
+                out.push_str(&format!("> {shown}\n"));
+            } else {
+                hidden_answer = true;
+                // Text around the answer (rare) stays; the answer itself does not.
+                let mut kept = String::new();
+                for (i, part) in body.split("||").enumerate() {
+                    if i % 2 == 0 {
+                        kept.push_str(part);
+                    }
+                }
+                if !kept.trim().is_empty() {
+                    out.push_str(&format!("> {}\n", kept.trim()));
+                }
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    if in_check {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        close(&mut out, hidden_answer, nudges);
+    }
+    out
 }
 
 /// `> [!ASIDE] Why a stack?` -> `> **Aside: Why a stack?**` (and the same for the other alert kinds).
@@ -687,5 +777,26 @@ mod tests {
         let (whole, none) = split_hints("no hints here");
         assert_eq!(whole, "no hints here");
         assert!(none.is_empty());
+    }
+
+    const CHECK: &str = "Before.\n\n> [!CHECK] Which page is evicted?\n> ||Page 3, because it is the oldest.||\n>\n> - Which pages are pinned?\n> - Which one came first?\n\nAfter, with `|| x` in code.\n";
+
+    #[test]
+    fn a_check_keeps_its_question_and_hides_its_answer_and_nudges() {
+        let out = plain(CHECK, 80);
+        assert!(out.contains("Which page is evicted?"), "the question is shown: {out}");
+        assert!(!out.contains("[!CHECK]"), "the marker is not printed: {out}");
+        assert!(!out.contains("Page 3"), "the answer stays hidden until asked for: {out}");
+        assert!(!out.contains("pinned"), "the nudges stay hidden until asked for: {out}");
+        assert!(out.contains("--answers"), "the reader is told how to see the answer: {out}");
+        assert!(out.contains("|| x"), "`||` outside a check is ordinary text: {out}");
+    }
+
+    #[test]
+    fn a_check_shows_its_answer_and_nudges_when_asked() {
+        let out = render_with_answers(CHECK, 120, false);
+        assert!(out.contains("Page 3, because it is the oldest."), "{out}");
+        assert!(!out.contains("||Page"), "the spoiler marks are removed: {out}");
+        assert!(out.contains("Which pages are pinned?") && out.contains("Which one came first?"), "{out}");
     }
 }
