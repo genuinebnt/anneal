@@ -80,9 +80,9 @@ export function SpoilerGate({ spoils, children }: { spoils: { link: string; titl
     );
 }
 
-const GROUPS: [CbConnection["kind"], string][] = [["before", "Know first"], ["practise", "Practise"], ["returns", "Where it comes back"], ["project", "In real projects"]];
+export const GROUPS: [CbConnection["kind"], string][] = [["before", "Know first"], ["practise", "Practise"], ["returns", "Where it comes back"], ["project", "In real projects"]];
 
-function Entry({ c }: { c: CbConnection }) {
+export function Entry({ c }: { c: CbConnection }) {
     return (
         <li>
             <p className="cb-conn-t">
@@ -338,9 +338,51 @@ function CompareSide({ side, wrong, id }: { side: Side; wrong: boolean; id: stri
     );
 }
 
+/** The room right of a line of code that fits, so the last character is not against the edge. */
+const SPARE = 8;
+/** From this width a program that does not fit is wrapped; narrower, as on a phone, it scrolls in its box and fades. */
+const WRAP_FROM = 700;
+
+/** How the two programs can be shown without hiding any code: side by side, one under the other, or with lines wrapped. */
+function fit(cmp: HTMLElement) {
+    cmp.dataset.fit = "stack";
+    if (!cmp.clientWidth) return;
+    let need = 0;
+    const range = document.createRange();
+    for (const line of cmp.querySelectorAll(".sd-ln")) {
+        range.selectNodeContents(line.lastElementChild!);
+        const around = getComputedStyle(line);
+        need = Math.max(need, range.getBoundingClientRect().width + line.firstElementChild!.getBoundingClientRect().width + Number.parseFloat(around.paddingRight) + (Number.parseFloat(around.columnGap) || 0) + SPARE);
+    }
+    const side = cmp.querySelector<HTMLElement>(".cb-cmp-side")!;
+    const around = side.offsetWidth - side.querySelector("pre")!.clientWidth;
+    const gap = Number.parseFloat(getComputedStyle(cmp).rowGap) || 0;
+    if ((cmp.clientWidth - gap) / 2 - around >= need) cmp.dataset.fit = "side";
+    else if (cmp.clientWidth - around < need && cmp.clientWidth >= WRAP_FROM) cmp.dataset.fit = "wrap";
+}
+
 function Compare({ data, id }: { data: CompareData; id: string }) {
+    const box = useRef<HTMLDivElement>(null);
+    // again when the width changes (also from nothing, when a fold opens) and when the code's font arrives
+    useLayoutEffect(() => {
+        const cmp = box.current!;
+        let width = cmp.clientWidth;
+        let live = true;
+        fit(cmp);
+        const watch = new ResizeObserver(() => {
+            if (cmp.clientWidth === width) return;
+            width = cmp.clientWidth;
+            fit(cmp);
+        });
+        watch.observe(cmp);
+        void document.fonts.ready.then(() => live && fit(cmp));
+        return () => {
+            live = false;
+            watch.disconnect();
+        };
+    }, [data]);
     return (
-        <div className="cb-cmp" role="group" aria-label={`Wrong and fixed: ${data.wrong.title}, then ${data.fixed.title}`}>
+        <div ref={box} className="cb-cmp" role="group" aria-label={`Wrong and fixed: ${data.wrong.title}, then ${data.fixed.title}`}>
             <div className="cb-cmp-pair">
                 <CompareSide side={data.wrong} wrong id={id} />
                 <CompareSide side={data.fixed} wrong={false} id={id} />

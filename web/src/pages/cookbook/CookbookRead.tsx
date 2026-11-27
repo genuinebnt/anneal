@@ -12,6 +12,7 @@ import { getPref, setPref } from "../../prefs";
 import { KIND_COLOR, sourceKind } from "../sd/SdRead";
 import { CodeViewer } from "./CodeViewer";
 import { Connections, InShort, SpoilerGate, lessonFences } from "./Lesson";
+import { Margin, hasMargin } from "./Margin";
 import { Shelf, anchorOf, isCodeKind, kindLabel, scrollToId, subjectPath, tint, topicsOf, useCookbook } from "./shared";
 import { Inline, plain } from "../../components/InlineMd";
 import { Crumbs } from "../../components/Crumbs";
@@ -300,6 +301,7 @@ function Article({ page, wrap, onWrap }: { page: CbPage; wrap: boolean; onWrap: 
             })}
             {!isCodeKind(page.kind) && labs}
             {!!page.connections?.length && <Connections list={page.connections} />}
+            {hasMargin(page) && <Margin page={page} />}
             {page.sources.length > 0 && (
                 <section className="cb-sources" id="cb-sources">
                     <h2>Go deeper</h2>
@@ -389,7 +391,7 @@ export function CookbookRead({ id }: { id: string }) {
                         {page && book.data && <Shelf data={book.data} subject={page.subject} current={page.id} />}
                     </aside>
                     {drawer && <div className="cb-scrim" onClick={() => setDrawer(false)} />}
-                    <article className={`cb-art${page && isCodeKind(page.kind) ? " cb-code-page" : ""}`} onClick={follow}>
+                    <article className={`cb-art${page && isCodeKind(page.kind) ? " cb-code-page" : ""}${page && hasMargin(page) ? " has-margin" : ""}`} onClick={follow}>
                         {view.isError && missing && <p className="cb-note" role="alert">There is no cookbook page at this address. <Link to="/cookbook">Go to the cookbook</Link></p>}
                         {view.isError && !missing && <p className="cb-note" role="alert">This page could not be loaded. <button type="button" className="cb-link" onClick={() => void view.refetch()}>Try again</button></p>}
                         {view.isPending && <p className="cb-note">Loading…</p>}

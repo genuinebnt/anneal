@@ -281,35 +281,66 @@ html.cb-noscroll{overflow:hidden}
 .cb-glance dt{font:600 12px var(--mono);color:var(--dim)}
 .cb-glance dd{margin:3px 0 0;font-size:14px}
 
-/* ---- the page's two widths ----
-   Everything in the article is centred between the side panels, on one of two widths. Reading (the head, headings, prose,
-   notes and cards) keeps to a column about 80 characters wide. Blocks that need room (code beside its words, the file
-   viewer, two programs side by side, code with long lines; on pages that are not lessons also all code, tables and diagrams) may be wider, by the
-   same amount on each side. A new block is as narrow as the text until it is named here. */
-.cb-art>*{--wide:100cqi;--text:100cqi}
-@container (min-width:700px){
-    /* when there is room, the two widths differ by enough to look meant */
-    .cb-art>*{--wide:min(1240px,100cqi);--text:min(calc(var(--fs) * 39),100cqi - 64px)}
+/* ---- one frame ----
+   The article sits in one frame, centred between the side panels, and everything starts at the frame's left edge. Text,
+   notes and cards keep to a column about 80 characters wide; blocks that need room (code beside its words, the file viewer,
+   two programs side by side, code with long lines; on pages that are not lessons also tables and diagrams) span the frame.
+   When the window is wide enough, the frame also holds a column beside the text (pages/cookbook/Margin.tsx). A new block is
+   as narrow as the text until it is named here. */
+.cb-art{position:relative}
+.cb-art>*{--frame:min(100cqi,calc(var(--fs) * 42));--text:min(100cqi,calc(var(--fs) * 40));--side:340px}
+.cb-art>.cb-margin{display:none}
+/* in one column, pages with free-form code (which only scrolls) give it all the room between the panels */
+.cb-read:not(.cb-lesson) .cb-art>*{--frame:min(100cqi,calc(var(--fs) * 52))}
+@container (min-width:1100px){
+    /* nothing to put beside the text: one column and no empty one beside it; code and tables are the wider part */
+    .cb-art>*,.cb-read:not(.cb-lesson) .cb-art>*{--frame:min(100cqi,calc(var(--fs) * 46));--text:min(100cqi,calc(var(--fs) * 40))}
+    .cb-art.has-margin>*,.cb-read:not(.cb-lesson) .cb-art.has-margin>*{--frame:min(100cqi,1480px);--text:min(calc(var(--fs) * 40),var(--frame) - 388px);--side:clamp(340px,var(--frame) - var(--text) - 96px,480px)}
+    .cb-art.has-margin>.cb-margin{display:block}
 }
-.cb-art>*{box-sizing:border-box;width:var(--wide);margin-inline:auto}
-.cb-art>:not(.cb-sec,.cb-lab,.cb-methods){width:var(--text)}
+.cb-art>:not(.cb-margin){box-sizing:border-box;width:var(--frame);margin-inline:auto}
+.cb-art>:is(.cb-sum,.cb-short,.cb-glance,.cb-all,.cb-note){width:var(--text);margin-left:calc((100cqi - var(--frame)) / 2);margin-right:auto}
+/* the title and the line under it span the frame; the longer text of the head is text */
+.cb-art .cb-head :is(.cb-dek,.cb-topics,.cb-head>.cb-dim){max-width:var(--text)}
 /* the same inside the parts that hold both kinds: a section, the code block and a fold, and the prose in each. Only the page's
    own flow is sized, never what is inside a block. (The specificity beats each block's own side margins.) */
 .cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:not(summary,.sd-md,.cb-methods),
-.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>*{box-sizing:border-box;max-width:var(--text);margin-inline:auto}
+.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>*{box-sizing:border-box;max-width:var(--text);margin-inline:0 auto}
 .cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.cb-view,.cb-out,.cb-methods,.cb-cmp,.cb-walk,.sd-code.sd-long,.sd-deeper[open]:has(.cb-cmp,.cb-walk,.cb-view,.sd-long)),
-.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.cb-cmp,.cb-walk,.sd-code.sd-long){max-width:var(--wide)}
-.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.sd-code,.sd-tbl,pre,.sd-steps-fig,.sd-deeper[open]:has(.sd-code,.sd-tbl,table)),
-.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-code,.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,table.cb-g-cheat){max-width:var(--wide)}
-/* "Full window" is the whole window, whatever column the viewer came from */
-.cb-art .cb-view.full{width:auto!important;max-width:none!important;margin:0!important}
-@media (min-width:1900px){
+.cb-read .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.cb-cmp,.cb-walk,.sd-code.sd-long){max-width:100%}
+.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>:is(.sd-tbl,pre,.sd-steps-fig,.sd-deeper[open]:has(.sd-tbl,table)),
+.cb-read:not(.cb-lesson) .cb-art :is(.cb-sec,.cb-lab,.sd-deeper)>.sd-md>:is(.sd-tbl,pre,table,.sd-steps-fig,.cb-g-tt,.cb-g-fig,.cb-g-pipe-wrap,.cb-g-rmap,.cb-g-hub,.cb-g-repo,.cb-g-ladder,table.cb-g-cheat){max-width:100%}
+
+/* ---- beside the text ---- */
+.cb-art>.cb-margin{position:absolute;top:0;bottom:0;right:calc((100% - var(--frame)) / 2);width:var(--side);pointer-events:none;font-size:14px;line-height:1.6}
+.cb-m-slot{display:none;position:absolute;left:0;right:0}
+.cb-m-card{pointer-events:auto;padding:16px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);overflow-wrap:anywhere}
+.cb-art .cb-m-card h3{margin:0 0 12px;font:600 12px var(--mono);color:var(--dim)}
+.cb-art .cb-m-card ul{display:grid;gap:12px;margin:0;padding:0;list-style:none}
+.cb-art .cb-m-card li{margin:0}
+.cb-art .cb-m-card p{margin:0;font-size:13.5px;line-height:1.6;color:var(--mut)}
+.cb-art .cb-m-card .cb-conn-t{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-bottom:4px;font-size:14.5px;font-weight:600;color:var(--fg)}
+.cb-art .cb-m-card a{min-height:24px;display:inline-block;color:var(--c);text-decoration:none}
+.cb-art .cb-m-card a:hover{text-decoration:underline;text-underline-offset:3px}
+.cb-m-card em:not(.cb-kind){display:block;font:600 12px var(--mono);font-style:normal}
+
+/* larger type on a wider screen, so a wider column still holds about as many characters */
+@media (min-width:1400px){
     .cb-art{--fs:18px}
     .cb-read.big .cb-art{--fs:20px}
 }
-/* on a very wide screen the panels stay near what they describe: the page stops growing and sits in the middle */
-.cb-bar,.cb-lay{max-width:1920px;margin-inline:auto}
-
+@media (min-width:1900px){
+    .cb-art{--fs:20px}
+    .cb-read.big .cb-art{--fs:22px}
+}
+/* "Full window" is the whole window, whatever column the viewer came from */
+.cb-art .cb-view.full{width:auto!important;max-width:none!important;margin:0!important}
+@media (min-width:1900px){
+    .cb-read .cb-lay,.cb-read.cb-lesson:not(.no-left):not(.no-right) .cb-lay{grid-template-columns:300px minmax(0,1fr) 280px}
+    .cb-read.no-left .cb-lay{grid-template-columns:minmax(0,1fr) 280px}
+    .cb-read.no-right .cb-lay{grid-template-columns:300px minmax(0,1fr)}
+    .cb-read.no-left.no-right .cb-lay{grid-template-columns:minmax(0,1fr)}
+}
 @media (max-width:1180px){
     .cb-lay,.cb-read.no-left .cb-lay,.cb-read.no-right .cb-lay,.cb-read.no-left.no-right .cb-lay{grid-template-columns:minmax(0,1fr)}
     .cb-wide{display:none}

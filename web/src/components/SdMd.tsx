@@ -158,7 +158,7 @@ function MathBlock({ tex }: { tex: string }) {
 }
 
 /** About the most columns of code that fit a column of text. */
-const LONG_LINE = 74;
+const LONG_LINE = 78;
 
 /** Code with its language, a file name, tabs when several blocks form a group, Copy, and line numbers that copy a link to the
  *  line (`#<block>-L13`); a link like that opens with the line lit. */

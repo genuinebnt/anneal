@@ -168,7 +168,7 @@ test("On a wide screen notes keep the reading column, and code and tables are ne
         const found = await page.evaluate(() => {
             const widths = (sel: string) => [...document.querySelectorAll(sel)].map((e) => Math.round(e.getBoundingClientRect().width)).filter((w) => w > 0);
             return {
-                column: widths(".cb-art > .cb-head")[0]!,
+                column: Math.max(0, ...widths(".cb-sec > .sd-md > p")),
                 // the page's own flow only: a note or a paragraph inside a card is the card's business
                 reading: widths(".cb-sec > .sd-call, .cb-sec > .sd-md > .sd-call, .cb-sec > .sd-md > p"),
                 code: widths(".cb-sec > .sd-code, .cb-sec > .sd-md > .sd-tbl, .cb-art > .cb-lab > .cb-view"),

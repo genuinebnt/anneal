@@ -9,12 +9,18 @@ the date below. Do not let it drift: a wrong line here costs the next agent more
 
 Last updated: **2026-11-02** (SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
 
-## Cookbook pages: balanced width (local, not released; 2026-11-27)
+## Cookbook pages: one frame (local, not released; 2026-11-27)
 
-Every Cookbook reading page now centres its article on two widths: a reading column of about 80 characters, and a wider
-tier (up to 1240px) for compare, walkthrough, file viewer and long code (on pages that are not lessons: all code, tables
-and diagrams). Above 1920px the panels and article stay together in the middle. Rules: `cookbook.css`, "the page's two
-widths". A new wide block must be named there. Layout tests are in `e2e/cookbook-lesson.spec.ts`.
+After an independent review of the first balanced-width commit. Each reading page has one frame (up to 1480px) between the
+side panels, which sit at the page edges, and one left edge for the title, text and wide blocks. Text keeps to about 40
+times its size (17, 18 from 1400px, 20 from 1900px). From a 1100px article, pages with connections or sources get a column
+beside the text (`pages/cookbook/Margin.tsx`): its cards are placed in the stretches no wide block crosses, and stay in
+sight there. It repeats links from the lists at the end (never exact exercises). A comparison is side by side only when
+both programs fit, and wraps rather than clip from 700px (`fit` in `Lesson.tsx`). Rules: `cookbook.css`, "one frame". A new
+wide block must be named there. Tests: `e2e/cookbook-lesson.spec.ts`.
+
+Limits: once a page's cards are used up, the room beside later text is empty; free-form code on pages that are not
+lessons still scrolls in its box when it is wider than a single column.
 
 ## UI review, round two (local, not released; 2026-11-27)
 

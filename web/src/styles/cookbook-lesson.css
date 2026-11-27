@@ -90,6 +90,12 @@
 .cb-lesson .cb-art .cb-walk .cb-view-code.sd-code{min-height:0;margin:0}
 .cb-lesson .cb-art .cb-walk .cb-view-code pre{font-size:13px}
 .cb-lesson .cb-art .cb-sec .sd-code pre{font-size:13px}
+/* a snippet's line that does not fit wraps rather than runs out of sight; on a phone code scrolls, as everywhere */
+@media (min-width:701px){
+    .cb-lesson .cb-art .sd-code:not(.cb-cmp .sd-code) .sd-ln{grid-template-columns:46px minmax(0,1fr);width:auto}
+    .cb-lesson .cb-art .sd-code:not(.cb-cmp .sd-code) .sd-ln>span{white-space:pre-wrap;overflow-wrap:anywhere}
+    .cb-lesson .cb-art .sd-code:not(.cb-cmp .sd-code) .sd-lnum{align-self:start;line-height:inherit}
+}
 .cb-lesson .cb-art .cb-walk .cb-view-code .sd-ln{grid-template-columns:52px minmax(0,1fr);width:auto;padding-right:12px}
 .cb-lesson .cb-art .cb-walk .sd-ln>span:last-child{white-space:pre-wrap;overflow-wrap:anywhere}
 .cb-walk pre:focus-visible,.cb-walk-steps button:focus-visible{outline-offset:-2px}
@@ -117,10 +123,12 @@
 /* ---- wrong and fixed ---- */
 .cb-cmp{display:grid;gap:12px;margin:28px 0;clear:both}
 .cb-cmp-pair{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+/* side by side only when both programs fit (Lesson.tsx measures them), with the titles, code and results on shared rows */
+.cb-cmp[data-fit="side"] .cb-cmp-pair{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto auto auto}
+.cb-cmp[data-fit="side"] .cb-cmp-pair>.cb-cmp-side{grid-row:span 3;grid-template-rows:subgrid}
 @container lesson (min-width:1040px){
-    /* side by side, with the titles, code and results on shared rows */
-    .cb-cmp-pair{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto auto auto}
-    .cb-cmp-pair>.cb-cmp-side{grid-row:span 3;grid-template-rows:subgrid}
+    .cb-lesson.wrap .cb-cmp-pair{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto auto auto}
+    .cb-lesson.wrap .cb-cmp-pair>.cb-cmp-side{grid-row:span 3;grid-template-rows:subgrid}
 }
 .cb-cmp-side{display:grid;align-content:start;gap:12px;min-width:0;padding:16px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
 .cb-cmp-side.wrong{--k:var(--bad)}
@@ -131,9 +139,10 @@
 /* code keeps its indentation and scrolls in its own box, with no bar; it wraps only when "Wrap code" is on */
 .cb-lesson .cb-art .cb-cmp pre[data-more]{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}
 .cb-lesson .cb-art .cb-cmp pre:focus-visible{outline-offset:-2px;-webkit-mask-image:none;mask-image:none}
-.cb-lesson.wrap .cb-art .cb-cmp .sd-ln{grid-template-columns:46px minmax(0,1fr);width:auto}
-.cb-lesson.wrap .cb-art .cb-cmp .sd-ln>span{white-space:pre-wrap;overflow-wrap:anywhere}
-.cb-lesson.wrap .cb-art .cb-cmp .sd-lnum{align-self:start;line-height:inherit}
+/* also where a program is wider than a whole wide column: its lines wrap rather than run out of sight */
+.cb-lesson.wrap .cb-art .cb-cmp .sd-ln,.cb-lesson .cb-art .cb-cmp[data-fit="wrap"] .sd-ln{grid-template-columns:46px minmax(0,1fr);width:auto}
+.cb-lesson.wrap .cb-art .cb-cmp .sd-ln>span,.cb-lesson .cb-art .cb-cmp[data-fit="wrap"] .sd-ln>span{white-space:pre-wrap;overflow-wrap:anywhere}
+.cb-lesson.wrap .cb-art .cb-cmp .sd-lnum,.cb-lesson .cb-art .cb-cmp[data-fit="wrap"] .sd-lnum{align-self:start;line-height:inherit}
 .cb-lesson .cb-art .cb-cmp h4{margin:0 0 4px;font:600 12px var(--mono);color:var(--dim)}
 .cb-lesson .cb-art .cb-cmp .sd-md{font-size:15px;line-height:1.7}
 .cb-lesson .cb-art .cb-cmp .sd-md>p{margin-bottom:8px}
@@ -141,6 +150,10 @@
 .cb-cmp-take{padding:16px 20px;border-radius:14px;border:1px solid color-mix(in oklab,var(--c) 30%,transparent);background:color-mix(in oklab,var(--c) 7%,var(--panel))}
 
 /* ---- connections ---- */
+@container lesson (min-width:1100px){
+    .cb-lesson .cb-art .cb-conn-groups{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+    .cb-lesson .cb-art .cb-conn-group:last-child:nth-child(odd){grid-column:auto}
+}
 .cb-conn-groups{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
 /* pairs, with an odd last card across both, so no card is left alone beside empty space */
 @container lesson (min-width:620px){
@@ -174,7 +187,7 @@
 .cb-lesson .cb-art .cb-spoil>.cb-view{margin-top:12px}
 
 /* at laptop width the side panels are a little narrower than on other cookbook pages, so the code has more room */
-@media (min-width:1181px){
+@media (min-width:1181px) and (max-width:1899px){
     .cb-read.cb-lesson:not(.no-left):not(.no-right) .cb-lay{grid-template-columns:252px minmax(0,1fr) 224px}
 }
 @media (max-width:640px){
