@@ -20,7 +20,6 @@ pub fn upper_bound(slice: &[i64], key: i64) -> usize {
     let (mut lo, mut hi) = (0, slice.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        // TODO(2a-c2): this looks right and has a bug; find it and fix it
         if slice[mid] < key {
             lo = mid + 1;
         } else {

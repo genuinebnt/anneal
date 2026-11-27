@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 A wrong split loses or duplicates a key, and the tree still looks plausible until a lookup for that key fails, much later. The difference between leaf and inner splits is the classic place for it.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||An inner node kept the separator in its right half. In an inner split the separator moves up and is in neither node, so the right half starts at `mid + 1`; only a leaf keeps a copy.||
+
 ## The contract
 
 - The left node gets the first `(len + 1) / 2` keys.

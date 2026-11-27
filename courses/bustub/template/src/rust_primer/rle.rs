@@ -19,7 +19,6 @@ pub fn rle_encode(data: &[u8]) -> Vec<u8> {
         while i + run < data.len() && data[i + run] == byte {
             run += 1;
         }
-        // TODO(r-c2): this looks right and has a bug; find it and fix it
         out.push(run as u8);
         out.push(byte);
         i += run;

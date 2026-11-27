@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-The three ranking functions differ only in what ties do: `ROW_NUMBER` ignores them (1,2,3,4), `RANK` gives ties the same number and **skips** (1,1,3,4), `DENSE_RANK` gives ties the same number and **does not skip** (1,1,2,3). Confusing the last two is the standard mistake, and it only shows when the data has ties.
+The three ranking functions differ only in what ties do, so a mistake between them shows only when the data has ties.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`rank` added one at each new key, which is `DENSE_RANK` (1,1,2,3). `RANK` skips after ties (1,1,3,4): a new key's rank is its position, `i + 1`.||
 
 ## The contract
 

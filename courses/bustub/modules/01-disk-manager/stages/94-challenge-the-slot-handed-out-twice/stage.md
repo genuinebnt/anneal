@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 A free list that is not defended against misuse eventually corrupts data: two pages that think they own the same place overwrite each other, and nothing reports it. The invariant (every live slot has one owner) is simple; what is hard is realising which call can break it.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`free` accepted any slot: one never handed out, or one already free. Freeing the same slot twice put it on the free list twice, so two later allocations received it. The fix refuses both.||
+
 ## The contract
 
 - `allocate()` returns a slot not currently in use: a freed one if there is one, otherwise the next fresh one.

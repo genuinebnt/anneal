@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 LRU-K lives on this one number, and an error of a single access in it is invisible in a demo and changes which page is evicted in production. Bugs like this are found by writing the definition down in the test as plainly as possible and comparing.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The history kept `k + 1` access times instead of `k`, so the access it reported as the k-th most recent was one access too old. An off-by-one in the trim condition: trim when the length exceeds `k`.||
+
 ## The contract
 
 - After any number of accesses, `k_distance(now)` is `now` minus the time of the k-th most recent access, or `None` when fewer than `k` have been recorded.

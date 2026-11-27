@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-This is the Halloween problem, named for the night in 1976 that IBM engineers saw it: an update that moves a row ahead of the scan finds it again and updates it again. The cure is one of two things: scan only what existed when the scan started, or collect the updates first and apply them afterwards.
+This bug has a name and a date: IBM engineers first saw it in 1976, and every database that updates rows by moving them has to defend against it.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The Halloween problem: the scan ran to the *current* end of the heap, so a raised row appended at the end was found again and raised again. Scan only the rows that existed when the scan started, or collect the updates first and apply them afterwards.||
 
 ## The contract
 

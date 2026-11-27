@@ -21,7 +21,6 @@ impl Gate {
         *self.open.lock().unwrap() = true;
         // @begin 1b-c2
         self.changed.notify_all();
-        //~ // TODO(1b-c2): this looks right and has a bug; find it and fix it
         //~ self.changed.notify_one();
         // @end
     }

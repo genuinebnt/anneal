@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 Overflow bugs are invisible for years and then corrupt a file at the 4 GiB mark or the 16 EiB mark. In a storage engine the result is a write to the wrong place. Rust's `checked_*` operations make the intent explicit; the exercise is to notice where it was missing.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Rounding up computed `bytes + page_size - 1`, which overflows near `u64::MAX`; `wrapping_add` hid the overflow by wrapping to a small number, so the page count came out tiny instead of failing. `div_ceil` rounds up without the addition.||
+
 ## The contract
 
 - `page_offset(page, page_size)` is `page * page_size`, or `None` if it does not fit in a `u64` or `page_size` is 0.

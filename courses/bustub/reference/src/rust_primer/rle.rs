@@ -27,7 +27,6 @@ pub fn rle_encode(data: &[u8]) -> Vec<u8> {
             out.push(byte);
             left -= n;
         }
-        //~ // TODO(r-c2): this looks right and has a bug; find it and fix it
         //~ out.push(run as u8);
         //~ out.push(byte);
         // @end

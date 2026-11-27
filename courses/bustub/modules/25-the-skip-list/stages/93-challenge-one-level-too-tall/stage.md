@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-The loop `while flip() { level += 1 }` is half the code of a skip list and the half most often written without its bound: with the bound on the wrong side of the comparison, the failure waits for `max` consecutive heads, which at 14 levels and a fair coin is once in sixteen thousand nodes. A test that controls the coin makes it a certainty.
+The loop that draws a height is half the code of a skip list, and the half most often written with its bound wrong. The failure is rare (at 14 levels and a fair coin, about once in sixteen thousand nodes), and a test that controls the coin makes it a certainty.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The bound was checked as `level <= max`, so a run of heads could reach `max + 1`. It must be `level < max`, checked before flipping.||
 
 ## The contract
 

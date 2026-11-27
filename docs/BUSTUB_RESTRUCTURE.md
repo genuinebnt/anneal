@@ -93,7 +93,7 @@ The owner's rule (2026-10-09): *"concepts teach me useful rust things that I can
 - **Deterministic by default.** Fixed seeds in CI (`PROPTEST_CASES` and a stored seed), random seeds locally with the failing seed printed so it can be replayed.
 - **Budgets, not just answers.** Where a cost model is the lesson (ARC `O(1)`, LRU-K `O(log n)`, hash directory growth), a test fails if the operation count or wall time exceeds a generous bound at a large size.
 - **No private access.** If a property needs to observe more than the public API gives, the API gets a public *observer* with BusTub's name (`get_db_file_size`, `get_num_writes`, `get_pin_count`, `size`), never a back door into internals.
-- **Hidden tests are fine; hidden requirements are not.** The Tests section names every property in words; the code is visible in the repo.
+- **No hidden tests, no hidden requirements** (owner, 2026-11-27: "all tests are public"). Every test the course runs is in the learner's repo, and the Tests section names every property in words.
 
 ## 6. The component map (BusTub's parts, new internals)
 

@@ -42,7 +42,6 @@ impl Directory {
     /// bucket is already as deep as the directory, the directory doubles first (the new half is a copy of the old one).
     pub fn split(&mut self, bucket: usize) -> usize {
         if self.depth[bucket] == self.global_depth {
-            // TODO(2b-c2): this looks right and has a bug; find it and fix it
             let copy: Vec<usize> = self.slots.iter().rev().copied().collect();
             self.slots.extend(copy);
             self.global_depth += 1;

@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Set operations are specified by counts, and an implementation by sorting and scanning is short enough to look obviously right. The bugs that survive are the ones that are right for the inputs you thought of: most small hand-picked examples come in sorted, or have duplicates next to each other, and the failing case is the one that does not. A property that states the law ("the result has no duplicates") finds it in a second.
+Set operations are specified by counts, and an implementation by sorting and scanning is short enough to look obviously right. The bugs that survive are right for the inputs you thought of, and a property that states the law finds them in a second.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`union` removed duplicates before sorting, and `dedup` removes only *adjacent* equal values, so duplicates that were not next to each other survived. Sort first, then dedup.||
 
 ## The contract
 

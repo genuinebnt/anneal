@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-A version is garbage only if no reader, now or later, can pick it. The subtle one is the newest version at or below the watermark: it is the *oldest* version a reader at the watermark may still need, so it must stay, and everything older goes. Dropping it as well produces a database that works until the one transaction that held back the watermark reads.
+A version is garbage only if no reader, now or later, can pick it. Collecting one version too many gives a database that works until the one transaction holding back the watermark reads.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||It dropped every version at or below the watermark. The newest of those is the version a reader at the watermark sees, so it stays; only the versions older than it are garbage.||
 
 ## The contract
 

@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Without the stop, readers keep arriving, each compatible with the current readers, and the writer at the head of the queue never runs: starvation. Fairness is one control-flow keyword, and this is the version of it that is easy to get wrong because the loop still produces plausible answers.
+Readers keep arriving, each compatible with the current readers, and a rule that lets them in can keep the writer at the head of the queue waiting forever. That is starvation, and the loop that causes it still produces plausible answers.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||On a request it could not grant, the scan used `continue` and went on, so later compatible readers were granted ahead of the waiting writer. Fairness is `break`: stop at the first request that cannot be granted.||
 
 ## The contract
 

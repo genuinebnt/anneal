@@ -46,7 +46,6 @@ impl FrameReplacer for FifoReplacer {
             if self.evictable.remove(&frame) {
                 self.evictable_count -= 1;
             }
-            //~ // TODO(1c-c2): this looks right and has a bug; find it and fix it
             //~ self.evictable.remove(&frame);
             // @end
         }

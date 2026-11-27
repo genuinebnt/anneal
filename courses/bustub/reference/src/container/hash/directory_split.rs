@@ -45,7 +45,6 @@ impl Directory {
             // @begin 2b-c2
             let copy = self.slots.clone();
             self.slots.extend(copy);
-            //~ // TODO(2b-c2): this looks right and has a bug; find it and fix it
             //~ let copy: Vec<usize> = self.slots.iter().rev().copied().collect();
             //~ self.slots.extend(copy);
             // @end

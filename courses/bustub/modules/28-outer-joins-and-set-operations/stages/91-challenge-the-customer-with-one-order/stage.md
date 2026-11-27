@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-The report is the reason outer joins exist, and the wrong number is the most common bug written with them. After a LEFT join a customer with no orders is one row whose order columns are NULL. `count(*)` counts rows, so it says 1; `count(b.id)` counts non-NULL values, so it says 0. Nothing crashes and every customer with at least one order is right, which is why the bug survives review.
+The report is the reason outer joins exist, and the wrong number is the most common bug written with them. Nothing crashes and every customer with at least one order is right, which is why the bug survives review.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||It counted every joined row, including the NULL-padded row a customer without orders gets, so those customers showed 1. That is `count(*)`; the report needs `count(b.id)`, which skips NULLs.||
 
 ## The contract
 

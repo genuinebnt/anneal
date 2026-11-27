@@ -26,7 +26,6 @@ pub fn upper_bound(slice: &[i64], key: i64) -> usize {
         } else {
             hi = mid;
         }
-        //~ // TODO(2a-c2): this looks right and has a bug; find it and fix it
         //~ if slice[mid] < key {
         //~     lo = mid + 1;
         //~ } else {

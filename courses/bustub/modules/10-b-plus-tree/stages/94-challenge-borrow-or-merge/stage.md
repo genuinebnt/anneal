@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Merging is the more expensive and more disruptive repair: it removes a node and a separator from the parent, and may cascade upwards. A tree that merges whenever it *can* instead of only when it *must* is correct, slow, and shaped differently from the one the tests describe. The fix is in the order of two checks.
+Merging is the more expensive and more disruptive repair: it removes a node and a separator from the parent, and may cascade upwards. A tree that merges whenever it *can* instead of only when it *must* is correct, slow, and shaped differently from the one the tests describe.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The merge checks came before the borrow checks, so a node merged whenever the sizes allowed it, even when a sibling had a key to spare. Borrow first; merge only when no sibling is above its minimum.||
 
 ## The contract
 

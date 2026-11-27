@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 A buffer pool lives on this mapping, and two maps that mirror each other are a classic source of bugs: every operation has to update both, and the one that forgets leaves a stale entry that is only noticed when a frame is reused. The invariant to test is the mirror itself.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Removing a page dropped it from the page-to-frame map and left the frame-to-page entry behind, so the frame still claimed the old page. Both halves of the mirror change together.||
+
 ## The contract
 
 - `insert(page, frame)` records that `frame` holds `page`; if the page was in another frame, or the frame held another page, the old pairing is dropped.

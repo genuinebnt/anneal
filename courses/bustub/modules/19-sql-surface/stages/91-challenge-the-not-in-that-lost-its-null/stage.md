@@ -2,11 +2,14 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## What to fix
 
-`not_in` in `src/execution/not_in.rs` evaluates `x NOT IN (list)` for a value and a list that may contain NULLs. A well-meant simplification, "NULLs can never match, so drop them first", makes it return TRUE where SQL says unknown. Find the bug and fix it.
+`not_in` in `src/execution/not_in.rs` evaluates `x NOT IN (list)` for a value and a list that may contain NULLs. It looks right, and for some lists it returns TRUE where SQL says the answer is unknown. Find the bug and fix it.
 
 ## Why
 
-This is the most common wrong answer a hand-written NOT IN produces, and it is wrong in the direction that looks right: the NULL cannot equal anything, so ignoring it seems harmless. What it throws away is the *possibility* that the value equals something unknown, which is exactly what makes SQL return no rows. A query that is wrong only when a list happens to contain a NULL is the kind that works for years.
+A `NOT IN` that is wrong only when the list happens to contain a NULL is the kind of query that works for years, and it is wrong in the direction that looks right.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||It dropped the NULLs from the list first, on the reasoning that a NULL can never match. But a NULL in the list means `x` *might* equal it, so when `x` matches no known value the answer is unknown, not TRUE, and SQL returns no rows.||
 
 ## The contract
 

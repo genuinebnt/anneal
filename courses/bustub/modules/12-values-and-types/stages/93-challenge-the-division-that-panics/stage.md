@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-A query engine must never crash on data: `SELECT -2147483648 / -1` is a legal statement, and the only integer division that overflows is exactly that one. Rust panics in debug builds and wraps in release, both wrong for a database. The fix is a single method, and finding which one is the exercise.
+A query engine must never crash on data: every statement a user can type returns a result or an error. Rust panics on integer overflow in debug builds and wraps in release, and both are wrong for a database. Finding which operation is the exercise.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Division: `i32::MIN / -1` (`SELECT -2147483648 / -1`) is the one integer division that overflows, and plain `/` panics on it. `checked_div` turns it into an error.||
 
 ## The contract
 

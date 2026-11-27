@@ -60,7 +60,7 @@ None for this stage. The *Other designs* sections of 1d-01 to 1d-03 list the alt
 
 ## In BusTub
 
-`lru_k_replacer_test.cpp` is the public sample for the project; the course's autograder runs more. The scenario is the best short introduction to what `Evict`, `SetEvictable` and `Remove` must do together.
+`lru_k_replacer_test.cpp` is the public sample for CMU's project (their autograder runs more cases). Here nothing is hidden: the stage tests before this boss are the rest, and every one is in your repo. The scenario is the best short introduction to what `Evict`, `SetEvictable` and `Remove` must do together.
 
 ## The C/C++ way
 

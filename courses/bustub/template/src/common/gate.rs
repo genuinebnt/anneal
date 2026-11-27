@@ -19,7 +19,6 @@ impl Gate {
     /// Opens the gate for everyone: waiting threads go on, and later waiters do not wait at all.
     pub fn open(&self) {
         *self.open.lock().unwrap() = true;
-        // TODO(1b-c2): this looks right and has a bug; find it and fix it
         self.changed.notify_one();
     }
 

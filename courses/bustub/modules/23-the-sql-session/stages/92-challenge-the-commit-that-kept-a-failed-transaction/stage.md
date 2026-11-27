@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Every other mistake in a transaction state machine is loud: a refused statement, a warning. This one is silent, and it is the worst thing a database can do: report `COMMIT` for a transaction that was rolled back, so the application carries on believing its changes are durable. A table of transitions you can read at a glance, and a property over sequences, is how this class of bug is found before a customer does.
+Every other mistake in a transaction state machine is loud: a refused statement, a warning. This one is silent, and it is the worst thing a database can do: it lets an application carry on believing its changes are durable.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`COMMIT` in a failed transaction replied `COMMIT`. The transaction is rolled back, so the reply must be `ROLLBACK`, as PostgreSQL does.||
 
 ## The contract
 

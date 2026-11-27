@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Offset arrays are how every variable-length format finds a field in constant time, and the slip is always the same: a column's start is the *previous* column's end (and 0 for the first), not its own entry. The error shows as one column holding the tail of another.
+Offset arrays are how every variable-length format finds a field in constant time, and a slip in them does not crash: it shows as one column holding the tail of another.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Column `i` started at its own end offset instead of at the previous column's end (0 for the first column), so it sliced the wrong range.||
 
 ## The contract
 

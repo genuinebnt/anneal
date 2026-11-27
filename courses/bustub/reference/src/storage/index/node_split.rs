@@ -18,7 +18,6 @@ pub fn split_keys(keys: &[i64], is_leaf: bool) -> Split {
     let separator = keys[mid];
     // @begin 2c-c2
     let right = if is_leaf { keys[mid..].to_vec() } else { keys[mid + 1..].to_vec() };
-    //~ // TODO(2c-c2): this looks right and has a bug; find it and fix it
     //~ let right = keys[mid..].to_vec();
     // @end
     Split { left, separator, right }

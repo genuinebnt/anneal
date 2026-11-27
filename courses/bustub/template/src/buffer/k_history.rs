@@ -18,7 +18,6 @@ impl KHistory {
     /// An access at time `ts` (times never go backwards).
     pub fn record(&mut self, ts: u64) {
         self.times.push_back(ts);
-        // TODO(1d-c2): this looks right and has a bug; find it and fix it
         if self.times.len() > self.k + 1 {
             self.times.pop_front();
         }

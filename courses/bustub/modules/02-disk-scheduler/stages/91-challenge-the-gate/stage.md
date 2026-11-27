@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 A concurrency bug rarely announces itself: the code passes when one thread waits and fails when several do, and the symptom is a program that never finishes, not an error. Learning to read "something is still waiting" and ask *who should have woken it* is the skill.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Opening the gate woke one waiter (`notify_one`); every other thread waiting at it slept on. A gate that stays open must wake everyone: `notify_all`.||
+
 ## The contract
 
 - `wait` returns once the gate is open, for every thread that waits, however many, and for threads that arrive after it was opened.

@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Every sorted page does this shift, and the bug is as old as `memcpy`: copying a range onto an overlapping range of itself from the front smears the first element over the rest. In C the cure is `memmove`; in Rust it is `copy_within`, or a loop that goes the other way.
+Every sorted page does this shift: a leaf, a bucket, a slot directory. A shift that goes wrong does not crash; it copies one entry over its neighbours, and the page still looks well formed.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The loop copied from the front: `arr[i + 1] = arr[i]` for rising `i` overwrites each element before it is moved, smearing `arr[at]` over the rest. An overlapping copy needs `memmove` semantics: `copy_within`, or a loop that runs from the back.||
 
 ## The contract
 

@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-With tombstones, a leaf may be entirely dead, and an iterator that handles tombstones inside a leaf can still mishandle a whole leaf of them. Scans that end early do not fail: they return fewer rows.
+With tombstones, the shape of the live data is no longer the shape of the leaves. Scans that end early do not fail: they return fewer rows.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||On reaching the next leaf the iterator looked only at that leaf's first slot and ended the scan if it was a tombstone, so a leaf starting with a tombstone (or entirely dead) cut the scan short. One loop that skips tombstones and exhausted leaves alike fixes it.||
 
 ## The contract
 

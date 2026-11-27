@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Almost every key in a half-empty table sits before the end, so the code works in every small test and then, one key in `capacity / run-length`, a probe run crosses the end and the distance comes out huge or panics. Circular arithmetic is where `a - b` stops being the distance, and the cure is to add the modulus before subtracting.
+Almost every key in a half-empty table sits before the end, so the code works in every small test, and then one probe run crosses the end.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||For a key that wrapped (its slot before its home), it returned `home - slot`, the distance backwards. Circular distance is `(slot + capacity - home) % capacity`.||
 
 ## The contract
 

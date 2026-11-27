@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-A sketch you can merge is a CRDT: the merged value must be the same however the data was split and however often the parts are combined. That holds only if the merge is **idempotent**, and the one-word difference between "take the larger register" and "add the registers" is the difference between a sketch of the union and a number that grows every time two replicas talk.
+A sketch you can merge is a CRDT: the merged value must be the same however the data was split and however often the parts are combined. A merge that gets this wrong turns a sketch of the union into a number that grows every time two replicas talk.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Merge added the registers. A register is a maximum (the longest run of leading zeros seen), so merging takes the larger of each pair: `max` is idempotent, addition is not.||
 
 ## The contract
 

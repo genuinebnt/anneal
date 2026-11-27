@@ -66,7 +66,7 @@ None for this stage. The *Other designs* sections of 4b-01 to 4b-07 list the alt
 
 ## In BusTub
 
-`test/txn/txn_executor_test.cpp`, `txn_index_test.cpp`, `txn_index_concurrent_test.cpp`, `txn_abort_serializable_test.cpp`. The original concurrent tests use 8 threads and 50 trials; the ports use fewer trials so that a debug run finishes in seconds. Some of BusTub's cases continue on the autograder ("`// test continues on Gradescope...`"); the visible part is what is ported.
+`test/txn/txn_executor_test.cpp`, `txn_index_test.cpp`, `txn_index_concurrent_test.cpp`, `txn_abort_serializable_test.cpp`. The original concurrent tests use 8 threads and 50 trials; the ports use fewer trials so that a debug run finishes in seconds. Some of BusTub's cases continue on CMU's autograder ("`// test continues on Gradescope...`"); the public part is what is ported. Nothing here is hidden: every test this course runs is in your repo.
 
 ## The C/C++ way
 

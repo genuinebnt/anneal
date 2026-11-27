@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Redo must be **idempotent**: replaying the whole log from the start gives the same result as replaying only what the disk is missing, because recovery cannot know which pages were flushed before the crash. The page LSN is how: apply a record only if the page has not seen it yet. Skip the check and recovery undoes work the disk already had.
+Redo must be **idempotent**: replaying the whole log from the start must give the same result as replaying only what the disk is missing, because recovery cannot know which pages were flushed before the crash.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Redo applied every record, even to a page whose `page_lsn` was already newer, so an old value overwrote a flushed newer one. A record is applied only when its LSN is greater than the page's.||
 
 ## The contract
 

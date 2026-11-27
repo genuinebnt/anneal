@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-`LIMIT 0` is not rare: it is how clients ask for the *shape* of a result without the rows, and how an optimiser proves a query empty. A sentinel `0 = unlimited` is a classic C idiom that a typed `Option` was supposed to retire; here it came back through a helper.
+`LIMIT 0` is not rare: it is how clients ask for the *shape* of a result without the rows, and how an optimiser proves a query empty.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||A helper treated a limit of 0 as no limit, the C sentinel `0 = unlimited` coming back through a typed `Option`. Only `None` means no limit.||
 
 ## The contract
 

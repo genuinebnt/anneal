@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Tombstones keep the key in place, so a later insert of the same key has to find that slot, not add another one beside it. The bug is invisible in a test that only inserts and removes different keys, and it shows up in the counts: `len` says one thing and a scan says another.
+Tombstones keep a removed key in place. The bug is invisible in a test that only inserts and removes different keys, and it shows up in the counts: `len` says one thing and a scan says another.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Re-inserting a removed key added a second slot beside its tombstone instead of reviving the tombstone, so the key existed twice, once dead and once live. Insert has to find the key's slot, live or dead, and revive it.||
 
 ## The contract
 

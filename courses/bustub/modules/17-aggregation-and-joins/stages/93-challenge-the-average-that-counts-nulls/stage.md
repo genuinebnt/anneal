@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-The rule is one sentence: every aggregate except `COUNT(*)` ignores NULLs, and the aggregate of nothing but NULLs is NULL (zero for counts). An average computed as `SUM / COUNT(*)` is wrong exactly when the column has NULLs, which is exactly when a report is wrong without anyone noticing.
+An aggregate that is wrong only when a column holds NULLs is wrong exactly when a report is wrong without anyone noticing.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`avg` divided the sum by `COUNT(*)`, which counts NULL rows, instead of by `COUNT(col)`. Every aggregate except `COUNT(*)` ignores NULLs, and the average of nothing but NULLs is NULL.||
 
 ## The contract
 

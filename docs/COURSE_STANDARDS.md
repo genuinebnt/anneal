@@ -15,6 +15,7 @@ them. **Read this before changing anything under `courses/` or the Courses pages
 3. **Tests.** *"have atleast 5 test cases"* and *"ensure the texts dont clutter the challenges with too many unnecessary tests"*. Every
    non-boss stage has at least 5 tests, each checking a distinct behaviour (no padding, no near-duplicates). The stage text summarises the key
    behaviours: at most 4 bullets per `### Tests` block and 8 per stage; the learner sees every test by name in the Last run tab.
+   **All tests are public** (owner, 2026-11-27): no hidden tests and no hidden grader; every test the course runs is in the learner's repo.
 4. **Performance.** *"have performance sections"*. Every non-boss stage has a `## Performance` section: the cost model (complexity, syscalls,
    allocations, lock hold times), what the obvious version costs, what to measure and how (`strace -c`, a timing test, counters). Claims must be
    things you can check; hedge ("typically") instead of inventing numbers.

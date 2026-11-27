@@ -16,7 +16,6 @@ pub fn split_keys(keys: &[i64], is_leaf: bool) -> Split {
     let mid = keys.len().div_ceil(2);
     let left = keys[..mid].to_vec();
     let separator = keys[mid];
-    // TODO(2c-c2): this looks right and has a bug; find it and fix it
     let right = keys[mid..].to_vec();
     Split { left, separator, right }
 }

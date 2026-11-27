@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 Binary search is the most commonly mis-written algorithm there is, and nearly every mistake is in the boundary: strict or not, which half to keep. Duplicates are where it shows, and a B+ tree with non-unique keys depends on both bounds being exactly right.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`upper_bound` compared with `<` where it needs `<=`: it stopped at the first copy of the key instead of after the last, so with duplicates it returned the lower bound.||
+
 ## The contract
 
 - `lower_bound(s, k)` is the first index `i` with `s[i] >= k` (or `len`).

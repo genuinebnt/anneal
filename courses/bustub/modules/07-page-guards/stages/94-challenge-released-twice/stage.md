@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Explicit early release is common (`drop(guard)` is not always possible because you want the return value), and it is the one place where RAII guards go wrong: the explicit path does the cleanup and then `Drop` does it again when `self` ends. The fix is a Rust idiom worth knowing.
+Explicit early release is common (`drop(guard)` is not always possible because you want the return value), and it is the one place where RAII guards go wrong. The fix is a Rust idiom worth knowing.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`release` unpinned, and then `self` was dropped at the end of `release`, so `Drop` unpinned a second time. Copy out what is needed and call `std::mem::forget(self)` so `Drop` does not run on that path.||
 
 ## The contract
 

@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Sharing and mutation do not mix: once two values point at the same cell, a write through one is visible through the other. A persistent structure is correct only if no shared node is ever written, which is why Rust's `Arc` gives you no `&mut` and why `Rc<RefCell<..>>` is the wrong tool here even though it compiles.
+Sharing and mutation do not mix: once two values point at the same cell, a write through one is visible through the other. A persistent structure is correct only if no shared node is ever written.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`push` rewrote the shared head cell in place (through the `RefCell`) to make room at the front, so every version sharing that cell changed. A persistent push allocates a new node pointing at the old head and writes nothing shared.||
 
 ## The contract
 

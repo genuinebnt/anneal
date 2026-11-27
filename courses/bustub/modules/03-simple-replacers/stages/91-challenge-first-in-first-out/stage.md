@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-When a structure keeps the same fact in two places (here, which frames are evictable and how many there are), every change has to update both, and the bug is always in the path someone forgot. A property that compares *every* observable after *every* step finds it.
+When a structure keeps the same fact in two places, every change has to update both, and the bug is always in the path someone forgot. A property that compares *every* observable after *every* step finds it.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Removing a frame took it out of the evictable set but did not lower the evictable count, so `size()` disagreed with what `evict` could find. The count drops only when the frame really was evictable.||
 
 ## The contract
 

@@ -63,7 +63,6 @@ impl DiskIo for CachedDisk {
         cache.pages.remove(&page_id);
         cache.order.retain(|p| *p != page_id);
         self.inner.delete_page(page_id);
-        //~ // TODO(1a-c2): this looks right and has a bug; find it and fix it
         //~ self.inner.delete_page(page_id);
         // @end
     }

@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 The directory is a few lines of index arithmetic, and a mistake in it does not crash: it silently sends some keys to the wrong bucket. The invariants of the structure are the only way to catch it, so writing them down is the exercise.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Doubling appended the existing slots in reverse order. After doubling, slot `i + 2^d` must point where slot `i` points (the new high bit is not used yet), so the new half is a copy in the same order.||
+
 ## The contract
 
 - A directory of `2^global` slots; slot `i` is reached by the low `global` bits of a hash.

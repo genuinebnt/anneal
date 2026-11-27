@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-A snapshot must be a **prefix** of the commit order: everything up to the read timestamp, nothing after. Commits can finish out of order (5 reserved first, 6 finishes first), and a read timestamp that jumps over an unfinished commit shows a state that never existed, with the effects of 6 and without the effects of 5 that 6 may depend on.
+A snapshot must be a **prefix** of the commit order: everything up to the read timestamp, nothing after. A snapshot with a hole in it shows a state that never existed.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`begin` used the largest *finished* commit timestamp. Commits finish out of order, so with 6 finished and 5 not, a reader at 6 saw 6 without 5. The read timestamp is the end of the unbroken run of finished commits.||
 
 ## The contract
 

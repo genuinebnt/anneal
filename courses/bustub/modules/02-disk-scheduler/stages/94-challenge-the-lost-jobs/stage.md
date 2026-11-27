@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 The disk scheduler of this module has exactly this shape, and a shutdown that drops queued writes loses data without any error: the program exits cleanly with pages not on disk. 'Stop' has to mean 'finish what you were given, then stop'.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||A worker checked the stop flag before looking at the queue, so after `shutdown` it quit with jobs still queued. Taking a job first, and stopping only when the queue is empty, makes stop mean finish, then stop.||
+
 ## The contract
 
 - `submit(job)` queues a job; false if the pool is already shut down.

@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 Most real debugging starts from a failing test and a counterexample, not from reading code. A property test that fails prints the *smallest* input it could find that breaks the rule, and that input is usually the whole bug report.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||A run longer than 255 was written as one pair with `run as u8`, which keeps only the low byte, so a run of 256 bytes came back as a run of 0. A long run has to be split into pairs of at most 255. Hand-written inputs never repeat a byte 256 times; a property test's generator does.||
+
 ## The contract
 
 - `rle_encode` turns data into (count, byte) pairs with counts from 1 to 255.

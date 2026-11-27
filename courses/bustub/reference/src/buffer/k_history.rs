@@ -22,7 +22,6 @@ impl KHistory {
         if self.times.len() > self.k {
             self.times.pop_front();
         }
-        //~ // TODO(1d-c2): this looks right and has a bug; find it and fix it
         //~ if self.times.len() > self.k + 1 {
         //~     self.times.pop_front();
         //~ }

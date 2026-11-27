@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-A rewrite is correct only if the result means the same thing, and the only convincing evidence is to compare the truth tables. De Morgan is the textbook case: `NOT (a AND b)` is `NOT a OR NOT b`, not `AND`. An optimiser that gets it wrong still runs, returns rows, and returns the wrong ones.
+A rewrite is correct only if the result means the same thing, and the only convincing evidence is to compare the truth tables. An optimiser that gets it wrong still runs, returns rows, and returns the wrong ones.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||Pushing a `NOT` through an `AND` kept the `AND`. De Morgan: `NOT (a AND b)` is `NOT a OR NOT b`, so a negated `AND` becomes an `OR` (and a negated `OR` an `AND`).||
 
 ## The contract
 

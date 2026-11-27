@@ -24,7 +24,6 @@ impl Iterator for LiveKeys<'_> {
     type Item = i64;
 
     fn next(&mut self) -> Option<i64> {
-        // TODO(2d-c1): this looks right and has a bug; find it and fix it
         let leaf = self.leaves.get(self.leaf)?;
         while self.slot < leaf.len() {
             let s = leaf[self.slot];

@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Left associativity is one `+ 1` in a precedence climber, and forgetting it produces a parser that passes every test with a single operator and silently mis-evaluates every long chain of subtractions and divisions. The tree is the output of the front end; a wrong shape here is a wrong query result there.
+An associativity bug passes every test with a single operator and silently mis-evaluates every long chain of subtractions and divisions. The tree is the output of the front end; a wrong shape here is a wrong query result there.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The right operand was parsed at the operator's own precedence, so `10 - 4 - 3` became `10 - (4 - 3)`. For a left-associative operator the right side is parsed one level higher (`p + 1`).||
 
 ## The contract
 

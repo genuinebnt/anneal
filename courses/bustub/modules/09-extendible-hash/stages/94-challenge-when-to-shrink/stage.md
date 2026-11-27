@@ -6,7 +6,10 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 ## Why
 
-Shrinking is the mirror image of doubling and the less-tested half of the structure. The rule is one word of logic: the directory can be halved only when **no** bucket needs the full depth. Getting 'any' and 'all' mixed up produces a table that loses keys only after a delete, much later.
+Shrinking is the mirror image of doubling and the less-tested half of the structure. A wrong shrink does not fail when it happens: the table loses keys after a later delete, much later.
+
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||The directory can be halved only when **every** bucket's local depth is below the global depth; the code asked whether **any** was. `any` for `all` is one word.||
 
 ## The contract
 

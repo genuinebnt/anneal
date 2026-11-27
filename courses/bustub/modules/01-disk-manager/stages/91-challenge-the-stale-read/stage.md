@@ -8,6 +8,9 @@ A challenge: no walkthrough, no hints, no solution. It is extra practice and doe
 
 A cache is a second copy of the truth, and every second copy can go stale. Cache bugs are rarely in the code that reads or writes; they are in the operations that someone forgot to tell the cache about. The same lesson returns with the buffer pool in module 1f.
 
+> [!CHECK] Once the tests pass: what was the bug, in one sentence, and why did ordinary inputs not show it?
+> ||`delete_page` passed the delete to the disk underneath but left the page in the cache, so a read after the delete returned the cached bytes of a page that no longer existed. Every operation that changes the truth has to tell the cache.||
+
 ## The contract
 
 - A `CachedDisk` answers every read, write and delete exactly as the disk underneath would, whatever its capacity.
