@@ -1399,6 +1399,24 @@ fn adopt(stage: Option<&str>, yes: bool) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Copies `progress.json` to `progress.before-reset-<unix seconds>.json` next to it (never over an existing copy), before a reset
+/// rewrites it. Returns the copy's path, or `None` when there is no progress file to keep.
+fn archive_progress(repo: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let from = state_path(repo, "progress.json");
+    if !from.exists() {
+        return Ok(None);
+    }
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut to = state_path(repo, &format!("progress.before-reset-{secs}.json"));
+    let mut n = 1;
+    while to.exists() {
+        n += 1;
+        to = state_path(repo, &format!("progress.before-reset-{secs}-{n}.json"));
+    }
+    fs::copy(&from, &to).with_context(|| format!("keeping a copy of {} before the reset", from.display()))?;
+    Ok(Some(to))
+}
+
 /// `anneal course reset`: forgets which stages passed, for one module or for the whole course. The learner's code stays as it is.
 fn reset(module: Option<&str>, all: bool, yes: bool) -> anyhow::Result<ExitCode> {
     use std::io::{BufRead, IsTerminal, Write};
@@ -1431,11 +1449,15 @@ fn reset(module: Option<&str>, all: bool, yes: bool) -> anyhow::Result<ExitCode>
             return Ok(ExitCode::FAILURE);
         }
     }
+    let archived = archive_progress(&repo)?;
     for id in &ids {
         progress.passed.remove(id);
     }
     save_progress(&repo, &progress)?;
     println!("Reset {what}.");
+    if let Some(path) = archived {
+        println!("The progress from before is kept in {} (copy it back over {STATE_DIR}/progress.json to undo).", path.strip_prefix(&repo).unwrap_or(&path).display());
+    }
     let scope = match module {
         Some(code) => serde_json::json!({ "module": code }),
         None => serde_json::json!({ "all": true }),
@@ -1839,6 +1861,29 @@ fn next() -> anyhow::Result<ExitCode> {
     }
 }
 
+/// Why `s` cannot be tested yet, when its module has not been unlocked and its test files are not in the repo: which module it is in and
+/// what unlocks it. `None` when its tests are there (a repo made before modules were revealed one by one has every file).
+fn locked(repo: &Path, course: &Course, progress: &Progress, s: &Stage) -> Option<String> {
+    if unlocked_modules(course, progress).contains(&s.module) {
+        return None;
+    }
+    let missing = s.def.tests.iter().any(|t| !repo.join("tests").join(format!("{}.rs", split_entry(t).0)).exists());
+    if !missing {
+        return None;
+    }
+    let cur = current(course, progress)?;
+    let boss = course.stages.iter().filter(|x| x.module == cur.module && x.def.kind != "challenge").last().map_or(String::new(), |b| format!(" ({})", b.def.id));
+    Some(format!(
+        "{} is in module {} · {}, which is not unlocked yet: its code and tests arrive when the last stage of your current module, {}{boss}, passes.\nYou are on {} · {}: `anneal course test` runs it.",
+        s.def.id,
+        s.module,
+        s.module_title,
+        cur.module,
+        cur.def.id,
+        cur.def.title
+    ))
+}
+
 /// `anneal course test`: once, or (with `--watch`) again after every change to the learner's files until the stage passes.
 fn test_command(stage: Option<&str>, opts: TestOpts, filter: Option<&str>, watch: bool) -> anyhow::Result<ExitCode> {
     if !watch {
@@ -1923,6 +1968,10 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
             }
         },
     };
+    if let Some(why) = locked(&repo, &course, &progress, target) {
+        println!("{why}");
+        return Ok(failure_code(opts, cfg.block_on_fail, true));
+    }
     let (done, total) = core_counts(&course, &progress);
     println!("{}  {}\n", bold(&format!("Stage {} · {}", target.def.id, target.def.title)), dim(&format!("({done} of {total} stages done)")));
     let started = Instant::now();
@@ -2540,6 +2589,58 @@ mod learner_screens {
         assert!(sent.contains("Access(11)") && !sent.contains("successes"), "the report carries the input too: {sent}");
         let wide = report_detail(&format!("minimal failing input: s = \"{}\"", "é".repeat(5_000)));
         assert!(wide.len() < 4_000, "within what the web app accepts per test");
+    }
+
+    /// A course of the given (id, module, kind) stages, in order.
+    fn course_of(stages: &[(&str, &str, &str)], optional_modules: &[&str]) -> Course {
+        let stages = stages
+            .iter()
+            .enumerate()
+            .map(|(i, (id, module, kind))| Stage {
+                def: StageToml { id: (*id).into(), title: format!("title {id}"), kind: (*kind).into(), difficulty: "easy".into(), tests: vec![format!("stages_{module}::s{}", id.replace('-', "_"))], retest: false },
+                module: (*module).into(),
+                optional: optional_modules.contains(module) || *kind == "challenge",
+                module_title: format!("module {module}"),
+                readme: String::new(),
+                resources: String::new(),
+                rank: i + 1,
+            })
+            .collect();
+        Course { meta: CourseToml { id: "t".into(), title: "T".into(), repo_name: "t".into(), planned_modules: vec![] }, stages, module_files: BTreeMap::new() }
+    }
+
+    #[test]
+    fn a_stage_of_a_locked_module_says_what_unlocks_it() {
+        let course = course_of(&[("r-01", "r", "learn"), ("1a-01", "1a", "build"), ("1a-02", "1a", "boss"), ("1a-c1", "1a", "challenge"), ("1b-01", "1b", "build")], &["r"]);
+        let dir = std::env::temp_dir().join(format!("anneal-locked-{}", std::process::id()));
+        fs::create_dir_all(dir.join("tests")).unwrap();
+        fs::write(dir.join("tests/stages_1a.rs"), "").unwrap();
+        let progress = Progress::default();
+        let why = locked(&dir, &course, &progress, course.stage("1b-01").unwrap()).expect("1b is locked while 1a is not done");
+        assert!(why.contains("module 1b") && why.contains("1a-02") && why.contains("You are on 1a-01"), "{why}");
+        assert!(locked(&dir, &course, &progress, course.stage("1a-02").unwrap()).is_none(), "the current module is unlocked");
+        fs::write(dir.join("tests/stages_1b.rs"), "").unwrap();
+        assert!(locked(&dir, &course, &progress, course.stage("1b-01").unwrap()).is_none(), "a repo that already has the tests runs them");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reset_keeps_a_copy_of_the_progress_first() {
+        let dir = std::env::temp_dir().join(format!("anneal-reset-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        assert!(archive_progress(&dir).unwrap().is_none(), "no progress file, nothing to keep");
+        let mut p = Progress::default();
+        p.passed.insert("1a-01".into(), Passed { at: 1, commit: "abc".into(), ms: 5 });
+        save_progress(&dir, &p).unwrap();
+        let before = fs::read_to_string(state_path(&dir, "progress.json")).unwrap();
+        let first = archive_progress(&dir).unwrap().expect("a copy");
+        let second = archive_progress(&dir).unwrap().expect("another copy");
+        assert_ne!(first, second, "a second reset in the same second does not overwrite the first copy");
+        assert_eq!(first.parent(), Some(dir.join(STATE_DIR).as_path()), "next to progress.json");
+        assert_eq!(fs::read_to_string(&first).unwrap(), before);
+        assert_eq!(fs::read_to_string(&second).unwrap(), before);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
