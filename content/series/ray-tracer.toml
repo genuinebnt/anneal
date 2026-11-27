@@ -1,0 +1,661 @@
+# The series "Build a ray tracer": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "ray-tracer"
+rank = 16
+title = "Build a ray tracer"
+summary = "Small parts give you what the capstone needs. Then you build a program that turns a described scene into a picture."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a ray tracer"
+capstone_summary = "Rays and shapes, a camera, a PNG file, lamps and shadows, mirrors and glass, large scenes, bounced light and a renderer on several threads."
+capstone_note = "From step 2 on, each starter contains reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and some of the preparation.\n\nThe capstone leaves out two things the Cookbook file has: its showcase scenes and its timing report. Limits of the finished renderer: bounced light does not use the lamps, glass is always taken to be in air, and a flat lamp has no front side."
+capstone_cookbook = "ray-tracer"
+
+[[stage]]
+id = "aim"
+name = "Aim and meet"
+
+[[stage]]
+id = "chance"
+name = "Use chance"
+
+[[stage]]
+id = "light"
+name = "Follow the light"
+
+[[stage]]
+id = "machine"
+name = "Build the machinery"
+
+[[part]]
+number = 1
+id = "l4-vec2-operators"
+know_first = "Structs, impl blocks and traits"
+stage = "aim"
+status = "existing"
+minutes = 25
+blurb = "Make your own points add and scale like numbers"
+new_idea = "Operators are traits, with the right-hand type as a parameter"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y162-what-does-a-ray-hit"]
+real_uses = "Vectors, money, units and matrices in any library."
+
+[[part]]
+number = 2
+id = "y161-follow-a-ball-round-a-room"
+stage = "aim"
+status = "new"
+minutes = 60
+blurb = "Predict every bounce of a ball in a room"
+new_idea = "Arrival time on a line from one division, bouncing by the part along the normal, and never hitting the wall just left"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y162-what-does-a-ray-hit", "y162-mirrors-and-glass", "y162-stay-fast-with-many-shapes"]
+real_uses = "Games, billiard and particle simulations, mirrors in renderers."
+cookbook = [
+    { level = "related", page = "vec3-matrix-quaternion", note = "Vector kit with a reflect function. It does not move a ball.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "y161-when-do-two-balls-touch"
+stage = "aim"
+status = "new"
+minutes = 45
+blurb = "Know about a collision long before it happens"
+new_idea = "Solving a quadratic for the first root that answers the question, without losing digits far away"
+reuses = "a position that moves with time, from part 2"
+required = ["y161-follow-a-ball-round-a-room"]
+helpful = []
+used_again = ["y162-what-does-a-ray-hit"]
+real_uses = "Collision detection, physics engines, air traffic checks."
+cookbook = [
+    { level = "similar", page = "vec3-matrix-quaternion", note = "ray_sphere solves the same kind of equation with the textbook formula, which loses digits far away.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "y161-how-high-is-the-ground"
+stage = "aim"
+status = "new"
+minutes = 60
+blurb = "Put a walker exactly on a landscape of triangles"
+new_idea = "A point as shares of two sides of a triangle, with a determinant judged against the sizes that made it"
+reuses = "solving for unknowns as in part 2"
+required = ["y161-follow-a-ball-round-a-room"]
+helpful = []
+used_again = ["y162-what-does-a-ray-hit"]
+real_uses = "Terrain, maps, picking in 3D editors, texture lookup."
+cookbook = [
+    { level = "similar", page = "vec3-matrix-quaternion", note = "Barycentric and Moller-Trumbore triangle tests.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
+    { level = "related", page = "computational-geometry", note = "The orientation test and why near zero is hard.", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "y161-where-does-it-show-on-screen"
+stage = "aim"
+status = "new"
+minutes = 60
+blurb = "Put a name tag over a point of a 3D world"
+new_idea = "A viewer's three directions from two cross products, and perspective as one division"
+reuses = "dot products from part 2"
+required = ["y161-follow-a-ball-round-a-room"]
+helpful = []
+used_again = ["y162-aim-the-camera"]
+real_uses = "Games, map apps, augmented reality, 3D editors."
+cookbook = [
+    { level = "similar", page = "vec3-matrix-quaternion", note = "The same projection written with matrices.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "y41-rolls-you-can-replay"
+stage = "chance"
+status = "existing"
+minutes = 45
+blurb = "Make random runs that can be run again"
+new_idea = "A seeded generator, fair ranges and separate streams"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y161-measure-a-shape-you-can-only-poke", "y162-render-the-whole-picture"]
+real_uses = "Reproducible simulations and tests."
+cookbook = [
+    { level = "related", page = "prng-zoo", note = "Several small generators and how to test them.", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "y161-measure-a-shape-you-can-only-poke"
+stage = "chance"
+status = "new"
+minutes = 45
+blurb = "Find the area of a shape you cannot see"
+new_idea = "A fair number in [0, 1) from raw bits, and one random sample in every cell"
+reuses = "raw random values as in part 6"
+required = ["y41-rolls-you-can-replay"]
+helpful = []
+used_again = ["y162-aim-the-camera", "y162-light-and-shadow", "y162-render-the-whole-picture"]
+real_uses = "Anti-aliasing, Monte Carlo estimates, A/B sampling."
+cookbook = [
+    { level = "related", page = "prng-zoo", note = "Includes floats from 53 random bits.", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "y161-scatter-points-with-a-chosen-spread"
+stage = "chance"
+status = "new"
+minutes = 60
+blurb = "Throw random points that spread exactly as asked"
+new_idea = "Turning uniform numbers into a wanted density: square root for a disk, and lifting a disk onto a dome"
+reuses = "testing shares from part 7"
+required = ["y161-measure-a-shape-you-can-only-poke"]
+helpful = []
+used_again = ["y162-aim-the-camera", "y162-light-that-bounces"]
+real_uses = "Simulation, graphics, random placement in games."
+
+[[part]]
+number = 9
+id = "y161-stop-early-and-be-right-on-average"
+stage = "chance"
+status = "new"
+minutes = 45
+blurb = "Give up on a long sum without being wrong"
+new_idea = "Ending by chance and counting the survivors 1/p times"
+reuses = "nothing new"
+required = ["y161-measure-a-shape-you-can-only-poke"]
+helpful = []
+used_again = ["y162-light-that-bounces"]
+real_uses = "Path tracing, randomized estimators, sampling of logs and traces."
+
+[[part]]
+number = 10
+id = "y161-how-bright-is-each-spot"
+stage = "light"
+status = "new"
+minutes = 60
+blurb = "Work out how much light reaches each spot of a room"
+new_idea = "Inverse-square and cosine falloff, and a shadow as a question about the open stretch between two points"
+reuses = "dot products and not hitting yourself, from part 2"
+required = ["y161-follow-a-ball-round-a-room"]
+helpful = []
+used_again = ["y162-light-and-shadow"]
+real_uses = "Lighting in games, light maps, coverage planning."
+
+[[part]]
+number = 11
+id = "y161-light-through-a-stack-of-sheets"
+stage = "light"
+status = "new"
+minutes = 75
+blurb = "Follow a thin beam through layers of glass"
+new_idea = "Snell, total reflection, Fresnel by Schlick from the right side, and loss along the path"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y162-mirrors-and-glass"]
+real_uses = "Optics software, renderers, sensor design."
+cookbook = [
+    { level = "related", page = "vec3-matrix-quaternion", note = "Vector refraction and Schlick. Its Schlick uses the incoming angle on both sides, which this task does not accept when leaving glass.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
+]
+
+[[part]]
+number = 12
+id = "y161-cut-every-triangle-in-four"
+stage = "machine"
+status = "new"
+minutes = 45
+blurb = "Make a surface finer without opening cracks"
+new_idea = "One new point per edge, found again from the other side, with the turning direction kept"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y162-build-solid-things"]
+real_uses = "3D tools, level of detail, mesh generation."
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "add_icosphere shares middle points through a map.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "y161-pack-bytes-the-zip-way"
+stage = "machine"
+status = "new"
+minutes = 60
+blurb = "Wrap data so that standard tools can read it"
+new_idea = "A zlib stream of stored blocks, its checksum, and a reader that trusts nothing"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "l5-const-fn-crc-table", why = "a checksum built bit by bit; step 4 needs another one, CRC-32", reveals_method = false, hidden = true },
+]
+used_again = ["y162-save-the-picture"]
+real_uses = "PNG, ZIP, git objects, HTTP deflate."
+cookbook = [
+    { level = "similar", page = "png-ppm-writer", note = "Writes and reads stored blocks inside a PNG.", source = "examples/graphics/png_ppm_writer.rs", hidden = true },
+]
+
+[[part]]
+number = 14
+id = "s3-split-at-mut"
+stage = "machine"
+status = "existing"
+minutes = 20
+blurb = "Change two halves of one list at the same time"
+new_idea = "split_at_mut gives two mutable borrows that cannot overlap"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y161-which-windows-are-under-the-tap", "y162-stay-fast-with-many-shapes"]
+real_uses = "Divide and conquer over one buffer."
+
+[[part]]
+number = 15
+id = "y161-which-windows-are-under-the-tap"
+stage = "machine"
+status = "new"
+minutes = 90
+blurb = "Search thousands of rectangles while looking at few"
+new_idea = "A tree of surrounding boxes in one Vec, split into equal halves, answering a question it cannot see"
+reuses = "split_at_mut from part 14"
+required = ["s3-split-at-mut"]
+helpful = []
+used_again = ["y162-stay-fast-with-many-shapes"]
+real_uses = "Window systems, map queries, collision detection, database indexes."
+cookbook = [
+    { level = "related", page = "spatial-search-structures", note = "K-d tree, quadtree and R-tree with counted work.", hidden = true },
+]
+
+[[part]]
+number = 16
+id = "l1-move-into-threads"
+stage = "machine"
+status = "existing"
+minutes = 30
+blurb = "Give threads data they can use safely"
+new_idea = "Scoped threads may borrow; spawned threads must own"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y161-colour-one-sheet-with-many-hands"]
+real_uses = "Parallel loops over borrowed data."
+
+[[part]]
+number = 17
+id = "y161-colour-one-sheet-with-many-hands"
+stage = "machine"
+status = "new"
+minutes = 60
+blurb = "Paint one big image with several threads, however uneven the rows"
+new_idea = "Disjoint rows from chunks_mut, handed out one at a time through a Mutex"
+reuses = "scoped threads from part 16, disjoint borrows from part 14"
+required = ["l1-move-into-threads", "s3-split-at-mut"]
+helpful = []
+used_again = ["y162-render-the-whole-picture"]
+real_uses = "Renderers, image filters, any uneven parallel loop."
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "render takes bands of rows from a locked iterator.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[revisit]]
+part = "y161-follow-a-ball-round-a-room"
+after = "y161-where-does-it-show-on-screen"
+how = "Write part 2 again from a blank starter."
+minutes = 30
+
+[[revisit]]
+part = "y161-measure-a-shape-you-can-only-poke"
+after = "y161-how-bright-is-each-spot"
+how = "Write part 7 again from memory."
+minutes = 20
+
+[[revisit]]
+part = "y161-which-windows-are-under-the-tap"
+before = "y162-stay-fast-with-many-shapes"
+how = "Solve part 15 again from a blank starter before capstone step 7."
+
+[[connection]]
+idea = "Where along a line does it happen?"
+learn = ["y161-follow-a-ball-round-a-room"]
+again = ["y161-when-do-two-balls-touch", "y161-how-high-is-the-ground", "y161-how-bright-is-each-spot"]
+apply = ["y162-what-does-a-ray-hit", "y162-light-and-shadow"]
+
+[[connection]]
+idea = "Never trust the last digit"
+learn = ["y161-follow-a-ball-round-a-room"]
+again = ["y161-when-do-two-balls-touch", "y161-how-high-is-the-ground", "y161-how-bright-is-each-spot"]
+apply = ["y162-what-does-a-ray-hit", "y162-stay-fast-with-many-shapes"]
+
+[[connection]]
+idea = "Random numbers you can rely on"
+learn = ["y41-rolls-you-can-replay"]
+again = ["y161-measure-a-shape-you-can-only-poke", "y161-scatter-points-with-a-chosen-spread", "y161-stop-early-and-be-right-on-average"]
+apply = ["y162-aim-the-camera", "y162-light-that-bounces", "y162-render-the-whole-picture"]
+
+[[connection]]
+idea = "A mesh made of numbers"
+learn = ["y161-cut-every-triangle-in-four"]
+again = []
+apply = ["y162-build-solid-things"]
+
+[[connection]]
+idea = "Rule out many at once"
+learn = ["y161-which-windows-are-under-the-tap"]
+again = []
+apply = ["y162-stay-fast-with-many-shapes"]
+
+[[connection]]
+idea = "One buffer, many writers"
+learn = ["s3-split-at-mut"]
+again = ["y161-which-windows-are-under-the-tap", "y161-colour-one-sheet-with-many-hands"]
+apply = ["y162-render-the-whole-picture"]
+
+[[connection]]
+idea = "Bytes that other programs read"
+learn = ["y161-pack-bytes-the-zip-way"]
+again = []
+apply = ["y162-save-the-picture"]
+
+[[connection]]
+idea = "What light does at a surface"
+learn = ["y161-how-bright-is-each-spot"]
+again = ["y161-light-through-a-stack-of-sheets"]
+apply = ["y162-light-and-shadow", "y162-mirrors-and-glass", "y162-light-that-bounces"]
+
+[[capstone]]
+step = 1
+id = "y162-what-does-a-ray-hit"
+title = "What does a ray hit?"
+minutes = 90
+blurb = "Find the first surface along a line of sight"
+new_idea = "Ray against sphere, triangle and plane, and the nearest of them all"
+prepared_by = ["l4-vec2-operators", "y161-follow-a-ball-round-a-room", "y161-when-do-two-balls-touch", "y161-how-high-is-the-ground"]
+required = []
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "hit_sphere, hit_tri and Scene::closest.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+    { level = "related", page = "floating-point-ieee754", note = "Rounding, cancellation and comparing floats.", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y162-build-solid-things"
+title = "Boxes and balls from flat pieces"
+minutes = 60
+blurb = "Make solid objects out of triangles"
+new_idea = "Meshes with outward faces: quad, turned box and icosphere"
+prepared_by = ["y161-cut-every-triangle-in-four"]
+required = ["y162-what-does-a-ray-hit"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "add_quad, add_box and add_icosphere.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y162-aim-the-camera"
+title = "Aim the camera"
+minutes = 75
+blurb = "Decide which rays make up a picture"
+new_idea = "Rays through a picture plane, a thin lens and samples inside a pixel"
+prepared_by = ["y161-where-does-it-show-on-screen", "y161-measure-a-shape-you-can-only-poke", "y161-scatter-points-with-a-chosen-spread"]
+required = ["y162-build-solid-things"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "Camera and the jitter in render_pixel.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y162-save-the-picture"
+title = "Save a picture anyone can open"
+minutes = 75
+blurb = "Turn your numbers into an image file"
+new_idea = "sRGB bytes and a PNG with checksums and stored blocks"
+prepared_by = ["y161-pack-bytes-the-zip-way"]
+required = ["y162-aim-the-camera"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "encode_png and srgb8.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+    { level = "similar", page = "png-ppm-writer", note = "A PNG writer with a decoder.", source = "examples/graphics/png_ppm_writer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y162-light-and-shadow"
+title = "Light, shade and shadow"
+minutes = 90
+blurb = "Give surfaces brightness, highlights and shadows"
+new_idea = "Matte and glossy shading from point and flat lamps, with shadow rays"
+prepared_by = ["y161-how-bright-is-each-spot", "y161-measure-a-shape-you-can-only-poke"]
+required = ["y162-save-the-picture"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "The diffuse branch of whitted.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y162-mirrors-and-glass"
+title = "Mirrors and glass"
+minutes = 90
+blurb = "See reflections, and see through things"
+new_idea = "Recursion along reflected and refracted rays, with Fresnel shares and loss in glass"
+prepared_by = ["y161-follow-a-ball-round-a-room", "y161-light-through-a-stack-of-sheets"]
+required = ["y162-light-and-shadow"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "refract, schlick and whitted.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y162-stay-fast-with-many-shapes"
+title = "Stay fast with many shapes"
+minutes = 120
+blurb = "Keep the same pictures while looking at far fewer surfaces"
+new_idea = "A tree of boxes searched nearest first, cut off by the best hit so far"
+prepared_by = ["y161-which-windows-are-under-the-tap", "s3-split-at-mut", "y161-follow-a-ball-round-a-room"]
+required = ["y162-mirrors-and-glass"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "Bvh, box_hit and Scene::closest.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "y162-light-that-bounces"
+title = "Light that bounces around"
+minutes = 100
+blurb = "Let surfaces light each other"
+new_idea = "A path tracer: cosine-weighted bounces and ending paths by chance"
+prepared_by = ["y161-scatter-points-with-a-chosen-spread", "y161-stop-early-and-be-right-on-average"]
+required = ["y162-stay-fast-with-many-shapes"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "path and cosine_dir.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 9
+id = "y162-render-the-whole-picture"
+title = "Render the whole picture"
+minutes = 75
+blurb = "Render on several threads and always get the same picture"
+new_idea = "One random stream per pixel, rows shared among threads, and checks without a stored image"
+prepared_by = ["y41-rolls-you-can-replay", "y161-measure-a-shape-you-can-only-poke", "y161-colour-one-sheet-with-many-hands"]
+required = ["y162-light-that-bounces"]
+cookbook = [
+    { level = "similar", page = "ray-tracer", note = "render, render_pixel and the checks in main.", source = "examples/capstones/ray_tracer.rs", hidden = true },
+]
+
+[[side_path]]
+id = "l4-matrix-operators"
+why = "after part 1: the same traits on a larger type"
+after = "l4-vec2-operators"
+
+[[side_path]]
+id = "s3-flat-grid"
+why = "before part 17: a two-dimensional picture in one Vec"
+before = "y161-colour-one-sheet-with-many-hands"
+
+[[side_path]]
+id = "y91-which-values-get-through"
+why = "before capstone step 7: overlapping several ranges and finding what is left"
+before = "y162-stay-fast-with-many-shapes"
+
+[[side_path]]
+id = "y5-shrink-failing-input"
+why = "after capstone step 7: when a fast answer and a slow one differ, find the smallest case"
+after = "y162-stay-fast-with-many-shapes"
+
+[[readiness]]
+group = "Geometry"
+concept = "operator traits (Add, Sub, Mul by a number, Div, Neg)"
+parts = ["l4-vec2-operators"]
+steps = [1]
+note = "Div has the same shape as Mul."
+
+[[readiness]]
+group = "Geometry"
+concept = "dot product, normals, reflection, arrival time at a plane"
+parts = ["y161-follow-a-ball-round-a-room"]
+steps = [1, 6]
+
+[[readiness]]
+group = "Geometry"
+concept = "cross product"
+parts = ["y161-where-does-it-show-on-screen"]
+steps = [1, 3]
+
+[[readiness]]
+group = "Geometry"
+concept = "quadratic roots inside a window, cancellation far away"
+parts = ["y161-when-do-two-balls-touch"]
+steps = [1]
+
+[[readiness]]
+group = "Geometry"
+concept = "triangle shares from determinants, and a size-aware test for zero"
+parts = ["y161-how-high-is-the-ground"]
+steps = [1]
+note = "Part 4 works in two dimensions. Step 1 solves the same equations with t as a third unknown, using cross products."
+
+[[readiness]]
+group = "Geometry"
+concept = "a ray through an axis-aligned box"
+parts = ["y161-follow-a-ball-round-a-room"]
+steps = [7]
+note = "A box is three pairs of parallel planes: part 2 gives each arrival time. Overlapping the three ranges is the new work in step 7; a side path practises it."
+
+[[readiness]]
+group = "Geometry"
+concept = "meshes: shared points and turning direction"
+parts = ["y161-cut-every-triangle-in-four"]
+steps = [2]
+note = "The turn of a box about the upright axis is given by its formula in step 2."
+
+[[readiness]]
+group = "Camera"
+concept = "a viewer's three axes and field of view"
+parts = ["y161-where-does-it-show-on-screen"]
+steps = [3]
+
+[[readiness]]
+group = "Camera"
+concept = "a lens: points on a disk"
+parts = ["y161-scatter-points-with-a-chosen-spread"]
+steps = [3, 9]
+note = "That all rays of one pixel meet on the sharp plane is stated in step 3."
+
+[[readiness]]
+group = "Chance"
+concept = "seeded splitmix64 and one stream per consumer"
+parts = ["y41-rolls-you-can-replay"]
+steps = [9]
+note = "Step 9 gives the per-pixel stream."
+
+[[readiness]]
+group = "Chance"
+concept = "floats from 53 bits, stratified samples, averages of random samples"
+parts = ["y161-measure-a-shape-you-can-only-poke"]
+steps = [3, 5, 9]
+
+[[readiness]]
+group = "Chance"
+concept = "cosine-weighted directions"
+parts = ["y161-scatter-points-with-a-chosen-spread"]
+steps = [8]
+note = "Step 8 turns the dome to face any normal: two cross products, as in part 5."
+
+[[readiness]]
+group = "Chance"
+concept = "Russian roulette"
+parts = ["y161-stop-early-and-be-right-on-average"]
+steps = [8]
+
+[[readiness]]
+group = "Chance"
+concept = "testing an average within a stated error"
+parts = ["y161-measure-a-shape-you-can-only-poke", "y161-scatter-points-with-a-chosen-spread"]
+steps = [8, 9]
+
+[[readiness]]
+group = "Light"
+concept = "inverse square, cosine, shadow rays"
+parts = ["y161-how-bright-is-each-spot"]
+steps = [5]
+note = "The Blinn highlight is given by its formula in step 5."
+
+[[readiness]]
+group = "Light"
+concept = "Snell's law, total reflection, Schlick, Beer-Lambert"
+parts = ["y161-light-through-a-stack-of-sheets"]
+steps = [6]
+note = "Part 11 works with angles. Step 6 needs the same law on vectors, built from the split into along and across of part 2."
+
+[[readiness]]
+group = "Files"
+concept = "zlib stored blocks, Adler-32, big and little endian"
+parts = ["y161-pack-bytes-the-zip-way"]
+steps = [4]
+note = "CRC-32, PNG chunks and the sRGB curve are given exactly by step 4."
+
+[[readiness]]
+group = "Rust"
+concept = "split_at_mut in a recursion"
+parts = ["s3-split-at-mut", "y161-which-windows-are-under-the-tap"]
+steps = [7]
+
+[[readiness]]
+group = "Rust"
+concept = "a tree in one Vec, f64::total_cmp, select_nth_unstable_by"
+parts = ["y161-which-windows-are-under-the-tap"]
+steps = [7]
+note = "f64::next_up, one std method, is named in a hint of step 7."
+
+[[readiness]]
+group = "Rust"
+concept = "a trait used as the only door to the data"
+parts = ["y161-which-windows-are-under-the-tap"]
+steps = [7]
+note = "Part 15 does it with a closure; step 7 with a trait of two methods."
+
+[[readiness]]
+group = "Rust"
+concept = "thread::scope"
+parts = ["l1-move-into-threads"]
+steps = [9]
+
+[[readiness]]
+group = "Rust"
+concept = "a Mutex around chunks_mut().enumerate()"
+parts = ["y161-colour-one-sheet-with-many-hands"]
+steps = [9]
+
+[[readiness]]
+group = "Rust"
+concept = "checked arithmetic on sizes"
+parts = ["y161-cut-every-triangle-in-four", "y161-colour-one-sheet-with-many-hands"]
+steps = [4, 9]

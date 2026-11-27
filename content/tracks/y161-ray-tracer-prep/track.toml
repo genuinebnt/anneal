@@ -1,0 +1,26 @@
+code = "Y161"
+name = "Ray tracer: preparation"
+section = "Y"
+tier = "sde3"
+order = 161
+summary = "Small exercises on the ideas a ray tracer needs, each on a different task."
+
+[[stages]]
+slug = "aim"
+name = "Aim and meet"
+band = "medium"
+
+[[stages]]
+slug = "chance"
+name = "Use chance"
+band = "medium"
+
+[[stages]]
+slug = "light"
+name = "Follow the light"
+band = "medium"
+
+[[stages]]
+slug = "build"
+name = "Build the machinery"
+band = "hard"

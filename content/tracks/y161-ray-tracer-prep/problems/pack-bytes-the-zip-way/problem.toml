@@ -1,0 +1,37 @@
+slug = "pack-bytes-the-zip-way"
+title = "Pack bytes so that any zip reader opens them"
+mode = "write"
+level = "medium"
+stage = "build"
+order = 11
+status = "ready"
+tags = ["binary formats", "checksums", "parsing untrusted input", "60-min"]
+teaches = [
+    "A compressed format can carry data without compressing it. The headers, lengths and checksum are all a reader needs.",
+    "A length travels with its complement, so that a damaged length is caught before it is trusted.",
+    "A reader of untrusted bytes asks for each piece before using it: split_first_chunk and split_at_checked return None instead of panicking.",
+]
+follow_up = "1) Your Adler reduces after every byte. How many bytes could you add up in a u32 before you must reduce? 2) What does this checksum fail to notice that a CRC would?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Write wrap first: header, blocks, checksum. Then read in the same order, checking each field before you use it."
+
+[[hints]]
+kind = "rust"
+text = "slice::chunks returns nothing for empty data, but the format needs a block. split_first_chunk and split_at_checked take pieces off the front safely."
+
+[[hints]]
+kind = "edge"
+text = "In unwrap, the four checksum bytes must be exactly what is left after the last block."
+
+[solution]
+explanation = "wrap writes the fixed header, at least one stored block of at most 65535 bytes with length and complement, and the checksum of the data. unwrap checks the header arithmetic and takes blocks off the front with checked splits. Exactly four bytes must remain after the final block, equal to the checksum."
+time = "O(n)"
+space = "O(n)"
+
+[[cookbook]]
+level = "related"
+page = "png-ppm-writer"
+note = "Builds the same kind of stream inside a PNG writer."

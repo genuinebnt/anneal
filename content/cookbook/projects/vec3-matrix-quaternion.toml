@@ -34,6 +34,7 @@ reflect(i, n)  = i - 2 (i.n) n                          (n unit) refract(i,n,e) 
 
 ```text
 Schlick(c)     = R0 + (1 - R0)(1 - c)^5, R0 = ((n1-n2)/(n1+n2))^2
+c is the cosine on the side with the smaller index: the outgoing angle when n1 > n2. Total internal reflection gives 1.
 ```
 
 point vs direction: points use w = 1 (translation applies, then divide by w), directions use w = 0 (no translation). perspective (OpenGL, right-handed, camera looks down -z, NDC cube [-1,1]&#94;3):

@@ -1,0 +1,32 @@
+slug = "stop-early-and-be-right-on-average"
+title = "Stop early and still be right on average"
+mode = "write"
+level = "medium"
+stage = "chance"
+order = 7
+status = "ready"
+tags = ["monte carlo", "unbiased estimators", "probability", "45-min"]
+teaches = [
+    "Cutting a long sum at a fixed depth always loses the same part. Cutting it by chance can lose nothing on average.",
+    "If something survives with chance p, counting it 1/p times keeps the expected value.",
+    "A random method can be tested exactly: enumerate every outcome with its chance and add them up.",
+]
+follow_up = "1) What does the lowest chance, 0.05, protect against? Think of the spread of the estimates, not their average. 2) Why not roll from the very first room?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Walk the rooms, keeping what one unit of glow in the next room would add to the answer. Write the walk without any stopping first."
+
+[[hints]]
+kind = "approach"
+text = "Suppose you go on only with chance p. Then everything beyond is seen in a share p of the runs. How much must it count in those runs for the average to stay?"
+
+[[hints]]
+kind = "edge"
+text = "The chance is worked out from the weight after the room has filtered it. What you add to the total before the roll stays as it is."
+
+[solution]
+explanation = "The walk adds weight * glow and multiplies the weight by what passes. From room 2 on it goes on with chance p, the weight limited to 0.05..0.95, and then divides the weight by p. Whatever lies beyond is reached with chance p and counted 1/p times, so its expected contribution is unchanged, at every roll."
+time = "O(rooms visited), about 20 at most on average"
+space = "O(1)"

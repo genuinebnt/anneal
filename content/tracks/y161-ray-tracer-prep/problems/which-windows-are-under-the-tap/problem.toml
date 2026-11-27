@@ -1,0 +1,33 @@
+slug = "which-windows-are-under-the-tap"
+title = "Which windows are under the tap?"
+mode = "write"
+level = "hard"
+stage = "build"
+order = 13
+status = "ready"
+tags = ["trees", "spatial search", "recursion", "split_at_mut", "90-min"]
+teaches = [
+    "A group of things can be answered with one question about what surrounds all of them.",
+    "Splitting a list into halves of equal count gives a shallow tree even when the things cannot be told apart.",
+    "A tree can live in one Vec in depth-first order, built by recursion over two halves of one slice.",
+    "When only a yes-or-no question is allowed, the work of a data structure can be counted exactly.",
+]
+follow_up = "1) Windows move all the time. What would you update, and when would you rebuild? 2) The topmost window under the tap is all you need. How could the tree help you stop early?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "If the rectangle around a whole group fails the question, so does every member. Build groups of groups, so that one no discards many."
+
+[[hints]]
+kind = "approach"
+text = "Split a group in two along the direction in which the middles are more spread out. Give each half the same number of members."
+
+[[hints]]
+kind = "rust"
+text = "Keep nodes in a Vec in depth-first order: the first child is the next node, so only the second needs storing. select_nth_unstable_by finds the halves; total_cmp orders any f64."
+
+[solution]
+explanation = "Each node stores the rectangle around its members. A group is split at its middle element along the axis with the wider spread of centres, so both halves have equal counts and the depth is logarithmic. Search keeps a stack: ask about a node; on yes, try the members of a leaf or push both children. The found numbers are sorted at the end."
+time = "build O(n log n); a point query O(log n) when the rectangles do not pile up"
+space = "O(n)"

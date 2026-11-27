@@ -1,0 +1,32 @@
+slug = "what-does-a-ray-hit"
+title = "Capstone 1: what does a ray hit?"
+mode = "write"
+level = "hard"
+stage = "see"
+order = 1
+status = "ready"
+tags = ["geometry", "floating point", "operator overloading", "ray tracing", "90-min"]
+teaches = [
+    "A hit is the smallest root of an equation inside a window. The window does the work of \"in front of me\", \"not myself\" and \"nearer than the best so far\".",
+    "A formula can be right on paper and wrong in floating point: subtracting two huge, almost equal numbers keeps only noise.",
+    "A test for \"almost zero\" has to be compared with the sizes that went in, or it silently rejects small things.",
+]
+follow_up = "1) Why does a ray rarely slip between two triangles that share an edge, and when can it? 2) What would you change to report which side of a triangle was hit? 3) Which part of your sphere code is the most expensive?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "For a ball, put origin + t * dir into |p - centre| = radius and solve for t. For a plane, put it into normal . p = offset. For a triangle, write the hit point as a + u (b - a) + v (c - a) and solve three equations for t, u and v."
+
+[[hints]]
+kind = "rust"
+text = "With determinants, the three unknowns of the triangle come from a few cross and dot products. Compare the determinant with the lengths of the two edges and of dir, not with a fixed number."
+
+[[hints]]
+kind = "edge"
+text = "For a far ball, do not compute (origin - centre) squared minus radius squared: both are huge. First remove from (origin - centre) its part along dir, then compare what is left with the radius."
+
+[solution]
+explanation = "Balls: take the part of origin - centre at right angles to the ray. The hit exists if it is no longer than the radius.\n\nThe two roots sit equally far on both sides of the closest approach. Triangles: solve for the two shares and t with cross products, rejecting a determinant that is tiny compared with the inputs. The world tries everything and keeps a strictly smaller t, which gives ties to the lower number."
+time = "O(n) per ray"
+space = "O(1) besides the scene"

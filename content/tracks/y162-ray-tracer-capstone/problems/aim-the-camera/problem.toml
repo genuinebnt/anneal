@@ -1,0 +1,32 @@
+slug = "aim-the-camera"
+title = "Capstone 3: aim the camera"
+mode = "write"
+level = "hard"
+stage = "see"
+order = 3
+status = "ready"
+tags = ["camera", "sampling", "geometry", "ray tracing", "75-min"]
+teaches = [
+    "A camera is three perpendicular directions and two numbers for how wide it sees.",
+    "Blur from a real lens needs no filter: start rays at many points of the lens and let them cross where the picture should be sharp.",
+    "Spreading samples over a pixel is a sampling problem. Where they go decides how noisy the edges are.",
+]
+follow_up = "1) What does your camera do to a ball near the edge of a very wide picture, and why? 2) How would you give the blur a hexagonal shape?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Forward is the direction to look_at. A cross product of forward and up gives the picture right; a second one gives an up that is exactly at right angles to both."
+
+[[hints]]
+kind = "rust"
+text = "Imagine the picture as a rectangle one unit ahead. Half its height is tan(vfov / 2). Point to (s, t) on it, then scale that same vector by the focus distance."
+
+[[hints]]
+kind = "edge"
+text = "Almost parallel is as bad as parallel: compare the length of the cross product with the length of up. For the pixel, ask whether the count is a square before you place anything."
+
+[solution]
+explanation = "The three axes come from two cross products, and the picture rectangle sits one unit ahead. Because the view vector has length 1 along forward, scaling it by the focus distance lands on the sharp plane. A lens ray starts on the lens disk and aims at that point. Square sample counts get one random point per grid cell; the disk uses the square root of a uniform number as radius."
+time = "O(1) per ray"
+space = "O(samples) per pixel"

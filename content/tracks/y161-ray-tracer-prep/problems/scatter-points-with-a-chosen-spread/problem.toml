@@ -1,0 +1,33 @@
+slug = "scatter-points-with-a-chosen-spread"
+title = "Scatter points with the spread you ask for"
+mode = "write"
+level = "medium"
+stage = "chance"
+order = 6
+status = "ready"
+tags = ["monte carlo", "sampling", "probability density", "geometry", "60-min"]
+teaches = [
+    "A uniform number turned into a distance does not give uniform places: far rings are larger than near ones.",
+    "To get a wished-for spread, ask what share of the draws must fall below each value, and solve for the value.",
+    "A flat even spread, lifted onto a dome, is denser where the dome is flat on top, in exact proportion to the height.",
+    "Randomness is tested with shares and error bars, not with expected values of single draws.",
+]
+follow_up = "1) How would you get directions spread evenly over the half ball instead? 2) Your rejection loop, if you used one, rejects what share of its tries?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "On the table, what share of all darts should land within radius r? Set that equal to a uniform number and solve for r. Or throw into a square and keep only what lands on the disk."
+
+[[hints]]
+kind = "approach"
+text = "For the dome, compare a small patch of the dome with its shadow on the table. How does their ratio depend on the height?"
+
+[[hints]]
+kind = "edge"
+text = "Use separate rolls for the distance and for the angle. Rounding can make 1 - x*x - y*y a hair negative."
+
+[solution]
+explanation = "The share of the disk within radius r is r squared, so the radius is the square root of a uniform number and the angle is uniform. A patch on the unit dome has an area of its shadow divided by its height. So an even spread of shadows gives a density per dome area in proportion to the height: take a disk point and lift it."
+time = "O(1) per draw"
+space = "O(1)"

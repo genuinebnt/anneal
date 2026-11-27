@@ -1,0 +1,37 @@
+slug = "save-the-picture"
+title = "Capstone 4: save a picture anyone can open"
+mode = "write"
+level = "hard"
+stage = "shine"
+order = 4
+status = "ready"
+tags = ["binary formats", "PNG", "checksums", "sRGB", "75-min"]
+teaches = [
+    "Light adds linearly, stored bytes do not: convert once, at the very end.",
+    "A file format is a few headers, lengths and checksums. A reader can be satisfied without any compression.",
+    "Sizes that come from the caller have to be multiplied with checks before anything is allocated.",
+]
+follow_up = "1) How much bigger is your file than a compressed PNG of the same picture? 2) What would a line filter other than 0 buy once real compression is added?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Build from the inside out: the lines with their filter bytes, then the zlib stream around them, then the three chunks around that."
+
+[[hints]]
+kind = "rust"
+text = "chunks(65535) cuts the data; div_ceil tells how many pieces there are. Lengths inside zlib are little endian, everything in PNG is big endian."
+
+[[hints]]
+kind = "edge"
+text = "A PNG chunk checksum covers the 4 letters and the data, not the length. Multiply width, 3 and height with checked_mul."
+
+[solution]
+explanation = "Each line gets a zero filter byte. The zlib stream is two header bytes, stored blocks of at most 65535 bytes with the length and its complement, then Adler-32 of the unpacked data. The PNG is the signature, IHDR, one IDAT and an empty IEND, each chunk followed by CRC-32 of its type and data."
+time = "O(width * height)"
+space = "O(width * height)"
+
+[[cookbook]]
+level = "related"
+page = "png-ppm-writer"
+note = "A PNG and PPM writer with stored blocks."

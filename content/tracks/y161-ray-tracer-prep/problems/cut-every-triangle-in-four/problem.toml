@@ -1,0 +1,33 @@
+slug = "cut-every-triangle-in-four"
+title = "Cut every triangle into four"
+mode = "write"
+level = "medium"
+stage = "build"
+order = 10
+status = "ready"
+tags = ["meshes", "hash map", "winding order", "45-min"]
+teaches = [
+    "In a mesh, neighbours share points by number. A new point on an edge must be made once and found again from the other side.",
+    "An undirected edge needs one name for both directions.",
+    "The order of a triangle corners is data: it must survive every rewrite.",
+    "A structural test can be exact where positions would need floating point: check which numbers connect to which.",
+]
+follow_up = "1) How would you find, for each edge, the two triangles beside it? 2) After six rounds, how much bigger is the mesh, and what dominates the memory?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Handle one triangle at a time: get the three middle points, then write the four pieces. The only memory needed is which edges already have a middle."
+
+[[hints]]
+kind = "rust"
+text = "A HashMap from a pair of point numbers to the new number does it. Build the pair so that both directions give the same key."
+
+[[hints]]
+kind = "edge"
+text = "Walk the corners of each piece in the same direction as the parent. checked_add guards the numbering."
+
+[solution]
+explanation = "A map from the edge, written with the smaller number first, to its new point makes neighbours share it. Each triangle gives three corner pieces and a middle piece, all listed in the parent turning direction. Indices are checked before use and new numbers are added with overflow checks."
+time = "O(triangles) expected"
+space = "O(triangles)"

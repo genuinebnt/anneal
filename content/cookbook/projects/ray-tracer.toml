@@ -34,19 +34,25 @@ every piece is small, but they interact; the assertions at the end (BVH == brute
 [[sections]]
 heading = "How it works"
 body = """
-camera ray: dir = normalize(forward + (2s-1) tan(fov/2) aspect right + (1-2t) tan(fov/2) up); thin lens: pick a point on the lens disk, aim at the point where the pinhole ray crosses the focus plane, so only that plane stays sharp. sphere: &#124;o + t d - c&#124;&#94;2 = r&#94;2 -> quadratic. triangle: Moller-Trumbore. plane: t = (k - n.o) / (n.d).
+camera ray: dir = normalize(forward + (2s-1) tan(fov/2) aspect right + (1-2t) tan(fov/2) up); thin lens: pick a point on the lens disk, aim at the point where the pinhole ray crosses the focus plane, so only that plane stays sharp. sphere: &#124;o + t d - c&#124;&#94;2 = r&#94;2 -> quadratic, solved from the part of o - c at right angles to the ray, so that a far origin does not destroy the digits. triangle: Moller-Trumbore. plane: t = (k - n.o) / (n.d).
 
 BVH: binary tree of axis-aligned boxes over triangles/spheres, median split on the longest centroid axis, stored in a flat Vec (depth-first: left child = index + 1, right child index stored), traversal with an explicit stack that skips boxes beyond the closest hit found so far.
 
-Planes are unbounded, so they are tested separately. determinism: the RNG for pixel (x, y) is seeded from (seed, x, y) only, and a hit tie is broken by primitive index, so the result does not depend on thread count, band order, or whether the BVH is used.
+Planes are unbounded, so they are tested separately. determinism: the RNG for pixel (x, y) is seeded from (seed, x, y) only, and a hit tie is broken by primitive index, so the result does not depend on thread count or band order. The BVH gives the same hits as brute force on the tested scenes; its box padding is a fixed 1e-6, so scenes with coordinates around 1e10 or more are outside what it promises.
 
-Whitted shading at a diffuse hit: albedo &#42; (ambient + sum over lights of light &#42; max(0, n.l) / d&#94;2 &#42; visibility) + Blinn term ks &#42; max(0, n.h)&#94;shininess, with h = normalize(l + v). path tracing (Lambert): next dir &#126; cos(theta)/pi so pdf cancels the cosine and throughput &#42;= albedo; after 3 bounces Russian roulette keeps the path with probability p = clamp(max(throughput), .05, .95) and divides by p (unbiased).
+Whitted shading at a diffuse hit: albedo &#42; (ambient + sum over lights of light &#42; max(0, n.l) / d&#94;2 &#42; visibility) + Blinn term ks &#42; max(0, n.h)&#94;shininess, with h = normalize(l + v). path tracing (Lambert): next dir &#126; cos(theta)/pi so pdf cancels the cosine and throughput &#42;= albedo; after 3 bounces Russian roulette keeps the path with probability p = clamp(max(throughput), .05, .95) and divides by p. The roulette adds no bias; the hard limit on bounces does cut off a little light.
 
-Glass picks reflection with probability R (Fresnel), refraction otherwise, so throughput needs no extra weight. white furnace: any closed lossless material inside uniform radiance 1 must look exactly 1; a deviation means the BRDF/refraction code creates or destroys energy. Convergence: RMSE of an N-sample image against a very
+Schlick's formula takes the angle on the side with the smaller index, so leaving glass it uses the outgoing angle and reaches 1 at total internal reflection. Glass picks reflection with probability R (Fresnel), refraction otherwise, so throughput needs no extra weight. white furnace: any closed lossless material inside uniform radiance 1 must look exactly 1; a deviation means the BRDF/refraction code creates or destroys energy. In theory the RMSE of an N-sample image against a very
 
 ```text
-high-sample reference falls like 1/sqrt(N).
+high-sample reference falls like 1/sqrt(N). The program checks that it falls at every step and by more than 2.5x from 1 to 64 samples.
 ```
+"""
+
+[[sections]]
+heading = "Limits"
+body = """
+<ul class="cb-g-uses"><li>the path tracer sees only the sky and emissive surfaces: it ignores point and area lights and treats Blinn as matte</li><li>Whitted shadow rays treat glass as opaque, and area lights have no emitter-cosine or area term</li><li>glass is always taken to be surrounded by air</li><li>the camera, the PNG writer and the renderer stop with a message on input they cannot use, such as a camera that looks at itself or an image with no pixels</li></ul>
 """
 
 [[sections]]

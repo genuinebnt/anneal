@@ -1,0 +1,32 @@
+slug = "follow-a-ball-round-a-room"
+title = "Follow a ball around a room"
+mode = "write"
+level = "medium"
+stage = "aim"
+order = 1
+status = "ready"
+tags = ["geometry", "dot product", "reflection", "floating point", "60-min"]
+teaches = [
+    "A line can be written as normal . p = offset. Putting a moving point into it gives the time of arrival with one division.",
+    "A bounce keeps the part of the velocity along the wall and turns round the part along the normal.",
+    "A computed point is never exactly on the wall. The rule that stops the ball hitting the same wall again must not depend on that.",
+]
+follow_up = "1) Why is \"ignore times below 0.000001\" a risky rule, and what would break it? 2) What changes if the room is not convex?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "For each wall, put position + t * velocity into the wall equation and solve for t. The next bounce is the smallest t that makes sense. Which walls can make sense at all?"
+
+[[hints]]
+kind = "approach"
+text = "The start is strictly inside, so for every wall you know which side the room is on. A ball can only hit a wall it is getting closer to."
+
+[[hints]]
+kind = "edge"
+text = "In a corner the second wall is reached after a time of zero, or a hair less because of rounding. Do not throw that away."
+
+[solution]
+explanation = "The starting point fixes the inner side of every wall. A wall is a candidate only if the velocity points towards its outer side, which rules out the wall just left without any threshold. \n\nThe time of arrival is (offset - n.p) / (n.v), clamped at zero for corners. The smallest wins. Ties go to the lower number, because only a strictly smaller time replaces it. The velocity loses twice its part along the normal."
+time = "O(walls * count)"
+space = "O(count)"

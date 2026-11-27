@@ -1,0 +1,33 @@
+slug = "mirrors-and-glass"
+title = "Capstone 6: mirrors and glass"
+mode = "write"
+level = "hard"
+stage = "shine"
+order = 6
+status = "ready"
+tags = ["recursion", "optics", "reflection", "refraction", "ray tracing", "90-min"]
+teaches = [
+    "A mirror or glass has no colour of its own: it asks the same question again along a new ray.",
+    "Glass splits light in two. The shares depend on the angle, and past a limit one share is everything.",
+    "A recursion over a scene the caller built needs its own bound, whatever the caller asks for.",
+    "A test with an exact answer (an endless series, an even sky) finds energy that appears or disappears.",
+]
+follow_up = "1) How many calls can your trace make at depth d with two glass balls, and what would you do about it? 2) Your glass assumes the outside is air. What goes wrong for a bubble inside glass, or a straw in water?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Decide first whether the ray meets the front or the back. That gives you the normal on the side of the ray, and which index you are leaving."
+
+[[hints]]
+kind = "edge"
+text = "The usual short formula for the reflected share wants the angle measured on the side with the smaller index. Going out of glass, that is the outgoing angle."
+
+[[hints]]
+kind = "edge"
+text = "Loss inside glass happens along the stretch you have just travelled. You know you were inside when you meet the surface from the back."
+
+[solution]
+explanation = "reflect flips the part along the normal. refract builds the new direction from the part along the surface, scaled by eta, and fails when that part alone would be longer than 1. Schlick uses the cosine on the thinner side, which makes it meet 1 at the limit and agree in both directions. trace caps the depth, mixes both children for glass, and multiplies by the loss when it arrives from inside."
+time = "O(2^depth) world queries in the worst case"
+space = "O(depth) stack"

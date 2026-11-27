@@ -1,0 +1,32 @@
+slug = "build-solid-things"
+title = "Capstone 2: boxes and balls from flat pieces"
+mode = "write"
+level = "hard"
+stage = "see"
+order = 2
+status = "ready"
+tags = ["meshes", "geometry", "winding order", "ray tracing", "60-min"]
+teaches = [
+    "The order of a triangle corners carries information: it says which side is outside.",
+    "A mesh without cracks needs neighbours to use the very same corner, not two that are almost equal.",
+    "Anything that grows by a power of the input needs a limit before the work starts.",
+]
+follow_up = "1) How much memory do your 81,920 triangles take, and how would storing corner numbers instead change that? 2) The flat triangles make a faceted ball. What would you need to shade it as a smooth one?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "For the box, number the eight corners by three bits: which x side, which y side, which z side. Then each face is four numbers, listed anticlockwise as seen from outside."
+
+[[hints]]
+kind = "approach"
+text = "For the ball, start with 12 points and 20 faces. One round turns every face into four, using the middle of each side pushed out to the ball."
+
+[[hints]]
+kind = "edge"
+text = "Two faces share each side. Look the middle point up by the pair of corner numbers, smaller first, so both faces get the same point. Check the level before any power is computed."
+
+[solution]
+explanation = "The box writes its eight corners once and lists each face anticlockwise from outside. The ball keeps a list of unit points and faces made of numbers; a map from a side (smaller number first) to its middle point makes neighbours share it. Only at the end are the numbers turned into triangles, scaled and moved."
+time = "O(20 * 4^levels)"
+space = "O(20 * 4^levels)"

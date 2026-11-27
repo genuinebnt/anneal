@@ -1,0 +1,37 @@
+slug = "render-the-whole-picture"
+title = "Capstone 9: render the whole picture"
+mode = "write"
+level = "hard"
+stage = "finish"
+order = 9
+status = "ready"
+tags = ["concurrency", "determinism", "scoped threads", "monte carlo", "ray tracing", "75-min"]
+teaches = [
+    "Give each pixel its own random numbers, derived from its position, and the picture no longer depends on who computes it or when.",
+    "Splitting the buffer into rows that threads take one at a time needs no unsafe code and no locking while they work.",
+    "A renderer is checked by what must hold: the same input gives the same bits, and more samples give less error at the expected rate.",
+]
+follow_up = "1) Rows near glass take far longer than sky rows. How small should a work unit be, and what does it cost to make it smaller? 2) How would you add a preview that improves while it renders and still ends with the same bits? 3) Where would you look first to make one thread twice as fast?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Write one function for one pixel: its own Stream, the sample offsets, a lens point for each, the ray, one of the two renderers, the average. Then all that is left is who calls it."
+
+[[hints]]
+kind = "rust"
+text = "chunks_mut cuts the picture into rows that do not overlap. thread::scope lets threads borrow the scene. A Mutex around the iterator of rows hands each row to exactly one thread."
+
+[[hints]]
+kind = "edge"
+text = "Do not hold the lock while you compute a row. Multiply width by height with checked_mul, and never start more threads than there are rows or than a small fixed number."
+
+[solution]
+explanation = "A pixel depends only on the scene, the camera, the settings and its position, through a Stream made from the seed and the position. The picture is cut into rows with chunks_mut; a few scoped threads take the next row from a locked iterator and fill it. The sizes are checked first, and the thread count is capped."
+time = "O(pixels * samples * path cost), divided among the threads"
+space = "O(pixels)"
+
+[[cookbook]]
+level = "similar"
+page = "ray-tracer"
+note = "A complete ray tracer in one file. Its names and some rules differ from this series."

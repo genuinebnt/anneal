@@ -1,0 +1,32 @@
+slug = "when-do-two-balls-touch"
+title = "When do two balls first touch?"
+mode = "write"
+level = "medium"
+stage = "aim"
+order = 2
+status = "ready"
+tags = ["geometry", "quadratic equation", "floating point", "45-min"]
+teaches = [
+    "Two moving things become one moving point and one still disc when you look from one of them.",
+    "A quadratic equation has two roots. Which one answers the question, if any, depends on where you start.",
+    "The textbook formula subtracts two huge, nearly equal numbers when the start is far away. Rearranging it keeps the digits.",
+]
+follow_up = "1) A game checks for touching once per frame. When does that miss a collision that your function finds? 2) What changes for three dimensions?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Subtract the positions and the velocities. Now one point moves, and the question is when it first gets within the sum of the radii of the origin."
+
+[[hints]]
+kind = "edge"
+text = "Settle the easy cases first: already within reach; not moving relative to each other; moving away."
+
+[[hints]]
+kind = "edge"
+text = "Far away, b*b - a*c is a tiny difference of numbers near 1e18. Instead find the moment of closest approach, work out the offset at that moment, and step back from there."
+
+[solution]
+explanation = "In the frame of the first ball a point moves with the relative velocity.\n\nIf it starts within reach the answer is 0. If it does not approach, there is none. Otherwise take the moment of closest approach; if the offset then is longer than the reach, they miss; else the touch comes earlier by sqrt((reach^2 - offset^2) / speed^2). Only small numbers are squared and subtracted."
+time = "O(1)"
+space = "O(1)"

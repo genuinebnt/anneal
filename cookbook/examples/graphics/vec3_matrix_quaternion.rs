@@ -12,7 +12,8 @@
 //! HOW (the math, plain text):
 //!   reflect(i, n)  = i - 2 (i.n) n                          (n unit)
 //!   refract(i,n,e) = e i + (e c - sqrt(1 - e^2 (1 - c^2))) n, c = -i.n, e = n1/n2; radicand < 0 => total internal reflection
-//!   Schlick(c)     = R0 + (1 - R0)(1 - c)^5, R0 = ((n1-n2)/(n1+n2))^2
+//!   Schlick(c)     = R0 + (1 - R0)(1 - c)^5, R0 = ((n1-n2)/(n1+n2))^2, c = cosine on the side with the SMALLER index
+//!       (the outgoing angle when n1 > n2); total internal reflection gives 1.
 //!   point vs direction: points use w = 1 (translation applies, then divide by w), directions use w = 0 (no translation).
 //!   perspective (OpenGL, right-handed, camera looks down -z, NDC cube [-1,1]^3):
 //!       x' = x/(r), y' = y/t scaled by n; z' = (-(f+n) z - 2fn)/(f-n) before dividing by w = -z.
@@ -154,8 +155,17 @@ impl Neg for Vec3 {
     }
 }
 
-/// Schlick's approximation of Fresnel reflectance; `cos` = cosine of the incident angle.
-fn schlick(cos: f64, n1: f64, n2: f64) -> f64 {
+/// Schlick's approximation of Fresnel reflectance; `cos_i` = cosine of the incident angle. The formula only holds with
+/// the angle on the side with the smaller index, so going into a thinner medium it uses the outgoing angle.
+fn schlick(cos_i: f64, n1: f64, n2: f64) -> f64 {
+    let mut cos = cos_i;
+    if n1 > n2 {
+        let sin2_t = (n1 / n2).powi(2) * (1.0 - cos_i * cos_i);
+        if sin2_t > 1.0 {
+            return 1.0; // total internal reflection
+        }
+        cos = (1.0 - sin2_t).sqrt();
+    }
     let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
     r0 + (1.0 - r0) * (1.0 - cos).powi(5)
 }
@@ -589,6 +599,17 @@ fn main() {
         schlick(0.01, 1.0, 1.5) > 0.9,
         "grazing angles are nearly mirrors"
     );
+    // Leaving glass: just before total internal reflection almost everything is reflected...
+    let critical = (1.0f64 - (1.0f64 / 1.5).powi(2)).sqrt();
+    assert!(
+        schlick(critical + 1e-9, 1.5, 1.0) > 0.99,
+        "Schlick from the dense side"
+    );
+    assert_eq!(schlick(critical - 1e-9, 1.5, 1.0), 1.0);
+    // ...and one face reflects the same share from both sides.
+    let sin_inside: f64 = 0.8 / 1.5;
+    let cos_inside = (1.0 - sin_inside * sin_inside).sqrt();
+    assert!((schlick(0.6, 1.0, 1.5) - schlick(cos_inside, 1.5, 1.0)).abs() < 1e-12);
     println!(
         "refract/Schlick ok: R(0 deg) = {r_normal:.3}, R(89.4 deg) = {:.3}",
         schlick(0.01, 1.0, 1.5)

@@ -1,0 +1,32 @@
+slug = "how-bright-is-each-spot"
+title = "How bright is each spot on the floor plan?"
+mode = "write"
+level = "medium"
+stage = "light"
+order = 8
+status = "ready"
+tags = ["geometry", "shading", "segment intersection", "floating point", "60-min"]
+teaches = [
+    "Light that reaches a surface weakens with distance and with the slant of the surface. The slant factor is a dot product of unit vectors.",
+    "A shadow is a yes or no question about a straight line between two points, not about an endless line.",
+    "When the line starts on an obstacle, the obstacle itself must be excluded by a margin along the line.",
+]
+follow_up = "1) In 3D the walls become triangles. What stays the same? 2) A real lamp has a size. How would the edge of a shadow change, and how would you compute it?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Handle one lamp at a time: is it in front, can it be seen, how much arrives. Add them up."
+
+[[hints]]
+kind = "approach"
+text = "Solve spot + s (lamp - spot) = a + u (b - a) for s and u. The wall blocks if u is on the wall and s is between the two ends."
+
+[[hints]]
+kind = "edge"
+text = "Between the ends means a little inside them. Zero is not a good lower limit for s when the spot lies on a wall: rounding can make s a tiny positive number."
+
+[solution]
+explanation = "For each lamp: the cosine between facing and the direction to the lamp, both made unit length. If it is positive and no wall crosses the open way, add power * cosine / distance squared. A wall crosses when the two-by-two solution has the wall share in [0, 1] and the way share inside (0, 1) by a small margin measured in length."
+time = "O(lamps * walls)"
+space = "O(1)"

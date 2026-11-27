@@ -1,0 +1,32 @@
+slug = "measure-a-shape-you-can-only-poke"
+title = "Measure a shape you can only poke"
+mode = "write"
+level = "medium"
+stage = "chance"
+order = 5
+status = "ready"
+tags = ["monte carlo", "sampling", "random numbers", "floating point", "45-min"]
+teaches = [
+    "A f64 holds 53 bits of precision. Dividing a whole u64 by its maximum rounds the largest values up to 1.0.",
+    "An average over random places estimates an area. Where the places go decides how fast the error shrinks.",
+    "Some error bounds hold in every run, not only on average, when each part of the space is guaranteed its share.",
+]
+follow_up = "1) With 10 million pokes you could use a regular grid with no randomness. Which shape would fool it completely? 2) How would your error grow in 10 dimensions with the same number of pokes?"
+related = ["Y161", "Y162", "Y41"]
+
+[[hints]]
+kind = "approach"
+text = "How many random numbers can a f64 in [0, 1) tell apart evenly? Keep exactly that many bits of the raw value."
+
+[[hints]]
+kind = "approach"
+text = "If all pokes are anywhere, some areas get many and others none. Make that impossible, and still keep each poke random."
+
+[[hints]]
+kind = "edge"
+text = "The two coordinates of one poke must not move together. Check the side before multiplying side by side."
+
+[solution]
+explanation = "The top 53 bits divided by 2^53 give every representable step of that size the same number of raw values and never reach 1. The square is cut into side by side cells with one random poke in each. Only cells crossed by the border can be counted wrongly. For a smooth border that is about as many as the side, not its square."
+time = "O(side^2)"
+space = "O(1)"

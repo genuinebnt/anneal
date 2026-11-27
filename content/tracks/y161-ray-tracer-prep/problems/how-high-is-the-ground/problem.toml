@@ -1,0 +1,32 @@
+slug = "how-high-is-the-ground"
+title = "How high is the ground here?"
+mode = "write"
+level = "medium"
+stage = "aim"
+order = 3
+status = "ready"
+tags = ["geometry", "barycentric coordinates", "determinants", "floating point", "60-min"]
+teaches = [
+    "Any point in the plane of a triangle is the first corner plus some share of each of its two sides. The shares say both whether the point is inside and what any corner value is there.",
+    "The determinant that solves for the shares is zero exactly when the triangle has no area. \"Almost zero\" only means something compared with the sides.",
+    "Points on an edge sit on the boundary between true and false, where rounding decides unless you give it room.",
+]
+follow_up = "1) With a million triangles, what would you prepare so that each question is cheap? 2) Two triangles share an edge but their shared corners differ in the last digit. What can fall through?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Look only at x and z. Write the place as a + u (b - a) + v (c - a). That is two equations with two unknowns."
+
+[[hints]]
+kind = "rust"
+text = "corners.map(|i| points.get(i)) gives three Options; a let-else pattern on the array skips a triangle with a bad number."
+
+[[hints]]
+kind = "edge"
+text = "Inside means u >= 0, v >= 0 and u + v <= 1, each with 1e-9 of room. The same u and v give the height."
+
+[solution]
+explanation = "For each triangle in order: solve the two-by-two system in x and z for the shares u and v. A determinant that is tiny compared with the two sides means no area. The shares, with a little room, say whether the place is covered, and the same shares blend the three heights. The first cover found has the lowest number."
+time = "O(triangles)"
+space = "O(1)"
