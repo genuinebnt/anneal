@@ -19,3 +19,6 @@ text = "`str::eq_ignore_ascii_case` compares byte by byte, folding ASCII letters
 explanation = "Lowercasing both sides allocates two Strings per comparison; `eq_ignore_ascii_case` allocates nothing. It only folds ASCII, which is right for commands and keywords."
 time = "O(n)"
 space = "O(1)"
+
+[perf]
+count_allocs = true

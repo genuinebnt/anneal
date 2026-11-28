@@ -31,6 +31,11 @@ impl Feed {
         todo!()
     }
 
+    /// For the tests: see "For the tests" in the statement.
+    pub fn on_nothing_new(&self, hook: impl Fn() + Send + Sync + 'static) {
+        todo!()
+    }
+
     pub fn follow(&self, after: u64) -> impl Stream<Item = Entry> + Send + 'static {
         // Replace this line: it is only here so that the signature compiles.
         futures::stream::once(async { todo!() })

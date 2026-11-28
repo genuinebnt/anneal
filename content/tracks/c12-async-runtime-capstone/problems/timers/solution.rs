@@ -578,6 +578,12 @@ impl Drop for LocalRuntime {
         };
         // the destructors run as if inside the runtime, and whatever they spawn is thrown away too
         let _entered = self.handle.enter();
+        for task in &queued {
+            // someone may still hold a waker, so dropping our reference is not enough: destroy the future itself.
+            // A later wake finds the task queued and does nothing
+            let future = lock(&task.future).take();
+            drop(future);
+        }
         drop(queued);
     }
 }

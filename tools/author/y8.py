@@ -287,6 +287,72 @@ def E(pat):
     return f'Regex::new("{pat}").err()'
 
 
+RX_BACKTRACKING = RX[:RX.index("enum Inst {")] + """// WRONG: a backtracking matcher. It tries one way at a time and goes back on failure,
+// so a pattern with many ways to split the text takes exponential time.
+fn go(node: &Node, s: &[char], pos: usize, k: &mut dyn FnMut(usize) -> bool) -> bool {
+    match node {
+        Node::Empty => k(pos),
+        Node::Char(c) => pos < s.len() && s[pos] == *c && k(pos + 1),
+        Node::Any => pos < s.len() && k(pos + 1),
+        Node::Cat(items) => cat(items, s, pos, k),
+        Node::Alt(bs) => bs.iter().any(|b| go(b, s, pos, k)),
+        Node::Star(n) => star(n, s, pos, k),
+        Node::Plus(n) => go(n, s, pos, &mut |p| star(n, s, p, k)),
+        Node::Quest(n) => go(n, s, pos, k) || k(pos),
+    }
+}
+
+fn cat(items: &[Node], s: &[char], pos: usize, k: &mut dyn FnMut(usize) -> bool) -> bool {
+    match items.split_first() {
+        None => k(pos),
+        Some((first, rest)) => go(first, s, pos, &mut |p| cat(rest, s, p, k)),
+    }
+}
+
+fn star(n: &Node, s: &[char], pos: usize, k: &mut dyn FnMut(usize) -> bool) -> bool {
+    // another round only if it moves forward, so empty loops end
+    go(n, s, pos, &mut |p| p > pos && star(n, s, p, k)) || k(pos)
+}
+
+pub struct Regex {
+    node: Node,
+}
+
+impl Regex {
+    pub fn new(pattern: &str) -> Result<Regex, ParseError> {
+        let mut p = Parser {
+            s: pattern.chars().collect(),
+            pos: 0,
+        };
+        let node = p.alt()?;
+        if p.pos < p.s.len() {
+            return Err(ParseError::UnbalancedParen);
+        }
+        Ok(Regex { node })
+    }
+
+    pub fn is_match(&self, text: &str) -> bool {
+        let s: Vec<char> = text.chars().collect();
+        go(&self.node, &s, 0, &mut |p| p == s.len())
+    }
+
+    pub fn find(&self, text: &str) -> Option<(usize, usize)> {
+        let s: Vec<char> = text.chars().collect();
+        for start in 0..=s.len() {
+            let mut best = None;
+            go(&self.node, &s, start, &mut |p| {
+                best = best.max(Some(p));
+                false
+            });
+            if let Some(end) = best {
+                return Some((start, end));
+            }
+        }
+        None
+    }
+}
+"""
+
 RX_HELPERS = WITHIN + """
         fn m(pat: &str, text: &str) -> bool {
             Regex::new(pat).unwrap().is_match(text)
@@ -313,7 +379,7 @@ P.append(dict(
 
         `is_match` is true when the pattern matches the **entire** text. `find` returns the **leftmost** match and, among matches
         starting there, the **longest**, as `(start, end)` in `char` indices (`end` exclusive). It may be an empty match.
-        Matching must take time proportional to `text length x pattern length`, however nasty the pattern.
+        `is_match` must take time proportional to `text length x pattern length`, however nasty the pattern. `find` may take that much for each start position.
     """,
     starter=RX_STARTER,
     solution=RX,
@@ -342,11 +408,12 @@ P.append(dict(
             let ok = within(5000, || {
                 let text = "a".repeat(3000);
                 let nested = Regex::new("(a*)*b").unwrap();
-                let alt = Regex::new("(a|aa)+$").unwrap();
-                let many = Regex::new("(a?){30}a{30}").unwrap();
-                (nested.is_match(&text), alt.is_match(&text), many.is_match(&text), Regex::new("(x+x+)+y").unwrap().is_match(&"x".repeat(3000)))
+                let alt = Regex::new("(a|aa)+b").unwrap();
+                // a? thirty times, then a thirty times, against thirty a's: the classic case from Russ Cox
+                let many = Regex::new(&("a?".repeat(30) + &"a".repeat(30))).unwrap();
+                (nested.is_match(&text), alt.is_match(&text), many.is_match(&"a".repeat(30)), Regex::new("(x+x+)+y").unwrap().is_match(&"x".repeat(3000)))
             });
-            check!("finishes, and the answers are right", ok, Some((false, false, false, false)));
+            check!("finishes, and the answers are right", ok, Some((false, false, true, false)));
         }
 
         #[test]
@@ -387,7 +454,9 @@ P.append(dict(
         stray_close_paren_ignored=sub(RX, "        if p.pos < p.s.len() {\n            return Err(ParseError::UnbalancedParen); // a `)` with no `(`\n        }\n", ""),
         dangling_escape_is_literal=sub(RX, "                None => Err(ParseError::DanglingEscape),", "                None => Ok(Node::Char('\\\\')),"),
         unbalanced_open_paren_accepted=sub(RX, "                if self.peek() != Some(')') {\n                    return Err(ParseError::UnbalancedParen);\n                }\n                self.pos += 1;\n                Ok(inner)", "                if self.peek() == Some(')') {\n                    self.pos += 1;\n                }\n                Ok(inner)"),
-        seen_set_is_never_reset=sub(sub(RX, "            let mut next = Vec::new();\n            let mut seen = vec![false; self.prog.len()];\n", "            let mut next = Vec::new();\n"), "        let mut best = None;\n        let mut i = start;\n", "        let mut best = None;\n        let mut i = start;\n        let mut seen = vec![false; self.prog.len()];\n"),    ),
+        seen_set_is_never_reset=sub(sub(RX, "            let mut next = Vec::new();\n            let mut seen = vec![false; self.prog.len()];\n", "            let mut next = Vec::new();\n"), "        let mut best = None;\n        let mut i = start;\n", "        let mut best = None;\n        let mut i = start;\n        let mut seen = vec![false; self.prog.len()];\n"),
+        a_backtracking_matcher=RX_BACKTRACKING,
+    ),
     hints=[("approach", "Three stages. (1) A recursive-descent parser with one function per precedence level (`alt` calls `cat` calls `repeat` calls `atom`) builds a tree. (2) Compile the tree into instructions: `Split(x, y)` continues at both `x` and `y`, `Jmp(t)` continues at `t`, `Match` accepts. `a*` is `L: Split(L+1, out); a; Jmp L`. (3) Simulate: keep the *set* of program counters that are alive, and for each character build the next set."),
            ("rust", "Write `add_thread(list, seen, pc)` that follows `Jmp` and `Split` (with a `seen: Vec<bool>` reset per step) and pushes only `Char`/`Any`/`Match` states: that is the epsilon closure, and `seen` is what stops `(a*)*` from looping forever. `find` = for each start index, run the simulation and remember the **last** position at which `Match` was in the set; take the first start that has any."),
            ("edge", "`a**` and `a+?` are errors in this problem (a quantifier right after a quantifier). `()` and `a|` give `Node::Empty`. A `)` left over after the top-level parse means an unmatched close; a missing `)` inside `atom` means an unmatched open. Count characters, not bytes: collect `chars()` first.")],

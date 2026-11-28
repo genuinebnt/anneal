@@ -219,18 +219,33 @@ fn a_correct_checksum_does_not_make_bad_contents_good() {
         ("a hash count that lies", build(&[&[2, 0], &k, &lie, &[0xFF]])),
         ("an empty list", build(&[&[1, 0], &k, &zero, &[0xFF]])),
         ("an empty sorted set", build(&[&[4, 0], &k, &zero, &[0xFF]])),
+        ("an empty hash", build(&[&[2, 0], &k, &zero, &[0xFF]])),
+        ("an empty set", build(&[&[3, 0], &k, &zero, &[0xFF]])),
         ("a score that is NaN", build(&[&[4, 0], &k, &one, &nan, &v, &[0xFF]])),
+        ("a score with the bits of -0.0", build(&[&[4, 0], &k, &one, &(-0.0f64).to_bits().to_le_bytes(), &v, &[0xFF]])),
         ("a key twice", build(&[&string_k, &string_k, &[0xFF]])),
         ("a set member twice", build(&[&[3, 0], &k, &2u32.to_le_bytes(), &v, &v, &[0xFF]])),
         ("a hash field twice", build(&[&[2, 0], &k, &2u32.to_le_bytes(), &v, &v, &v, &v, &[0xFF]])),
         ("a sorted member twice", build(&[&[4, 0], &k, &2u32.to_le_bytes(), &score, &v, &score, &v, &[0xFF]])),
         ("a wrong magic", sealed(b"RSNAP2\xff".to_vec())),
+        ("keys out of byte order", build(&[&[0, 0], &blob(b"m"), &v, &string_k, &[0xFF]])),
+        ("set members out of byte order", build(&[&[3, 0], &k, &2u32.to_le_bytes(), &blob(b"w"), &v, &[0xFF]])),
+        ("hash fields out of byte order", build(&[&[2, 0], &k, &2u32.to_le_bytes(), &blob(b"w"), &v, &v, &v, &[0xFF]])),
+        ("a higher score first", build(&[&[4, 0], &k, &2u32.to_le_bytes(), &2f64.to_bits().to_le_bytes(), &blob(b"a"), &score, &blob(b"b"), &[0xFF]])),
+        ("equal scores, members out of order", build(&[&[4, 0], &k, &2u32.to_le_bytes(), &score, &blob(b"w"), &score, &v, &[0xFF]])),
     ];
     for (what, bytes) in cases {
         check!(what, decode_snapshot(&bytes).is_err(), true);
     }
     let good = build(&[&string_k, &[0xFF]]);
     check!("the same pieces put right are accepted", decode_snapshot(&good).is_ok(), true);
+    let ordered = build(&[
+        &string_k,
+        &[3, 0], &blob(b"m"), &2u32.to_le_bytes(), &v, &blob(b"w"),
+        &[4, 0], &blob(b"z"), &2u32.to_le_bytes(), &score, &blob(b"b"), &2f64.to_bits().to_le_bytes(), &blob(b"a"),
+        &[0xFF],
+    ]);
+    check!("keys, members and scores in order are accepted", decode_snapshot(&ordered).is_ok(), true);
 }
 
 #[test]
@@ -492,15 +507,16 @@ A string value is a blob. The others are a `u32` count, then that many items:
 | hash | blob field, blob value | by field |
 | sorted set | `u64` score bits, blob member | the set's order |
 
-Score bits are `f64::to_bits`.
+Score bits are `f64::to_bits`. A score is never stored as `-0.0` (it is kept as 0), so the bits of `-0.0` are not this format.
 
 **`encode_snapshot(core, now)`** writes the keys that are live at `now`.
 
 **`decode_snapshot(bytes)`** builds a core, with nothing to log. Refuse, with `BadSnapshot`, anything that is not exactly this format:
 
 - a wrong magic or checksum, or bytes missing or left over;
-- an unknown type or flag, a count of 0, or a NaN score;
-- a key, member or field that appears twice.
+- an unknown type or flag, a count of 0, a NaN score, or the bits of `-0.0`;
+- a key, member or field that appears twice;
+- keys, set members, hash fields or sorted-set items out of the order the format gives. So a core has exactly one snapshot.
 
 **No input may panic.** Do not reserve memory for what a count merely claims. The checksum is no proof: the tests send bad contents with a correct checksum.
 
@@ -552,9 +568,18 @@ PROBLEM = dict(
         "snapshot_keeps_expired_keys": broken(SOLUTION, (
             "        (!deadline.is_some_and(|at| at <= now)).then_some((key, value, deadline))", "        let _ = now;\n        Some((key, value, deadline))")),
         "decoder_trusts_the_checksum": broken(SOLUTION, (
-            "                    if score.is_nan() || sorted.insert(&member, score + 0.0).is_some() {", "                    if sorted.insert(&member, score + 0.0).is_some() && false {"),
+            "                    if score.is_nan() || previous.as_ref()", "                    if false && previous.as_ref()"),
             ("    if !reader.0.is_empty() {\n        return Err(BadSnapshot);\n    }\n", "")),
+        "negative_zero_turned_into_zero": broken(SOLUTION, (
+            "                    if bits == (-0.0f64).to_bits() {\n                        return Err(BadSnapshot);\n                    }\n                    let score = f64::from_bits(bits);\n",
+            "                    let score = f64::from_bits(bits) + 0.0;\n")),
+        "keys_in_any_order": broken(SOLUTION, (
+            "        if core.engine.map.keys().next_back().is_some_and(|last| *last >= key) {\n", "        if core.engine.map.contains_key(&key) {\n")),
+        "members_in_any_order": broken(SOLUTION, (
+            "                    if set.last().is_some_and(|last| *last >= member) {\n", "                    if set.contains(&member) {\n")),
         "one_command_per_collection": broken(SOLUTION, (
             "            for chunk in items.chunks(64 * width) {", "            for chunk in items.chunks(usize::MAX / width) {")),
+        "empty_hash_or_set_accepted": broken(SOLUTION, (
+            "\n        if count == 0 {\n", "\n        // only the kinds that keep an order are checked for being empty\n        if count == 0 && (kind == 1 || kind == 4) {\n")),
     },
 )

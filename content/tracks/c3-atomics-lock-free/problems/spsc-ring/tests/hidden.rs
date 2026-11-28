@@ -48,7 +48,7 @@ fn leftover_items_dropped_once() {
     drop(c.pop()); // one consumed (dropped by us)
     drop(c.pop());
     check!("two popped and dropped", n.load(Ordering::SeqCst), 2);
-    p.push(D(n.clone())).ok().unwrap(); // wraps into slot 0
+    p.push(D(n.clone())).ok().unwrap(); // a sixth item, after two pops freed room
     drop(p);
     drop(c);
     check!("six pushed in total, all dropped exactly once", n.load(Ordering::SeqCst), 6);

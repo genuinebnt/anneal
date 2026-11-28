@@ -8,7 +8,7 @@ status = "ready"
 tags = ["capacity", "growth"]
 teaches = [
   "`Vec` grows geometrically: amortised O(1) push.",
-  "Its first allocation holds 4 small elements, not 1.",
+  "Its first allocation holds 4 elements of a type like `u32` (8 for 1-byte types), not 1.",
 ]
 follow_up = "Why does doubling give amortised O(1) push, while growing by a constant doesn't?"
 related = ["Y1", "Y4"]
@@ -18,6 +18,6 @@ kind = "rust"
 text = "Capacity doubles when full. What's the first non-zero capacity for a small element type?"
 
 [solution]
-explanation = "std's minimum non-zero capacity is 4 for elements up to 1 KiB, then it doubles, so 100 pushes cost 6 allocations and copy fewer than 128 elements in total."
+explanation = "std's minimum non-zero capacity is 8 for 1-byte elements, 4 for elements up to 1 KiB (like `u32`) and 1 above that; then it doubles, so 100 pushes cost 6 allocations and copy fewer than 128 elements in total."
 time = "O(1) amortised per push"
 space = "O(n)"

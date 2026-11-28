@@ -272,3 +272,92 @@ fn many_threads_end_in_the_right_state() {
         check!(typed.to_string(), same(&s.suggest(typed, 20, 0).items, &fresh.suggest(typed, 20, 0).items), true);
     }
 }
+
+/// Real threads and no waiting on purpose. One thread keeps adding a term that beats all before it. The others keep
+/// asking, and an answer must never be older than the last write that had finished before the question began.
+#[test]
+fn no_old_answer_once_a_write_has_finished() {
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    for round in 0..10 {
+        let (s, _) = service(4);
+        // the newest write that `add` has returned from
+        let done = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        s.add(&[("zq0", 1)], 0);
+        let askers: Vec<thread::JoinHandle<Option<String>>> = (0..3)
+            .map(|_| {
+                let (s, done, stop) = (s.clone(), done.clone(), stop.clone());
+                thread::spawn(move || {
+                    let mut asked = 0;
+                    while !stop.load(Ordering::SeqCst) || asked < 2_000 {
+                        asked += 1;
+                        let before = done.load(Ordering::SeqCst);
+                        let answer = s.suggest("zq", 1, 0);
+                        let top: u64 = answer.items.first().and_then(|t| t.term[2..].parse().ok()).unwrap_or(0);
+                        if top < before {
+                            return Some(format!("round {round}: the best was zq{top} (cached: {}) after zq{before} had been added", answer.cached));
+                        }
+                    }
+                    None
+                })
+            })
+            .collect();
+        for n in 1..=1_500u64 {
+            // each new term is chosen more often than any before it
+            s.add(&[(format!("zq{n}").as_str(), n as u32 + 1)], 0);
+            done.store(n, Ordering::SeqCst);
+        }
+        stop.store(true, Ordering::SeqCst);
+        let wrong: Vec<String> = askers.into_iter().filter_map(|a| a.join().unwrap()).collect();
+        check!("old answers served", wrong.first().cloned(), None);
+    }
+}
+
+/// The hook stops a search after its last call of the judge, before its answer is stored, and a write lands there.
+#[test]
+fn a_write_between_the_search_and_the_store() {
+    use std::sync::atomic::AtomicBool;
+    for round in 0..3 {
+        // judge calls made on this thread, where the searches run; the write's own calls run elsewhere
+        let here = thread::current().id();
+        let mine = Arc::new(AtomicUsize::new(0));
+        let counter = mine.clone();
+        let s = Arc::new(Service::new(
+            8,
+            Box::new(move |typed, term| {
+                if thread::current().id() == here {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+                classify(typed, term)
+            }),
+        ));
+        s.add(&[("javascript", 5)], 0);
+        // the judge calls seen each time the hook ran, and the write it started
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let armed = Arc::new(AtomicBool::new(true));
+        let writer: Arc<Mutex<Option<thread::JoinHandle<Added>>>> = Arc::new(Mutex::new(None));
+        {
+            let (s2, mine, seen, armed, writer) = (s.clone(), mine.clone(), seen.clone(), armed.clone(), writer.clone());
+            s.on_searched(move || {
+                seen.lock().unwrap().push(mine.load(Ordering::SeqCst));
+                if armed.swap(false, Ordering::SeqCst) {
+                    let s3 = s2.clone();
+                    let (thread, done) = start(move || s3.add(&[("typescript", 9)], 0));
+                    // the write either finishes now or waits for this search: both are fine
+                    let _ = done.recv_timeout(Duration::from_secs(1));
+                    *writer.lock().unwrap() = Some(thread);
+                }
+            });
+        }
+        let first = s.suggest("script", 5, 0);
+        let after = mine.load(Ordering::SeqCst);
+        check!(format!("round {round}: the hook ran once, after the last call of the judge"), seen.lock().unwrap().clone(), vec![after]);
+        check!(format!("round {round}: the search asked the judge"), (after > 0, first.cached), (true, false));
+        writer.lock().unwrap().take().expect("the hook started no write").join().unwrap();
+        let again = s.suggest("script", 5, 0);
+        check!(format!("round {round}: after the write"), terms(&again), "typescript, javascript".to_string());
+        let count = seen.lock().unwrap().len();
+        let third = s.suggest("script", 5, 0);
+        check!(format!("round {round}: a cached answer does not call the hook"), (third.cached, seen.lock().unwrap().len()), (true, count));
+    }
+}

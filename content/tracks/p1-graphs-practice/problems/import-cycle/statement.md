@@ -6,3 +6,5 @@ A module that imports itself is the cycle `[name]`. A module that appears only i
 find_import_cycle({"app": ["db", "log"], "db": ["log"], "log": ["db"]})  # ["db", "log"] (or ["log", "db"])
 find_import_cycle({"a": ["b"], "b": []})                                  # None
 ```
+
+An import chain can be 5,000 modules deep. That is deeper than Python's recursion limit (about 1,000 calls), so a recursive search fails.

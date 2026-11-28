@@ -59,3 +59,8 @@ fn match_index_is_what_the_request_covered() {
 fn resending_the_same_request_is_idempotent() {
     check!(r#"twice, same result"#, { let mut n = Node::default(); let q = AppendRequest { term: 1, leader: 1, prev_log_index: 0, prev_log_term: 0, entries: vec![Entry { term: 1, cmd: 100 }, Entry { term: 2, cmd: 101 }], leader_commit: 2 }; let a = n.handle_append(&q); let b = n.handle_append(&q); (a == b, n.log.iter().map(|e| e.term).collect::<Vec<u64>>(), n.commit_index) }, (true, vec![1, 2], 2));
 }
+
+#[test]
+fn a_failed_check_still_adopts_a_newer_term() {
+    check!(r#"term 3 leader, prev entry missing, we voted in term 2"#, { let mut n = Node { term: 2, voted_for: Some(4), log: vec![Entry { term: 1, cmd: 1 }], commit_index: 0 }; let r = n.handle_append(&AppendRequest { term: 3, leader: 1, prev_log_index: 4, prev_log_term: 3, entries: vec![Entry { term: 3, cmd: 100 }], leader_commit: 0 }); (r, n.term, n.voted_for, n.log.len()) }, (AppendReply { term: 3, success: false, match_index: 0 }, 3, None, 1));
+}

@@ -8,8 +8,8 @@ P.append(dict(
     teaches=["Count into a `HashMap`, filter with a `HashSet`.", "`max_by` with a tie-breaker."],
     statement="""
         Return the most frequent word in `paragraph` that isn't in `banned`. Words are runs of ASCII
-        letters, compared case-insensitively and returned in lowercase. Ties go to the alphabetically
-        first word; return `""` if there are no words.
+        letters, compared case-insensitively and returned in lowercase. `banned` holds lowercase words.
+        Ties go to the alphabetically first word; return `""` if there are no words.
     """,
     examples=[("\"Bob hit a ball, the hit BALL flew far after it was hit.\", banned = [\"hit\"]", "\"ball\"")],
     starter="""
@@ -23,7 +23,10 @@ P.append(dict(
         pub fn most_common_word(paragraph: &str, banned: &[&str]) -> String {
             let banned: HashSet<&str> = banned.iter().copied().collect();
             let mut counts: HashMap<String, usize> = HashMap::new();
-            for w in paragraph.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty()) {
+            for w in paragraph
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .filter(|w| !w.is_empty())
+            {
                 let w = w.to_ascii_lowercase();
                 if !banned.contains(w.as_str()) {
                     *counts.entry(w).or_insert(0) += 1;
@@ -1064,7 +1067,15 @@ P.append(dict(
     statement="""
         Build `OpenMap<V>`, a hash map from `u64` keys to `V`, on one `Vec<Slot<V>>` with linear probing.
         Implement `new`, `insert` (returning the old value if the key existed), `get`, `remove` and `len`.
-        Keep the load factor below 3/4 by doubling. Removing must not break lookups of keys further along a probe chain.
+        Removing must not break lookups of keys further along a probe chain.
+
+        Count tombstones as used. After every call, at least a quarter of the slots must be `Empty`, or a
+        lookup of a missing key could walk the whole table. Double when the table gets fuller than that, and
+        drop the tombstones whenever you rebuild. Under insert-then-remove churn, rebuilding at the same size
+        is enough: the slot count must stay at most `16 * max(largest len so far, 1)`.
+
+        `capacity()` returns the number of slots and `empty_slots()` the number of `Empty` ones. The tests
+        use them to check both rules.
     """,
     starter="""
         enum Slot<V> {
@@ -1096,6 +1107,16 @@ P.append(dict(
             }
 
             pub fn len(&self) -> usize {
+                todo!()
+            }
+
+            /// The number of slots.
+            pub fn capacity(&self) -> usize {
+                todo!()
+            }
+
+            /// The number of `Empty` slots (neither full nor a tombstone).
+            pub fn empty_slots(&self) -> usize {
                 todo!()
             }
         }
@@ -1192,8 +1213,21 @@ P.append(dict(
                 self.len == 0
             }
 
+            pub fn capacity(&self) -> usize {
+                self.slots.len()
+            }
+
+            pub fn empty_slots(&self) -> usize {
+                self.slots.len() - self.used
+            }
+
+            /// Rebuilds the table without tombstones. It doubles only when live keys fill more than half
+            /// the slots; otherwise the slots are mostly tombstones, and a rebuild at the same size is
+            /// enough. Without that, insert-then-remove churn would double the table forever.
             fn grow(&mut self) {
-                let old = std::mem::replace(self, Self::with_slots(self.slots.len() * 2));
+                let n = self.slots.len();
+                let new_n = if (self.len + 1) * 2 > n { n * 2 } else { n };
+                let old = std::mem::replace(self, Self::with_slots(new_n));
                 for slot in old.slots {
                     if let Slot::Full(k, v) = slot {
                         self.insert(k, v);
@@ -1214,6 +1248,23 @@ P.append(dict(
         T("remove", "insert 5, remove 5", "{ let mut m = OpenMap::new(); m.insert(5, 'x'); (m.remove(5), m.get(5).copied(), m.remove(5), m.len()) }", "(Some('x'), None, None, 0)"),
         T("remove_missing", "remove 9 from an empty map", "{ let mut m: OpenMap<u8> = OpenMap::new(); (m.remove(9), m.len(), m.get(9).copied()) }", "(None, 0, None)"),
         T("reinsert_after_remove", "insert 3; remove 3; insert 3 again", '{ let mut m = OpenMap::new(); m.insert(3, "a"); m.remove(3); (m.insert(3, "b"), m.get(3).copied(), m.len()) }', '(None, Some("b"), 1)'),
+        """
+        #[test]
+        fn a_quarter_of_the_slots_stay_empty() {
+            let mut m = OpenMap::new();
+            let mut always = true;
+            for k in 0..3u64 {
+                m.insert(k, k);
+            }
+            for k in 3..200u64 {
+                m.insert(k, k);
+                always &= m.empty_slots() * 4 >= m.capacity();
+                m.remove(k);
+                always &= m.empty_slots() * 4 >= m.capacity();
+            }
+            check!("keep 3 keys, insert and remove 197 more: empty_slots() * 4 >= capacity() after every call", (always, m.len()), (true, 3));
+        }
+        """,
     ],
     hidden=[
         """
@@ -1339,12 +1390,84 @@ P.append(dict(
             let removed = (0..200_000u64).step_by(2).filter(|&k| m.remove(k * 13).is_some()).count();
             check!("insert 200000 keys, get each, remove half", (found, removed, m.len()), (200_000, 100_000, 100_000));
         }
+
+        fn room_left<V>(m: &OpenMap<V>) -> bool {
+            m.empty_slots() * 4 >= m.capacity()
+        }
+
+        #[test]
+        fn tombstones_count_toward_the_load() {
+            let mut m = OpenMap::new();
+            for k in 0..10u64 {
+                m.insert(k, k);
+            }
+            let mut first_bad = None;
+            for k in 10..20_010u64 {
+                m.insert(k, k);
+                let after_insert = room_left(&m);
+                m.remove(k);
+                if first_bad.is_none() && !(after_insert && room_left(&m)) {
+                    first_bad = Some(k);
+                }
+            }
+            check!("keep 10 keys, insert and remove 20000 more: first key after which fewer than a quarter of the slots are Empty", (first_bad, m.len()), (None, 10));
+        }
+
+        #[test]
+        fn churn_does_not_grow_the_table() {
+            let mut m = OpenMap::new();
+            for k in 0..100_000u64 {
+                m.insert(k, k);
+                m.remove(k);
+            }
+            let small = m.capacity() <= 16;
+            check!("100000 rounds of insert k, remove k (largest len 1): capacity() <= 16, and a quarter empty", (small, room_left(&m), m.len()), (true, true, 0));
+        }
+
+        #[test]
+        fn capacity_follows_the_largest_len() {
+            let mut m = OpenMap::new();
+            for k in 0..1000u64 {
+                m.insert(k, k);
+            }
+            for k in 0..1000u64 {
+                m.remove(k);
+            }
+            for k in 1000..50_000u64 {
+                m.insert(k, k);
+                m.remove(k);
+            }
+            let bounded = m.capacity() <= 16 * 1000;
+            check!("insert 1000 keys, remove them, then 49000 insert/remove rounds: capacity() <= 16000, and a quarter empty", (bounded, room_left(&m), m.len()), (true, true, 0));
+        }
+
+        #[test]
+        fn random_ops_keep_both_rules() {
+            let mut rng = anneal_prelude::Rng::new(5101);
+            for _ in 0..50 {
+                let mut m = OpenMap::new();
+                let mut peak = 0usize;
+                let mut ok = true;
+                let keys = 1 + rng.below(40) as u64;
+                for _ in 0..400 {
+                    let k = rng.below(keys as usize) as u64;
+                    if rng.below(2) == 0 {
+                        m.insert(k, k);
+                    } else {
+                        m.remove(k);
+                    }
+                    peak = peak.max(m.len());
+                    ok &= room_left(&m) && m.capacity() <= 16 * peak.max(1);
+                }
+                check!(format!("400 random inserts and removes over {keys} keys: both rules after every call"), ok, true);
+            }
+        }
         """,
     ],
     hints=[("approach", "A key lives at its home slot or further along; a lookup stops at the first Empty slot."),
            ("approach", "Removing by writing Empty would cut the chain for keys that probed past it. Write a tombstone instead."),
-           ("rust", "`std::mem::replace(self, Self::with_slots(2 * n))` hands you the old table to reinsert from.")],
-    notes=("Lookups skip tombstones; inserts reuse them. Counting tombstones toward the load factor stops a table full of tombstones from making every miss scan everything. Resizing drops the tombstones.", "O(1) expected", "O(n)"),
+           ("rust", "`std::mem::replace(self, Self::with_slots(new_n))` hands you the old table to reinsert from. Test a `used` count (Full plus Deleted), not `len`, before each insert, and double only if the live keys need it.")],
+    notes=("Lookups skip tombstones; inserts reuse them. Counting tombstones toward the load factor stops a table full of tombstones from making every miss scan everything. Resizing drops the tombstones. When most used slots are tombstones, rebuild at the same size instead of doubling: otherwise insert-then-remove churn doubles the table forever while `len` stays at 1.", "O(1) expected", "O(n)"),
     follow_up="How does Robin Hood hashing or backward-shift deletion avoid tombstones?",
     related=["D14", "S8"],
 ))
@@ -1352,6 +1475,8 @@ P.append(dict(
 _open = P[-1]["solution"]
 _insert_start, _insert_end = _open.index("            pub fn insert("), _open.index("            pub fn get(")
 P[-1]["wrong"] = dict(
+    ignores_tombstones_in_load=_open.replace("if (self.used + 1) * 4 > self.slots.len() * 3 {", "if (self.len + 1) * 4 > self.slots.len() * 3 {  // Wrong: tombstones don't count."),
+    doubles_on_every_rebuild=_open.replace("let new_n = if (self.len + 1) * 2 > n { n * 2 } else { n };", "let new_n = n * 2;  // Wrong: churn doubles the table forever."),
     empty_on_remove=_open.replace("std::mem::replace(&mut self.slots[i], Slot::Deleted)", "std::mem::replace(&mut self.slots[i], Slot::Empty)"),
     insert_stops_at_tombstone=_open[:_insert_start] + """            pub fn insert(&mut self, key: u64, value: V) -> Option<V> {
                 if (self.used + 1) * 4 > self.slots.len() * 3 {
@@ -1405,6 +1530,14 @@ P[-1]["wrong"] = dict(
 
             pub fn len(&self) -> usize {
                 self.items.len()
+            }
+
+            pub fn capacity(&self) -> usize {
+                self.items.capacity().max(8)
+            }
+
+            pub fn empty_slots(&self) -> usize {
+                self.capacity() - self.items.len()
             }
         }
     """,

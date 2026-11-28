@@ -105,3 +105,12 @@ fn scale_bad_item_at_the_end() {
     let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
     check!("the same 200000 numbers, then \"oops\"", (parse_all(&refs), parse_every_error(&refs)), (Err("bad number: oops".to_string()), Err(vec!["bad number: oops".to_string()])));
 }
+
+#[test]
+fn sum_all_builds_no_vec() {
+    let items: Vec<String> = (0..10_000).map(|i: i32| i.to_string()).collect();
+    let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+    let (got, used) = anneal_prelude::allocs(|| sum_all(&refs));
+    check!("10000 good items: the sum", got, Ok(49_995_000));
+    check!(format!("sum_all allocated {} bytes in {} allocations, at most 1024", used.bytes, used.count), used.bytes <= 1024, true);
+}

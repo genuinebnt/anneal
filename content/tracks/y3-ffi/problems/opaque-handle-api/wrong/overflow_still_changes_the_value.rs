@@ -27,7 +27,9 @@ impl Drop for Counter {
     }
 }
 
-pub extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
+/// # Safety
+/// `name` is null or points to a NUL-terminated string that stays valid for the call.
+pub unsafe extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
     let name = if name.is_null() {
         "counter".to_string()
     } else {

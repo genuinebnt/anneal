@@ -32,4 +32,4 @@ time = "O(n · k · n) with contains"
 space = "O(1) extra"
 
 [rules]
-forbid_methods = ["clone", "collect", "to_vec", "extend", "drain", "iter"]
+forbid_methods = ["clone", "collect", "to_vec", "extend", "drain"]

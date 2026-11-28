@@ -469,3 +469,16 @@ fn random_ranges_against_a_model() {
         }
     }
 }
+
+#[test]
+fn the_tag_changes_with_the_time_alone() {
+    let site = Site::new();
+    let before = header(&site.get("index.txt", &[]), "etag");
+    // the same length, and a modification time far from now
+    std::fs::write(site.root.join("index.txt"), "HELLO FROM A FILE\n").unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(site.root.join("index.txt")).unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000)).unwrap();
+    drop(file);
+    let r = site.get("index.txt", &[("If-None-Match", &before)]);
+    check!("same length, another time: the old tag no longer matches", (r.status, header(&r, "etag") != before), (200, true));
+}

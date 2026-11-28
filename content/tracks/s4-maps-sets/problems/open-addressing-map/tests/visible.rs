@@ -24,3 +24,19 @@ fn remove_missing() {
 fn reinsert_after_remove() {
     check!(r#"insert 3; remove 3; insert 3 again"#, { let mut m = OpenMap::new(); m.insert(3, "a"); m.remove(3); (m.insert(3, "b"), m.get(3).copied(), m.len()) }, (None, Some("b"), 1));
 }
+
+#[test]
+fn a_quarter_of_the_slots_stay_empty() {
+    let mut m = OpenMap::new();
+    let mut always = true;
+    for k in 0..3u64 {
+        m.insert(k, k);
+    }
+    for k in 3..200u64 {
+        m.insert(k, k);
+        always &= m.empty_slots() * 4 >= m.capacity();
+        m.remove(k);
+        always &= m.empty_slots() * 4 >= m.capacity();
+    }
+    check!("keep 3 keys, insert and remove 197 more: empty_slots() * 4 >= capacity() after every call", (always, m.len()), (true, 3));
+}

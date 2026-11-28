@@ -29,6 +29,8 @@ Follow the cosine density, and some scenes give the true value in **every single
 
 Ending paths early must **not** change the average.
 
+Never end a path by chance at the **first** surface it visits. The exact answers above depend on that. Most renderers wait a few surfaces before they start.
+
 It must not add much noise either. A path's **weight** is the share of any light found next that would reach the camera. It starts at 1.
 
 In a grey scene, take a surface where the weight, filtered by that surface, is still 0.9 or more. There the path goes on with a chance of **at least 0.9**. The tests of averages rely on this.

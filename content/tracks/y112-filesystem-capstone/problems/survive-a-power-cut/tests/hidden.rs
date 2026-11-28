@@ -220,6 +220,13 @@ fn hostile_headers_replay_nothing() {
         let after = mounted(image.clone());
         check!(format!("count {count}"), (block(&after, 50)[0], block(&after, 1) == &clean_header(7)[..]), (0, true));
     }
+    // one copy too many: the commit record lies past the journal, on the inode bitmap, so it does not count
+    let blocks: Vec<(u64, u8)> = (0..15).map(|i| (40 + i, i as u8 + 1)).collect();
+    let mut image = base();
+    journal(&mut image, 7, &blocks, true);
+    let after = mounted(image.clone());
+    let untouched = blocks.iter().all(|(n, _)| block(&after, *n as usize) == block(&image, *n as usize));
+    check!("15 copies in a journal of 16 blocks", (untouched, block(&after, 1) == &clean_header(7)[..]), (true, true));
     let mut image = base();
     journal(&mut image, 7, &[(50, 5)], true);
     image[BS] ^= 0xFF;

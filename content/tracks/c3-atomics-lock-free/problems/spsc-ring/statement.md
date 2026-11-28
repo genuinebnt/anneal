@@ -4,4 +4,4 @@ or takes a lock, and each end is used by one thread (hence `&mut self`). Exactly
 come out in the order they went in.
 
 Items still inside when both ends are gone must be dropped exactly once. `is_abandoned` tells one side the other
-was dropped, so a consumer can tell "empty for now" from "empty forever".
+was dropped, so a consumer can tell "empty for now" from "empty forever". Once it returns `true`, everything the other end did before it was dropped must be visible to you, including its last pushes, so popping again until `None` finds every item.

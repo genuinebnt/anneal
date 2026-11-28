@@ -14,7 +14,7 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::ops::Bound;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::{JoinError, JoinSet};
 
@@ -248,11 +248,20 @@ impl Shelf {
 #[derive(Clone, Default)]
 pub struct JobStore {
     state: Arc<Mutex<Shelf>>,
+    /// See `on_nothing_new`.
+    nothing_new: Arc<OnceLock<NothingNewHook>>,
 }
+
+type NothingNewHook = Box<dyn Fn() + Send + Sync>;
 
 impl JobStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A follower calls `hook` right after each read that found nothing new for it. The first hook stays.
+    pub fn on_nothing_new(&self, hook: impl Fn() + Send + Sync + 'static) {
+        let _ = self.nothing_new.set(Box::new(hook));
     }
 
     fn lock(&self) -> MutexGuard<'_, Shelf> {
@@ -320,16 +329,18 @@ impl JobStore {
         let Some(job) = state.jobs.get_mut(&id) else {
             return false;
         };
+        let cancel_accepted = *job.cancel.borrow();
         let allowed = match job.view.status {
             Status::Running => true,
-            Status::Queued => outcome == Outcome::Cancelled,
+            // After an accepted cancel, any finish of a queued job records `Cancelled`.
+            Status::Queued => cancel_accepted || outcome == Outcome::Cancelled,
             _ => false,
         };
         if !allowed {
             return false;
         }
         // An accepted cancel wins, even over work that finished before the worker noticed it.
-        let outcome = if *job.cancel.borrow() {
+        let outcome = if cancel_accepted {
             Outcome::Cancelled
         } else {
             outcome
@@ -613,7 +624,12 @@ fn follow(
                 if let Some(last) = fresh.back() {
                     after = last.id;
                     ready = fresh;
-                } else if true || done || signal.changed().await.is_err() {
+                    continue;
+                }
+                if let Some(hook) = store.nothing_new.get() {
+                    hook(); // nothing new, and the lock is already released
+                }
+                if true || done || signal.changed().await.is_err() {
                     return None;
                 }
             }

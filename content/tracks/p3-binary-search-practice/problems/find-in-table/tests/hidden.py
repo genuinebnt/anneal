@@ -50,6 +50,8 @@ def test_a_table_too_big_to_scan():
             return 10**6
 
         def __getitem__(self, r):
+            if r < 0:
+                r += 10**6  # negative indexes count from the end, like a list
             if not 0 <= r < 10**6:
                 raise IndexError(r)
             return range(r * 10**6, (r + 1) * 10**6)

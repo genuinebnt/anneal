@@ -214,3 +214,13 @@ fn a_lost_newest_write_has_no_story() {
     };
     check!("no story", story(&report), None);
 }
+
+#[test]
+fn a_stall_can_take_every_length() {
+    // a ttl of 3: a stall is 1 to 9, both ends included, and every stall is certain
+    let mut delays = SeededDelays::new(10, 100, 3);
+    let pauses: HashSet<u64> = (0..2000).map(|_| delays.wait(0, Wait::Pause)).collect();
+    check!("pause lengths", { let mut v: Vec<u64> = pauses.into_iter().collect(); v.sort(); v }, (1..=9).collect::<Vec<u64>>());
+    let works: HashSet<u64> = (0..4000).map(|_| delays.wait(0, Wait::Work)).collect();
+    check!("work plus stall", { let mut v: Vec<u64> = works.into_iter().collect(); v.sort(); v }, (6..=39).collect::<Vec<u64>>());
+}

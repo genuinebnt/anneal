@@ -73,6 +73,8 @@ def test_a_list_too_big_to_scan():
             return 10**12
 
         def __getitem__(self, i):
+            if i < 0:
+                i += 10**12  # negative indexes count from the end, like a list
             if not 0 <= i < 10**12:
                 raise IndexError(i)
             return -abs(i - 700_000_000_000)

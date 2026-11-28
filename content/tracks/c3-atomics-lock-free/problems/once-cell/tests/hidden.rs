@@ -114,3 +114,35 @@ fn is_sync_and_send_for_the_right_types() {
     needs_send::<Once<String>>();
     needs_sync::<Once<Vec<u8>>>();
 }
+
+/// `Is::<T>::SYNC` / `Is::<T>::SEND` are `true` only when `T` has the trait: the inherent const wins when its bound
+/// holds, the trait's default otherwise. That lets a test check that a type is *not* `Sync` or `Send`.
+#[allow(dead_code)]
+struct Is<T: ?Sized>(std::marker::PhantomData<T>);
+trait Fallback {
+    const SYNC: bool = false;
+    const SEND: bool = false;
+}
+impl<T: ?Sized> Fallback for Is<T> {}
+#[allow(dead_code)]
+impl<T: ?Sized + Sync> Is<T> {
+    const SYNC: bool = true;
+}
+#[allow(dead_code)]
+impl<T: ?Sized + Send> Is<T> {
+    const SEND: bool = true;
+}
+
+#[test]
+fn not_sync_or_send_for_the_wrong_types() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::MutexGuard;
+    // Cell is Send but not Sync: two threads would share the same `&Cell`. MutexGuard is Sync but not Send: the
+    // thread that wins the race stores a value that other threads then read (and the last owner drops).
+    check!(
+        "(Once<Cell<u32>>: Sync, Once<MutexGuard<u8>>: Sync, Once<Rc<u8>>: Send, Once<Cell<u32>>: Send)",
+        (Is::<Once<Cell<u32>>>::SYNC, Is::<Once<MutexGuard<'static, u8>>>::SYNC, Is::<Once<Rc<u8>>>::SEND, Is::<Once<Cell<u32>>>::SEND),
+        (false, false, false, true)
+    );
+}

@@ -81,3 +81,8 @@ fn scale_50k_distinct() {
     let out = word_frequencies(text.as_bytes()).unwrap();
     check!("w00000 … w49999, each 4 times (200000 words)", (out.len(), out[0].clone(), out[49_999].clone()), (50_000, ("w00000".to_string(), 4), ("w49999".to_string(), 4)));
 }
+
+#[test]
+fn tab_separates_words() {
+    check!(r#""a\tb a""#, word_frequencies("a\tb a".as_bytes()).unwrap(), vec![("a".to_string(), 2), ("b".to_string(), 1)]);
+}

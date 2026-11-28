@@ -12,7 +12,7 @@ The catch is time. An answer may still be **in the making** while the train is m
 - When `changed` returns, no stored answer for a touched key remains.
 - Stored answers for keys that are **not** touched stay.
 - A result of `work` must **not** be stored if some call of `changed` that touches its key came after that `work` began and before its result was stored. Its caller still gets it.
-- A change may also land at the very end, while a result is being stored. The same rule holds. No test can force that instant, so check it by reading your code.
+- A change may also land at the very end, while a result is being stored. The same rule holds. No test can force that instant. One test runs real threads that change and ask without pause, and it often lands there, but a pass proves nothing. So check it by reading your code.
 - Every other result of `work` **must** be stored. A change that does not touch the key is no reason to drop it.
 - When several results for one key may be stored, the one stored last stays.
 

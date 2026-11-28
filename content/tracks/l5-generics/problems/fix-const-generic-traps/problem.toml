@@ -24,7 +24,7 @@ text = "`[T; A + B]` is 'generic parameters may not be used in const operations'
 
 [[hints]]
 kind = "edge"
-text = "`% N` with `N == 0` divides by zero. Return the item before touching the array."
+text = "With `N == 0` the ring is always full, so `push` indexes an empty array (index out of bounds), and `% N` would divide by zero. Return the item before touching the array."
 
 [solution]
 explanation = "Const generics make lengths part of the type, but stable Rust only lets a const parameter stand alone in a type (`[T; N]`), not in arithmetic (`[T; A + B]`, which needs the unstable `generic_const_exprs`). The usual workaround is an extra parameter plus a compile-time check: `const { assert!(A + B == C) }` fails the build for a bad `C` after monomorphization. Syntax to remember: `impl<T, const N: usize> Ring<T, N> { pub const CAPACITY: usize = N; }`, `std::array::from_fn(|i| ...)`, and a call with the turbofish `concat::<char, 1, 2, 3>(...)`."

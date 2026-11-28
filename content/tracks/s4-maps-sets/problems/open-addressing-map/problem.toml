@@ -23,9 +23,9 @@ text = "Removing by writing Empty would cut the chain for keys that probed past 
 
 [[hints]]
 kind = "rust"
-text = "`std::mem::replace(self, Self::with_slots(2 * n))` hands you the old table to reinsert from."
+text = "`std::mem::replace(self, Self::with_slots(new_n))` hands you the old table to reinsert from. Test a `used` count (Full plus Deleted), not `len`, before each insert, and double only if the live keys need it."
 
 [solution]
-explanation = "Lookups skip tombstones; inserts reuse them. Counting tombstones toward the load factor stops a table full of tombstones from making every miss scan everything. Resizing drops the tombstones."
+explanation = "Lookups skip tombstones; inserts reuse them. Counting tombstones toward the load factor stops a table full of tombstones from making every miss scan everything. Resizing drops the tombstones. When most used slots are tombstones, rebuild at the same size instead of doubling: otherwise insert-then-remove churn doubles the table forever while `len` stays at 1."
 time = "O(1) expected"
 space = "O(n)"

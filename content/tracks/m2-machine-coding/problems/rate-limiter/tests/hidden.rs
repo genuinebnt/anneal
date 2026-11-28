@@ -320,3 +320,24 @@ fn part4_scale_many_keys() {
     }
     check!("(tracked, alive)", (keyed.tracked(), alive.get()), (10, 10));
 }
+
+#[test]
+fn part2_a_clock_behind_the_latest_time() {
+    let clock = FakeClock::default();
+    clock.set(1_000);
+    let mut b = TokenBucket::new(clock.clone(), 2, 100);
+    b.try_acquire(2);
+    clock.set(400);
+    // The clock must first get back to 1000, then earn 100 ms of credit.
+    check!("clock 600 ms behind, one token missing", b.retry_after_ms(1), Some(700));
+    clock.advance(699);
+    check!("one ms early", b.try_acquire(1), false);
+    clock.advance(1);
+    check!("on time", b.try_acquire(1), true);
+    clock.set(500);
+    check!("behind again, but a token is not there", b.retry_after_ms(1), Some(700));
+    clock.set(1_300);
+    check!("at 1300 two tokens are back", b.retry_after_ms(2), Some(0));
+    clock.set(200);
+    check!("behind, with a token ready now", b.retry_after_ms(1), Some(0));
+}

@@ -11,7 +11,7 @@
 
 ## `SeededDelays`
 
-`SeededDelays::new(seed, pause_percent, ttl_ms)` is a `Delays`. A **stall** is a wait from `ttl_ms / 2` to `3 * ttl_ms`.
+`SeededDelays::new(seed, pause_percent, ttl_ms)` is a `Delays`. A **stall** is a wait from `ttl_ms / 2` to `3 * ttl_ms`, both ends included.
 
 | Kind | Value, each end included |
 |---|---|

@@ -148,7 +148,7 @@ new_idea = "A bounded collection with the worst item on top, for any ordered typ
 reuses = "nothing new"
 required = []
 helpful = [
-    { id = "s5-binary-heap", why = "BinaryHeap on a smaller task", reveals_method = true, hidden = true },
+    { id = "s5-binary-heap", why = "a binary heap you build yourself, on a smaller task", reveals_method = true, hidden = true },
 ]
 used_again = ["y52-best-pages-first"]
 real_uses = "Leaderboards, top-k queries, ORDER BY with LIMIT, load reports."

@@ -128,7 +128,7 @@ P.append(dict(
     teaches=["`split(',').map(str::trim)` pipelines.", "Summing an iterator of `Result`s into a `Result`."],
     statement="""
         Sum a comma-separated list of integers. Spaces around numbers don't matter and empty fields are
-        skipped. Return the parse error if any field isn't an integer.
+        skipped. Return the parse error if any field isn't an integer. The running sum never overflows an `i64`.
     """,
     examples=[('"1, 2 ,3"', "Ok(6)"), ('"1,x"', "Err(..)")],
     starter="""
@@ -331,11 +331,13 @@ P.append(dict(
     slug="compare-ignoring-case", title="Compare ignoring case without allocating", level="easy", stage="use",
     tags=["eq_ignore_ascii_case", "zero allocation"],
     teaches=["`eq_ignore_ascii_case` compares without building lowercase copies."],
+    perf=dict(allocs=True),
     statement="""
         - `is_command`: does `input`, with surrounding whitespace ignored, name `command`, ignoring ASCII case?
         - `count_word`: how many whitespace-separated words of `text` equal `word`, ignoring ASCII case?
 
-        Don't allocate: no `to_lowercase` or `to_uppercase`.
+        Don't allocate: no `to_lowercase` or `to_uppercase`, and no `to_ascii_lowercase` either (it builds a new
+        `String` too). The tests count heap allocations.
     """,
     starter="""
         pub fn is_command(input: &str, command: &str) -> bool {
@@ -352,7 +354,9 @@ P.append(dict(
         }
 
         pub fn count_word(text: &str, word: &str) -> usize {
-            text.split_whitespace().filter(|w| w.eq_ignore_ascii_case(word)).count()
+            text.split_whitespace()
+                .filter(|w| w.eq_ignore_ascii_case(word))
+                .count()
         }
     """,
     visible=[
@@ -398,6 +402,13 @@ P.append(dict(
             check!("text = \\"Go gO go stop …\\" (200000 words), word = \\"GO\\"", count_word(&text, "GO"), 150_000);
         }
         """,
+        """
+            #[test]
+            fn no_allocations() {
+                let (got, seen) = anneal_prelude::allocs(|| (is_command("  QUIT \\n", "quit"), count_word("The cat saw the THE", "the")));
+                check!(r#"is_command("  QUIT \\n", "quit") and count_word("The cat saw the THE", "the"): (results, heap allocations)"#, (got, seen.count), ((true, 3), 0));
+            }
+        """,
     ],
     wrong=dict(
         unicode_lowercase="""
@@ -426,6 +437,19 @@ P.append(dict(
 
             pub fn count_word(text: &str, word: &str) -> usize {
                 text.split(' ').filter(|w| w.eq_ignore_ascii_case(word)).count()
+            }
+        """,
+        ascii_lowercase_copies="""
+            // Wrong: lowercases copies of both sides, which allocates on every comparison.
+            pub fn is_command(input: &str, command: &str) -> bool {
+                input.trim().to_ascii_lowercase() == command.to_ascii_lowercase()
+            }
+
+            pub fn count_word(text: &str, word: &str) -> usize {
+                let word = word.to_ascii_lowercase();
+                text.split_whitespace()
+                    .filter(|w| w.to_ascii_lowercase() == word)
+                    .count()
             }
         """,
     ),
@@ -769,6 +793,12 @@ P.append(dict(
             check!("w00000 … w49999, each 4 times (200000 words)", (out.len(), out[0].clone(), out[49_999].clone()), (50_000, ("w00000".to_string(), 4), ("w49999".to_string(), 4)));
         }
         """,
+        """
+            #[test]
+            fn tab_separates_words() {
+                check!(r#""a\\tb a""#, word_frequencies("a\\tb a".as_bytes()).unwrap(), vec![("a".to_string(), 2), ("b".to_string(), 1)]);
+            }
+        """,
     ],
     wrong=dict(
         no_tiebreak="""
@@ -829,6 +859,27 @@ P.append(dict(
                         }
                     }
                 }
+                pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                Ok(pairs)
+            }
+        """,
+        splits_on_space_only="""
+            use std::collections::HashMap;
+            use std::io::{self, BufRead};
+
+            pub fn word_frequencies<R: BufRead>(input: R) -> io::Result<Vec<(String, u32)>> {
+                let mut counts: HashMap<String, u32> = HashMap::new();
+                for line in input.lines() {
+                    let line = line?;
+                    // Wrong: splits on ' ' only, so a tab inside a line joins two words.
+                    for raw in line.split(' ') {
+                        let word = raw.trim_matches(|c: char| !c.is_alphanumeric());
+                        if !word.is_empty() {
+                            *counts.entry(word.to_lowercase()).or_insert(0) += 1;
+                        }
+                    }
+                }
+                let mut pairs: Vec<(String, u32)> = counts.into_iter().collect();
                 pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                 Ok(pairs)
             }
@@ -1965,7 +2016,13 @@ P.append(dict(
                 .filter(|kv| !kv.is_empty())
                 .map(|kv| kv.split_once('=').unwrap_or((kv, "")))
                 .collect();
-            Some(Url { scheme, host, port, path, query })
+            Some(Url {
+                scheme,
+                host,
+                port,
+                path,
+                query,
+            })
         }
     """,
     visible=[
@@ -2023,6 +2080,12 @@ P.append(dict(
                 check!(format!("s = {s:?}"), parse_url(&s), Some(want));
             }
         }
+        """,
+        """
+            #[test]
+            fn slash_inside_query() {
+                check!(r#""http://h?next=/a/b""#, parse_url("http://h?next=/a/b").map(|u| (u.host, u.path, u.query)), Some(("h", "/", vec![("next", "/a/b")])));
+            }
         """,
     ],
     wrong=dict(
@@ -2118,6 +2181,42 @@ P.append(dict(
                     Some(q) => q.split('&').map(|kv| kv.split_once('=').unwrap_or((kv, ""))).collect(),
                     None => Vec::new(),
                 };
+                Some(Url { scheme, host, port, path, query })
+            }
+        """,
+        slash_in_query_starts_path="""
+            #[derive(Debug, PartialEq)]
+            pub struct Url<'a> {
+                pub scheme: &'a str,
+                pub host: &'a str,
+                pub port: Option<u16>,
+                pub path: &'a str,
+                pub query: Vec<(&'a str, &'a str)>,
+            }
+
+            pub fn parse_url(s: &str) -> Option<Url<'_>> {
+                let (scheme, rest) = s.split_once("://")?;
+                // Wrong: cuts the authority at the first '/', even when that '/' is inside the query.
+                let (authority, tail) = match rest.find('/') {
+                    Some(i) => rest.split_at(i),
+                    None => (rest, ""),
+                };
+                let (authority, early_query) = authority.split_once('?').unwrap_or((authority, ""));
+                let (path, late_query) = tail.split_once('?').unwrap_or((tail, ""));
+                let query = if early_query.is_empty() { late_query } else { early_query };
+                let path = if path.is_empty() { "/" } else { path };
+                let (host, port) = match authority.split_once(':') {
+                    Some((h, p)) => (h, Some(p.parse().ok()?)),
+                    None => (authority, None),
+                };
+                if scheme.is_empty() || host.is_empty() {
+                    return None;
+                }
+                let query = query
+                    .split('&')
+                    .filter(|kv| !kv.is_empty())
+                    .map(|kv| kv.split_once('=').unwrap_or((kv, "")))
+                    .collect();
                 Some(Url { scheme, host, port, path, query })
             }
         """,

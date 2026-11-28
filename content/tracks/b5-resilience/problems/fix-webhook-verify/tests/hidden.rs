@@ -111,3 +111,9 @@ fn random_tampering_is_always_caught() {
         check!(format!("one change: {header}, body {body:?}"), verify(SECRET, &header, &body, t, 0), Err(VerifyError::BadSignature));
     }
 }
+
+#[test]
+fn the_match_may_come_before_another_signature() {
+    let header = format!("t=5,v1={},v1={}", good(SECRET, "5", b"b"), good(b"next-secret", "5", b"b"));
+    check!("current secret first, next secret second", verify(SECRET, &header, b"b", 5, 10), Ok(()));
+}

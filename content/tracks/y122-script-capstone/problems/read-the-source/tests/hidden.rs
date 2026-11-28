@@ -319,3 +319,22 @@ fn a_large_source_is_fine() {
     let src = "var abc = 12.5; /* é */\n".repeat(5000);
     check!("5000 lines", scan(&src).0.len(), 25001);
 }
+
+#[test]
+fn a_line_end_after_a_backslash_still_counts() {
+    // `\` then a real line end is a bad escape, and that line end is a line end like any other.
+    let src = "\"a\\\nb\" x";
+    let (tokens, diags) = scan(src);
+    let lines: Vec<(Kind, u32)> = tokens.into_iter().map(|t| (t.kind, t.span.line)).collect();
+    check!(
+        src,
+        lines,
+        vec![(Kind::Str("ab".into()), 1), (id("x"), 2), (Kind::Eof, 2)]
+    );
+    let got: Vec<String> = diags.iter().map(|d| d.short(src)).collect();
+    check!(
+        src,
+        got,
+        vec!["[line 1:3] Error: Invalid escape sequence.".to_string()]
+    );
+}

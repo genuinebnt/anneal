@@ -14,7 +14,7 @@ Write `channel(capacity)`: a bounded queue between async tasks, with any number 
 
 - `Sender` is `Clone`. Once **every** sender is dropped, `recv` still gives what is queued, then `None`, every time it is called.
 - Once the receiver is dropped, `send` returns `Err(v)` with its own value, including a `send` that was already waiting. `is_closed()` is then `true`.
-- Values still in the queue are **dropped together with the receiver**, even while senders are alive.
+- Values still in the queue are **dropped together with the receiver**, even while senders are alive. A value's destructor may use the channel: it may hold a `Sender` of this very channel.
 
 **Waking**
 

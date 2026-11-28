@@ -24,7 +24,7 @@ text = "`lock` loops on `try_lock`; between attempts spin on `load(Relaxed)` whi
 
 [[hints]]
 kind = "edge"
-text = "The `Sync` bound is `T: Send`, not `T: Sync`: the lock hands out `&mut T` to one thread at a time, so even a `Cell<u32>` is safe inside."
+text = "The `Sync` bound is `T: Send`, not `T: Sync`: the lock hands out `&mut T` to one thread at a time, so even a `Cell<u32>` is safe inside. The guard is the other way round: `&Guard` gives `&T` to whoever shares it, so write `unsafe impl<T: Sync> Sync for Guard<'_, T> {}` (an explicit impl replaces the one the compiler would derive from `T: Send`)."
 
 [solution]
 explanation = "Acquire on the successful swap and Release on unlock form the happens-before edge: all writes made under one hold are visible to the next holder, so the plain `u64` is safe. `Relaxed` is enough for the failure case and for the spin-wait load because neither reads protected data. The guard borrows the lock, so the borrow checker prevents using the data after unlock."

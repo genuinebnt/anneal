@@ -249,6 +249,11 @@ impl JobStore {
         Self::default()
     }
 
+    /// For the tests: see "For the tests" in the statement.
+    pub fn on_nothing_new(&self, hook: impl Fn() + Send + Sync + 'static) {
+        todo!()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Shelf> {
         // Each change is complete before the lock is released, so a poisoned lock is still usable.
         self.state.lock().unwrap_or_else(|e| e.into_inner())
@@ -313,16 +318,18 @@ impl JobStore {
         let Some(job) = state.jobs.get_mut(&id) else {
             return false;
         };
+        let cancel_accepted = *job.cancel.borrow();
         let allowed = match job.view.status {
             Status::Running => true,
-            Status::Queued => outcome == Outcome::Cancelled,
+            // After an accepted cancel, any finish of a queued job records `Cancelled`.
+            Status::Queued => cancel_accepted || outcome == Outcome::Cancelled,
             _ => false,
         };
         if !allowed {
             return false;
         }
         // An accepted cancel wins, even over work that finished before the worker noticed it.
-        let outcome = if *job.cancel.borrow() {
+        let outcome = if cancel_accepted {
             Outcome::Cancelled
         } else {
             outcome

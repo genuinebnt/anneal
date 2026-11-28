@@ -46,3 +46,49 @@ fn random_vs_brute_force() {
         check!(format!("data = {data:?}, n = {n}"), sum_everywhere(data.clone(), n), want);
     }
 }
+
+// Counts allocations of 1 MiB or more on every thread, so a copy made inside a worker is seen too. The other
+// tests in this binary only make small allocations, so running them in parallel doesn't change the count.
+mod big_allocs {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub static BIG: AtomicUsize = AtomicUsize::new(0);
+    const LIMIT: usize = 1 << 20;
+
+    pub struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.size() >= LIMIT {
+                BIG.fetch_add(1, Ordering::Relaxed);
+            }
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            if new_size >= LIMIT {
+                BIG.fetch_add(1, Ordering::Relaxed);
+            }
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Counting = Counting;
+}
+
+#[test]
+fn data_not_copied_per_thread() {
+    use std::sync::atomic::Ordering;
+    let data: Vec<u64> = (0..1_000_000).collect();
+    let before = big_allocs::BIG.load(Ordering::Relaxed);
+    let sums = sum_everywhere(data, 4);
+    let copies = big_allocs::BIG.load(Ordering::Relaxed) - before;
+    // One copy in total (say, into an `Arc<[u64]>`) is fine; one per thread isn't.
+    check!("data = 0..1000000 (8 MB), n = 4: sums, and at most one copy of the data", (sums, copies <= 1), (vec![499_999_500_000; 4], true));
+}

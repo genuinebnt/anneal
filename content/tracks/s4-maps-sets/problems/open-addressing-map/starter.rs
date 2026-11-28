@@ -29,4 +29,14 @@ impl<V> OpenMap<V> {
     pub fn len(&self) -> usize {
         todo!()
     }
+
+    /// The number of slots.
+    pub fn capacity(&self) -> usize {
+        todo!()
+    }
+
+    /// The number of `Empty` slots (neither full nor a tombstone).
+    pub fn empty_slots(&self) -> usize {
+        todo!()
+    }
 }

@@ -29,7 +29,7 @@
 
 **Dropping the runtime.**
 
-- Every **queued** task has been destroyed when drop returns, so its handle resolves to `Cancelled`.
+- Every **queued** task has been destroyed when drop returns, so its handle resolves to `Cancelled`. This holds even if someone else still holds a waker for it, so dropping the queue's reference is not always enough.
 - While drop destroys them, the runtime's handle is **current**. Destructors that run then may call `spawn`; the new task is destroyed too, before drop returns.
 - After that, `handle.spawn` through an old handle destroys the future without polling it. Its `JoinHandle` resolves to `Cancelled`.
 - Tasks that are waiting for a wake from somewhere else are not covered here; step 6 deals with them.

@@ -222,6 +222,28 @@ fn dots_and_duplicate_names() {
 }
 
 #[test]
+fn naming_damage_does_not_stop_repairs() {
+    // only BadDirectory, BadEntry and BadBlockTree make the walk incomplete
+    let mut fs = tree();
+    fs.tx(|fs| fs.set_entry(5, "..", 1)).unwrap();
+    block_bit(&mut fs, 95, true);
+    check!("wrong '..': two link counts and a leak", fs.fsck(true).map(|r| r.repaired), Ok(3));
+    check!("wrong '..': what is left", problems(&mut fs), vec![WrongDots { dir: 5, name: "..".into() }]);
+
+    let mut fs = tree();
+    fs.tx(|fs| fs.add_entry(2, "f", 3)).unwrap();
+    block_bit(&mut fs, 95, true);
+    check!("a name twice: a link count and a leak", fs.fsck(true).map(|r| r.repaired), Ok(2));
+    check!("a name twice: what is left", problems(&mut fs), vec![DuplicateName { dir: 2, name: "f".into() }]);
+
+    let mut fs = tree();
+    fs.tx(|fs| fs.remove_entry(5, ".")).unwrap();
+    block_bit(&mut fs, 95, true);
+    check!("no '.': a link count and a leak", fs.fsck(true).map(|r| r.repaired), Ok(2));
+    check!("no '.': what is left", problems(&mut fs), vec![MissingDots { dir: 5 }]);
+}
+
+#[test]
 fn directory_cycles_end() {
     let mut fs = tree();
     // /d/sub/again is /d: a loop. And the root appears inside sub as well.

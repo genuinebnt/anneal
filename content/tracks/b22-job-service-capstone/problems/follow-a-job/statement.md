@@ -32,3 +32,5 @@ Each history entry is one event: `id` is the entry's id, `event` its name, and `
 - Any number of clients may follow a job. A client that never reads affects nothing.
 
 All earlier routes and rules behave as before.
+
+**For the tests.** `JobStore::on_nothing_new(hook)` stores a hook. Only the first one given is kept. A follower calls it each time it has read its job's history and found nothing new: right after that read, as the very next thing, with no lock held. If the hook changes the job from another thread, the follower must still send that entry. The tests use it to act in the moment between a follower's look and its wait. The hook may take a while.

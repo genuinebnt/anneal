@@ -109,3 +109,53 @@ fn scale_200k() {
     }
     check!("push 0..200000, then pop everything", (sum, v.len(), v.capacity()), (19_999_900_000, 0, 262_144));
 }
+
+/// Counts the heap bytes this thread holds, so a test can see whether `Drop` freed the buffer.
+mod live_bytes {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static LIVE: Cell<i64> = const { Cell::new(0) };
+    }
+
+    fn add(n: i64) {
+        let _ = LIVE.try_with(|c| c.set(c.get() + n));
+    }
+
+    pub fn now() -> i64 {
+        LIVE.with(|c| c.get())
+    }
+
+    struct Tracking;
+
+    unsafe impl GlobalAlloc for Tracking {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            add(layout.size() as i64);
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            add(-(layout.size() as i64));
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            add(new_size as i64 - layout.size() as i64);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Tracking = Tracking;
+}
+
+#[test]
+fn drop_frees_the_buffer() {
+    let before = live_bytes::now();
+    {
+        let mut v = MiniVec::new();
+        for i in 0..100u64 {
+            v.push(i);
+        }
+    }
+    check!("push 0..100 into a MiniVec<u64>, then drop it: heap bytes still held", live_bytes::now() - before, 0);
+}

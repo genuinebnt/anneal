@@ -307,6 +307,34 @@ fn timeouts_are_counted_from_the_call_and_round_up() {
 }
 
 #[test]
+fn milliseconds_come_from_the_digits_as_written() {
+    // in f64, 4.03 * 1000.0 and 1.001 * 1000.0 are a little above 4030 and below 1001
+    let mut core = Core::new();
+    let [a, b, c] = clients(&mut core);
+    core.request(a, args("BLPOP q 4.03"), 0);
+    core.request(b, args("BLPOP q 403e-2"), 0);
+    core.request(c, args("BLPOP q 1.001"), 0);
+    check!("1.001 s is 1001 ms", core.tick(1000), vec![]);
+    check!("and is up then", to(&core.tick(1001), c), vec![Frame::NullArray]);
+    check!("4.03 s is not yet up", core.tick(4029), vec![]);
+    let who: Vec<ClientId> = core.tick(4030).iter().map(|x| x.to).collect();
+    check!("4.03 s and 403e-2 s are both 4030 ms", who, vec![a, b]);
+}
+
+#[test]
+fn a_timeout_too_small_for_f64_is_one_millisecond() {
+    // as an f64, 1e-400 is 0, which would mean forever
+    let mut core = Core::new();
+    let [a, b] = clients(&mut core);
+    core.request(a, args("BLPOP q 1e-400"), 50);
+    check!("not yet", core.tick(50), vec![]);
+    check!("one millisecond later", to(&core.tick(51), a), vec![Frame::NullArray]);
+    check!("a minus sign makes it negative", to(&core.request(b, args("BLPOP q -1e-400"), 60), b), vec![err("ERR timeout is negative")]);
+    check!("all zeros wait for ever", core.request(b, args("BLPOP q -0.0e-400"), 60), vec![]);
+    check!("one is waiting", core.blocked(), 1);
+}
+
+#[test]
 fn zero_and_huge_timeouts_never_end() {
     let mut core = Core::new();
     let [a, b, c] = clients(&mut core);

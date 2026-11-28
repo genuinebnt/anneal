@@ -188,3 +188,18 @@ fn catching_up_one_line_at_a_time_stays_quick() {
     }
     check!("one account", r.balance("acct-0"), 10);
 }
+
+#[test]
+fn balances_do_not_stop_at_the_largest_i64() {
+    let mut s = MemStore::new();
+    add(&mut s, "up", 0, dep(i64::MAX));
+    add(&mut s, "up", 0, inn(i64::MAX));
+    add(&mut s, "up", 0, wd(i64::MAX));
+    add(&mut s, "down", 0, wd(i64::MAX));
+    add(&mut s, "down", 0, out(i64::MAX));
+    add(&mut s, "down", 0, dep(i64::MAX));
+    let r = Reports::from_log(s.read_all(0));
+    let m = i128::from(i64::MAX);
+    check!("up", r.balance("up"), m);
+    check!("down", r.balance("down"), -m);
+}

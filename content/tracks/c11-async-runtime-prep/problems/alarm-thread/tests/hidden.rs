@@ -255,3 +255,23 @@ fn setting_alarms_from_many_threads() {
     threads.into_iter().for_each(|t| t.join().unwrap());
     check!("all ran", (0..800).map(|_| got(&rx)).sum::<usize>(), 800);
 }
+
+#[test]
+fn a_closure_refused_after_the_clock_is_gone_may_call_back() {
+    let (tx, rx) = channel();
+    let worker = std::thread::spawn(move || {
+        let clock = AlarmClock::start();
+        let alarms = clock.alarms();
+        drop(clock);
+        let (dtx, dropped) = channel();
+        // `at` drops this closure at once; its destructor calls `pending`
+        let probe = Calls(alarms.clone(), dtx);
+        alarms.after(ms(1), move || drop(probe));
+        tx.send(got(&dropped)).unwrap();
+    });
+    let seen = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("deadlock: `at` held a lock while it dropped the closure of a stopped clock");
+    check!("pending() seen from the destructor", seen, 0);
+    worker.join().unwrap();
+}

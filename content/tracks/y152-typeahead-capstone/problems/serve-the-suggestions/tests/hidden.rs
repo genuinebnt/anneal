@@ -245,3 +245,16 @@ fn the_cached_flag_and_outside_writes() {
         check!("infix", after.1["suggestions"][0]["kind"].clone(), json!("infix"));
     });
 }
+
+#[test]
+fn q_comes_back_as_sent_and_key_is_its_search_key() {
+    run(async {
+        let (app, service, _) = setup();
+        service.add(&[("Crème Brûlée", 2), ("Straße", 1)], 0);
+        let typed = "  CRE\u{301}ME\t Br";
+        let got = send(&app, "GET", &format!("/suggest?q={}", query(typed)), "").await;
+        check!("q and key", (got.0, got.1["q"].clone(), got.1["key"].clone(), listed(&got.1)), (200, json!(typed), json!("creme br"), vec!["Crème Brûlée".to_string()]));
+        let got = send(&app, "GET", &format!("/suggest?q={}", query("STRASS")), "").await;
+        check!("ß", (got.1["key"].clone(), listed(&got.1)), (json!("strass"), vec!["Straße".to_string()]));
+    });
+}

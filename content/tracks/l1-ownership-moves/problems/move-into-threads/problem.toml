@@ -5,7 +5,7 @@ level = "medium"
 stage = "closures-take-ownership"
 order = 13
 status = "ready"
-tags = ["thread::spawn", "thread::scope", "move", "'static"]
+tags = ["thread::spawn", "thread::scope", "move", "'static", "fn pointers"]
 teaches = [
   "`thread::spawn` needs `'static`: move owned data in.",
   "`thread::scope` lets threads borrow; `move` copies references and loop locals in.",
@@ -16,13 +16,17 @@ related = ["C1", "L3"]
 
 [[hints]]
 kind = "rust"
-text = "`thread::spawn` needs `F: 'static`: `move` the chunk into the closure. Collect every `JoinHandle` before joining, or the threads run one after another."
+text = "`thread::spawn` needs `F: 'static`: `move` the chunk into the closure. `sum` is a `fn` pointer, which is `Copy` and `'static`, so `move` copies it into every thread."
+
+[[hints]]
+kind = "rust"
+text = "Collect every `JoinHandle` before joining any. Calling `join()` inside the loop that spawns waits for each thread before the next one starts, and the threads run one after another."
 
 [[hints]]
 kind = "rust"
 text = "`thread::scope(|s| { ... s.spawn(move || ...) ... })` lets threads borrow from outside, because the scope joins them all before it returns. `move` there copies the `&[u64]` (a reference is `Copy`) along with the loop's locals."
 
 [solution]
-explanation = "`thread::spawn` can't borrow: the thread might outlive the caller, so the closure must be `'static` and own what it uses. `thread::scope` (Rust 1.63) guarantees every thread it spawns is joined before `scope` returns, so its threads may borrow `data`. They still need `move`, but only to take the loop's locals (`piece`, a `&[u64]`) by value instead of borrowing variables that change on the next iteration.\n\nSyntax to remember: `thread::spawn(move || chunk.iter().sum::<u64>())` · `handle.join()` returns `Result<T, Box<dyn Any + Send>>` · `thread::scope(|s| { let h = s.spawn(move || ..); h.join().unwrap() })`."
+explanation = "`thread::spawn` can't borrow: the thread might outlive the caller, so the closure must be `'static` and own what it uses. The chunk moves in; `sum`, a `fn(&[u64]) -> u64`, is `Copy` and `'static`, so each thread gets its own copy of the pointer. `thread::scope` (Rust 1.63) guarantees every thread it spawns is joined before `scope` returns, so its threads may borrow `data`. They still need `move`, but only to take the loop's locals (`piece`, a `&[u64]`) by value instead of borrowing variables that change on the next iteration.\n\nParallel work only overlaps if every thread starts before the first `join`: spawn them all, keep the handles, then join in order. The tests check that with a `sum` that waits for all the pieces, the same way a barrier would.\n\nSyntax to remember: `thread::spawn(move || sum(&chunk))` · `handle.join()` returns `Result<T, Box<dyn Any + Send>>` · `thread::scope(|s| { let h = s.spawn(move || ..); h.join().unwrap() })`."
 time = "O(n) work"
 space = "O(parts) threads"

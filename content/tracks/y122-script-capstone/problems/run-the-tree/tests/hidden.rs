@@ -597,3 +597,18 @@ fn random_arithmetic() {
         );
     }
 }
+
+#[test]
+fn the_output_limit_is_exact() {
+    // Seven lines of 2^19 bytes, then one of 2^19 - 8 bytes: with the line ends, exactly MAX_OUTPUT bytes.
+    let src = r##"var s = "x"; for (var i = 0; i < 19; i = i + 1) s = s + s; for (var i = 0; i < 7; i = i + 1) print(s);
+var a = "x"; var t = ""; for (var i = 0; i < 19; i = i + 1) { if (i >= 3) t = t + a; a = a + a; } print(t);"##;
+    let (out, error) = go(src);
+    check!("exactly MAX_OUTPUT bytes", (out.len(), error), (MAX_OUTPUT, None::<String>));
+    let more = format!("{src} print(\"\");");
+    check!(
+        "one line end more",
+        go(&more).1.map(|e| e.starts_with("Output limit exceeded.")),
+        Some(true)
+    );
+}

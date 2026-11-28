@@ -29,7 +29,10 @@ impl Drop for Counter {
 
 /// Creates a counter named `name` (a C string), starting at 0. A null `name` means the default name "counter".
 /// Returns null if the name is not valid UTF-8. The caller owns the result and must pass it to `counter_free`.
-pub extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
+///
+/// # Safety
+/// `name` is null or points to a NUL-terminated string that stays valid for the call.
+pub unsafe extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
     todo!()
 }
 

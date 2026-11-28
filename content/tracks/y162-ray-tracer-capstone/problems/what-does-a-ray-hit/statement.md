@@ -20,7 +20,7 @@ A ray exactly parallel to a plane or triangle misses it. A triangle with all cor
 
 **Scale must not matter.** A triangle with sides of `1e-8` works like one with sides of `1e6`.
 
-**Distance must not matter.** A ball of radius 1 seen from `3e8` away is still a ball of radius 1. A ray passing 1.01 from its centre misses. NaN coordinates are never hit and never panic.
+**Distance must not matter.** A ball of radius 1 seen from `3e8` away is still a ball of radius 1. A ray passing 1.01 from its centre misses. A ray through it gets `t` within `1e-6`, even from that far. NaN coordinates are never hit and never panic.
 
 ## The world
 

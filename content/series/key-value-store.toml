@@ -312,7 +312,7 @@ required = ["y18-records-and-frames", "y17-append-that-fails"]
 helpful = []
 real_uses = "Opening any append-only log after a crash."
 cookbook = [
-    { level = "similar", page = "mini-kv-store-code", note = "Its Wal. It does not undo a failed append, which this step requires.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+    { level = "similar", page = "mini-kv-store-code", note = "Its Wal. It cuts a failed append off the file, trying once, as this step requires. It works on a File only, and has no sync.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
 ]
 
 [[capstone]]
@@ -330,7 +330,7 @@ helpful = [
 ]
 real_uses = "SSTables in LevelDB, RocksDB and Cassandra."
 cookbook = [
-    { level = "similar", page = "mini-kv-store-code", note = "Its SsTable. It does not sync the directory or check index offsets.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+    { level = "similar", page = "mini-kv-store-code", note = "Its SsTable: the same parts in the same order, the directory sync, and the checks on index offsets.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
 ]
 
 [[capstone]]
@@ -346,7 +346,7 @@ required = ["y18-table-files", "y17-unsaved-changes"]
 helpful = []
 real_uses = "The write path of every LSM store."
 cookbook = [
-    { level = "similar", page = "mini-kv-store-code", note = "Its Store. It reports a failed automatic flush as a failed write, and a reversed scan can panic.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+    { level = "similar", page = "mini-kv-store-code", note = "Its Store: the log before memory, a failed automatic flush that does not fail the write, and a reversed scan that gives nothing.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
 ]
 
 [[capstone]]

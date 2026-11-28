@@ -134,7 +134,8 @@ fn spots_worked_out_along_slanted_walls() {
 #[test]
 fn very_close_walls_still_block() {
     let lamps = [lamp(0.0, 2.0, 8.0)];
-    for y in [0.001, 1.999] {
+    // 0.0015 from the spot or the lamp: farther than 0.001, so it must block.
+    for y in [0.0015, 1.9985] {
         expect(
             &format!("wall at {y}"),
             brightness((0.0, 0.0), (0.0, 1.0), &lamps, &[wall(-1.0, y, 1.0, y)]),
@@ -218,4 +219,17 @@ fn random_rooms() {
         tried > 2500 && shaded > 300,
         true
     );
+}
+
+#[test]
+fn close_to_a_near_lamp_does_not_block() {
+    // The lamp is only 0.01 away. Walls 5e-8 from either end are within 1e-7 of it, so they do not block.
+    let lamps = [lamp(0.0, 0.01, 1.0)];
+    for y in [5e-8, 0.01 - 5e-8] {
+        expect(
+            &format!("wall at {y}"),
+            brightness((0.0, 0.0), (0.0, 1.0), &lamps, &[wall(-1.0, y, 1.0, y)]),
+            10_000.0,
+        );
+    }
 }

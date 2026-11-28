@@ -412,3 +412,28 @@ fn many_tasks_and_a_deep_chain() {
     });
     check!("2000 tasks each waiting for the one before", total, 2000);
 }
+
+#[test]
+fn a_queued_task_is_destroyed_even_if_someone_holds_its_waker() {
+    // the task waits on two latches. One opens, so the task is queued, while the other still holds a waker for it
+    let rt = LocalRuntime::new();
+    let (never, opens) = (Arc::new(Latch::default()), Arc::new(Latch::default()));
+    let gone = Arc::new(AtomicBool::new(false));
+    let guard = DropFlag(gone.clone());
+    let (a, b) = (never.clone(), opens.clone());
+    let mut join = rt.spawn(async move {
+        let _guard = guard;
+        poll_fn(|cx| {
+            let _ = a.poll(cx);
+            let _ = b.poll(cx);
+            Poll::<()>::Pending
+        })
+        .await
+    });
+    check!("runs", rt.run_until_stalled(), 1);
+    opens.open();
+    drop(rt);
+    check!("a queued task is destroyed, although a waker for it is still held", gone.load(Ordering::SeqCst), true);
+    check!("cancelled", Pin::new(&mut join).poll(&mut Context::from_waker(Waker::noop())), Poll::Ready(Err(JoinError::Cancelled)));
+    drop(never);
+}

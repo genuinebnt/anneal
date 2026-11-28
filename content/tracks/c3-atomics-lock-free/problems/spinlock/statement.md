@@ -3,4 +3,5 @@ dropped. `try_lock()` never waits. `into_inner(self)` and `get_mut(&mut self)` r
 
 Many threads will increment a plain (non-atomic) `u64` through the lock and the total must be exact, so the
 lock's ordering has to be right: everything done under one hold must be visible to the next. Mark the type `Sync`
-and `Send` with the weakest bound that is still sound.
+and `Send` with the weakest bound that is still sound. The guard needs a bound too: `&Guard` derefs to `&T`, so
+sharing one guard between threads shares `&T`.

@@ -20,7 +20,7 @@ fn perpendicular_dot() {
 
 #[test]
 fn scale_by_zero() {
-    check!(r#"0 * (7, 8)"#, 0 * Vec2 { x: 7, y: 8 }, Vec2 { x: 0, y: 0 });
+    check!(r#"0 * (7, 8)"#, std::hint::black_box(0) * Vec2 { x: 7, y: 8 }, Vec2 { x: 0, y: 0 });
 }
 
 #[test]

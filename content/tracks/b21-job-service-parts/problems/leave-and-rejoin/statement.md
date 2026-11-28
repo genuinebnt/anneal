@@ -18,3 +18,5 @@ Write `Feed`, a growing list of text entries that can be followed. Clones of a `
 **While it waits,** a follower must not spin. Its task is woken when something happens, not before. Followers never slow `publish` down, and a follower that is never polled affects nobody.
 
 `publish`, `close`, `since` and `follow` are ordinary (not `async`) functions. They may be called from any thread. The stream is `Send`, does not borrow the `Feed`, and can be polled without a Tokio runtime. The `futures` and `tokio` crates are available.
+
+**For the tests.** `on_nothing_new(hook)` stores a hook. Only the first one given is kept. A follower calls it each time it has read the feed and found no entry for itself: right after that read, as the very next thing, with no lock held. If the hook publishes or closes from another thread, the follower must still see that entry or that close. The tests use it to act in the moment between a follower's look and its wait. The hook may take a while.

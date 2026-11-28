@@ -53,6 +53,8 @@ pub struct Service {
     index: RwLock<Index>,
     /// Locked only for short steps, and only while `index` is already held.
     cache: Mutex<Recent<(String, usize), std::sync::Arc<Stored>>>,
+    /// The hook of "For the tests" in the statement.
+    searched: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Service {
@@ -62,6 +64,7 @@ impl Service {
             judge,
             index: RwLock::new(Index::new()),
             cache: Mutex::new(Recent::new(capacity)),
+            searched: std::sync::OnceLock::new(),
         }
     }
 
@@ -81,6 +84,10 @@ impl Service {
         let cached = hit.is_some();
         let stored = hit.unwrap_or_else(|| {
             let items = index.find(&key.0, key.1, &mut |term| (self.judge)(&key.0, term));
+            // the search has ended and nothing is stored yet
+            if let Some(hook) = self.searched.get() {
+                hook();
+            }
             let stored = std::sync::Arc::new(Stored { items });
             self.cache.lock().unwrap().put(key.clone(), stored.clone());
             stored
@@ -110,6 +117,11 @@ impl Service {
                 .iter()
                 .any(|&(n, _, _)| changed.iter().any(|t| names[n] == *t))
         });
+    }
+
+    /// For the tests: see "For the tests" in the statement. Only the first hook is kept.
+    pub fn on_searched(&self, hook: impl Fn() + Send + Sync + 'static) {
+        let _ = self.searched.set(Box::new(hook));
     }
 
     pub fn add(&self, batch: &[(&str, u32)], now: u64) -> Added {

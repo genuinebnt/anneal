@@ -468,18 +468,33 @@ fn a_correct_checksum_does_not_make_bad_contents_good() {
         ("a hash count that lies", build(&[&[2, 0], &k, &lie, &[0xFF]])),
         ("an empty list", build(&[&[1, 0], &k, &zero, &[0xFF]])),
         ("an empty sorted set", build(&[&[4, 0], &k, &zero, &[0xFF]])),
+        ("an empty hash", build(&[&[2, 0], &k, &zero, &[0xFF]])),
+        ("an empty set", build(&[&[3, 0], &k, &zero, &[0xFF]])),
         ("a score that is NaN", build(&[&[4, 0], &k, &one, &nan, &v, &[0xFF]])),
+        ("a score with the bits of -0.0", build(&[&[4, 0], &k, &one, &(-0.0f64).to_bits().to_le_bytes(), &v, &[0xFF]])),
         ("a key twice", build(&[&string_k, &string_k, &[0xFF]])),
         ("a set member twice", build(&[&[3, 0], &k, &2u32.to_le_bytes(), &v, &v, &[0xFF]])),
         ("a hash field twice", build(&[&[2, 0], &k, &2u32.to_le_bytes(), &v, &v, &v, &v, &[0xFF]])),
         ("a sorted member twice", build(&[&[4, 0], &k, &2u32.to_le_bytes(), &score, &v, &score, &v, &[0xFF]])),
         ("a wrong magic", sealed(b"RSNAP2\xff".to_vec())),
+        ("keys out of byte order", build(&[&[0, 0], &blob(b"m"), &v, &string_k, &[0xFF]])),
+        ("set members out of byte order", build(&[&[3, 0], &k, &2u32.to_le_bytes(), &blob(b"w"), &v, &[0xFF]])),
+        ("hash fields out of byte order", build(&[&[2, 0], &k, &2u32.to_le_bytes(), &blob(b"w"), &v, &v, &v, &[0xFF]])),
+        ("a higher score first", build(&[&[4, 0], &k, &2u32.to_le_bytes(), &2f64.to_bits().to_le_bytes(), &blob(b"a"), &score, &blob(b"b"), &[0xFF]])),
+        ("equal scores, members out of order", build(&[&[4, 0], &k, &2u32.to_le_bytes(), &score, &blob(b"w"), &score, &v, &[0xFF]])),
     ];
     for (what, bytes) in cases {
         check!(what, decode_snapshot(&bytes).is_err(), true);
     }
     let good = build(&[&string_k, &[0xFF]]);
     check!("the same pieces put right are accepted", decode_snapshot(&good).is_ok(), true);
+    let ordered = build(&[
+        &string_k,
+        &[3, 0], &blob(b"m"), &2u32.to_le_bytes(), &v, &blob(b"w"),
+        &[4, 0], &blob(b"z"), &2u32.to_le_bytes(), &score, &blob(b"b"), &2f64.to_bits().to_le_bytes(), &blob(b"a"),
+        &[0xFF],
+    ]);
+    check!("keys, members and scores in order are accepted", decode_snapshot(&ordered).is_ok(), true);
 }
 
 #[test]

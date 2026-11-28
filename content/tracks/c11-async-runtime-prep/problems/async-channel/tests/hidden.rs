@@ -320,3 +320,16 @@ fn threads_exchange_everything_in_order() {
     });
     check!("all values from all senders", ok, [2000; 4]);
 }
+
+#[test]
+fn a_queued_value_may_hold_a_sender_of_its_own_channel() {
+    // dropping the queued value drops a `Sender`, which uses the channel again
+    struct Reply(#[allow(dead_code)] Sender<Reply>);
+    let closed = within(5, || {
+        let (tx, rx) = channel(2);
+        let _ = now(tx.send(Reply(tx.clone())));
+        drop(rx);
+        tx.is_closed()
+    });
+    check!("closed, and no deadlock while the queue was emptied", closed, true);
+}

@@ -21,7 +21,7 @@
 - **Searching for work must not block other workers.** While one worker is inside `next_task`, the others must be able to search, find nothing and go to sleep. So don't put a lock around it. The batch-move test pauses one worker in the middle of its search and waits for another to go to sleep.
 - A task that panics does not harm its worker.
 
-**Keep the given test points.** One hidden test forces the schedule behind the rule above: a worker looks for work while another is moving a batch between queues. It needs three things from the given code, even if you change the rest. `next_task` takes from the shared queue with `take_injected`, which moves batches. Idle workers sleep in the given `Gate`. The module `probe`, its two calls in `take_injected` and its one call in `Gate::sleep` stay.
+**Keep the given test points.** One test forces the schedule behind the rule above: a worker looks for work while another is moving a batch between queues. It needs three things from the given code, even if you change the rest. `next_task` takes from the shared queue with `take_injected`, which moves batches. Idle workers sleep in the given `Gate`. The module `probe`, its two calls in `take_injected` and its one call in `Gate::sleep` stay.
 
 **Time.** `sleep`, `timeout` and `interval` work as in step 4, on the real clock. A sleep is **never early**. It must fire although the timer thread was already waiting for a **later** one.
 

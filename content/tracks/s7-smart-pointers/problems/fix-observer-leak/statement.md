@@ -7,8 +7,9 @@ No `unsafe`.
 - `Hub::new()` and `Hub::subscribe(&hub, name)`.
 - `publish(text)` appends `text` to the inbox of every **live** subscriber, in subscription order, and returns how many
   received it.
-- A subscriber is gone as soon as the caller's last handle is dropped: its memory is released **then**, not at some
-  later call.
+- A subscriber is gone as soon as the caller's last handle is dropped: it is dropped **then** (its destructor runs and
+  its fields are freed), not at some later call. The small `Rc` allocation itself may stay until the hub forgets its
+  entry.
 - The hub is gone as soon as the caller's last handle to the hub is dropped, even while subscribers are alive.
 - `subscriber.post(text)` publishes `"<name>: <text>"` to every live subscriber **except itself** and returns
   `Some(count)`, or `None` if the hub is gone.

@@ -11,7 +11,7 @@ teaches = [
   "A ticket that remembers a count turns \"was I notified meanwhile?\" into a comparison.",
   "This is the shape of an eventcount: it lets any lock-free queue block without polling.",
 ]
-follow_up = "1) If `notify_one` unlocked before it signalled, which thread could take the signal, and what happens to the earlier sleeper? One hidden test forces that with the given `Signal`. Why could a real `Condvar` hide the same bug for months? 2) Your `notify_one` takes a lock even when nobody waits. Schedulers avoid that with an atomic count of sleepers. Which memory ordering or fence is then needed between \"push work\" and \"read the count\", and why? 3) Many runtimes add a timeout to the sleep as a safety net. What bug would it hide? 4) Where does crossbeam use this idea?"
+follow_up = "1) If `notify_one` unlocked before it signalled, which thread could take the signal, and what happens to the earlier sleeper? One test forces that with the given `Signal`. Why could a real `Condvar` hide the same bug for months? 2) Your `notify_one` takes a lock even when nobody waits. Schedulers avoid that with an atomic count of sleepers. Which memory ordering or fence is then needed between \"push work\" and \"read the count\", and why? 3) Many runtimes add a timeout to the sleep as a safety net. What bug would it hide? 4) Where does crossbeam use this idea?"
 related = ["C1", "C3"]
 
 [[hints]]

@@ -17,7 +17,7 @@ fn exact_fit_and_one_short() {
 
 #[test]
 fn invalid_utf8_name_gives_null() {
-    check!(r#"0xFF is not UTF-8"#, { let name = std::ffi::CString::new(vec![0xFFu8, b'x']).unwrap(); counter_new(name.as_ptr()).is_null() }, true);
+    check!(r#"0xFF is not UTF-8"#, { let name = std::ffi::CString::new(vec![0xFFu8, b'x']).unwrap(); unsafe { counter_new(name.as_ptr()) }.is_null() }, true);
 }
 
 #[test]

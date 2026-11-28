@@ -66,6 +66,11 @@ impl Service {
         todo!()
     }
 
+    /// For the tests: see "For the tests" in the statement. Only the first hook is kept.
+    pub fn on_searched(&self, hook: impl Fn() + Send + Sync + 'static) {
+        todo!()
+    }
+
     pub fn add(&self, batch: &[(&str, u32)], now: u64) -> Added {
         todo!()
     }

@@ -39,4 +39,4 @@ note = "What laziness means for an adapter."
 [[cookbook]]
 level = "exact"
 page = "kway-merge-family"
-note = "Part: KMerge, a heap of (item, source) that is stable. It pulls from every source in the constructor, refills early and has no size_hint, which this problem does not allow."
+note = "Part: KMerge, a heap of (item, source) that is stable. It pulls from every source in the constructor and has no size_hint, which this problem does not allow. Its refill right after a pop is fine here."

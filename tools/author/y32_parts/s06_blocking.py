@@ -313,6 +313,34 @@ fn timeouts_are_counted_from_the_call_and_round_up() {
 }
 
 #[test]
+fn milliseconds_come_from_the_digits_as_written() {
+    // in f64, 4.03 * 1000.0 and 1.001 * 1000.0 are a little above 4030 and below 1001
+    let mut core = Core::new();
+    let [a, b, c] = clients(&mut core);
+    core.request(a, args("BLPOP q 4.03"), 0);
+    core.request(b, args("BLPOP q 403e-2"), 0);
+    core.request(c, args("BLPOP q 1.001"), 0);
+    check!("1.001 s is 1001 ms", core.tick(1000), vec![]);
+    check!("and is up then", to(&core.tick(1001), c), vec![Frame::NullArray]);
+    check!("4.03 s is not yet up", core.tick(4029), vec![]);
+    let who: Vec<ClientId> = core.tick(4030).iter().map(|x| x.to).collect();
+    check!("4.03 s and 403e-2 s are both 4030 ms", who, vec![a, b]);
+}
+
+#[test]
+fn a_timeout_too_small_for_f64_is_one_millisecond() {
+    // as an f64, 1e-400 is 0, which would mean forever
+    let mut core = Core::new();
+    let [a, b] = clients(&mut core);
+    core.request(a, args("BLPOP q 1e-400"), 50);
+    check!("not yet", core.tick(50), vec![]);
+    check!("one millisecond later", to(&core.tick(51), a), vec![Frame::NullArray]);
+    check!("a minus sign makes it negative", to(&core.request(b, args("BLPOP q -1e-400"), 60), b), vec![err("ERR timeout is negative")]);
+    check!("all zeros wait for ever", core.request(b, args("BLPOP q -0.0e-400"), 60), vec![]);
+    check!("one is waiting", core.blocked(), 1);
+}
+
+#[test]
 fn zero_and_huge_timeouts_never_end() {
     let mut core = Core::new();
     let [a, b, c] = clients(&mut core);
@@ -443,8 +471,9 @@ STATEMENT = r'''
 
 **`BLPOP key [key ...] timeout`** and **`BRPOP`** pop from the left or right of the **first** key, in argument order, that holds a list. The reply is `[key, value]`. Keys are checked in order: another kind before a list is the wrong-kind error. Otherwise the client is **blocked**, and gets nothing yet.
 
-- `timeout` is a number of seconds, possibly with a fraction; 0 means forever. Not a finite number: `ERR timeout is not a float or out of range`. Below 0: `ERR timeout is negative`. It is checked before the keys.
-- The deadline is `now` plus the timeout in milliseconds, rounded up. A deadline too far for `u64` must not overflow or panic.
+- `timeout` is a number of seconds, possibly with a fraction or an exponent. Not a finite number: `ERR timeout is not a float or out of range`. It is checked before the keys.
+- Its value comes from the digits as written, not from an `f64`. Digits that are all 0 mean forever. A minus sign with any other digit: `ERR timeout is negative`.
+- The deadline is `now` plus the timeout in milliseconds, rounded up: `4.03` and `403e-2` are 4030, and `0.0005` and `1e-400` are 1. In `f64`, `4.03 * 1000.0` is a little above 4030, which would round up to 4031, and `1e-400` is 0, which would mean forever. A deadline too far for `u64` must not overflow or panic.
 - Inside `EXEC` a blocking pop never waits: with nothing to pop it replies `NullArray`.
 
 **Waking.** After a command, or after a whole `EXEC`, every key that **changed** and now holds a list can serve waiters. This includes a list that arrived by `RENAME`.
@@ -496,8 +525,13 @@ PROBLEM = dict(
             ("    /// A command for the keyspace alone.\n    fn apply(&mut self, args: &[Vec<u8>], now: u64) -> Frame {\n        let frame = self.engine.execute(args, now);\n        self.note_changes();\n",
              "    /// A command for the keyspace alone.\n    fn apply(&mut self, args: &[Vec<u8>], now: u64) -> Frame {\n        let frame = self.engine.execute(args, now);\n        self.note_changes();\n        if upper(&args[0]).ends_with(\"PUSH\") {\n            self.ready.push_back(args[1].clone());\n        }\n")),
         "deadline_overflows": broken(SOLUTION, (
-            "now.saturating_add((timeout * 1000.0).ceil() as u64)", "now + (timeout * 1000.0).ceil() as u64")),
-        "timeout_rounds_down": broken(SOLUTION, ("(timeout * 1000.0).ceil() as u64", "(timeout * 1000.0) as u64")),
+            "now.saturating_add(millis)", "now + millis")),
+        "timeout_rounds_down": broken(SOLUTION, ("        (negative, millis.saturating_add(u64::from(part)))\n", "        let _ = part;\n        (negative, millis)\n")),
+        "milliseconds_from_a_float": broken(SOLUTION, (
+            "now.saturating_add(millis)", "now.saturating_add((std::str::from_utf8(&args[args.len() - 1]).unwrap().parse::<f64>().unwrap() * 1000.0).ceil() as u64)")),
+        "the_value_from_a_float": broken(SOLUTION, (
+            "        let deadline = (millis > 0).then(|| now.saturating_add(millis));\n",
+            "        let timeout: f64 = std::str::from_utf8(&args[args.len() - 1]).unwrap().parse().unwrap();\n        let deadline = (timeout > 0.0).then(|| now.saturating_add(millis));\n")),
         "held_commands_run_as_each_is_woken": broken(SOLUTION, (
             "                    self.woken.push_back(id);\n                }\n                self.note_changes();",
             "                    self.woken.push_back(id);\n                    while let Some(args) = self.clients.get_mut(&id).filter(|_| !self.waiting.contains(id)).and_then(|c| c.held.pop_front()) {\n                        self.step(id, args, now, out);\n                    }\n                }\n                self.note_changes();")),

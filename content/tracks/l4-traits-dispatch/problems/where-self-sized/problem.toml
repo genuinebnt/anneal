@@ -24,7 +24,7 @@ text = "`scaled` returns `Self`, so it needs `where Self: Sized`. Implementors m
 
 [[hints]]
 kind = "edge case"
-text = "In `impl Clone for Box<dyn Shape>`, call `(**self).clone_box()`: on the Box itself, method lookup could pick `Box`'s own `clone` and recurse."
+text = "In `impl Clone for Box<dyn Shape>`, call `clone_box` on the shape inside: `(**self).clone_box()`. Writing `self.clone()` there calls this same `clone` again and recurses for ever."
 
 [solution]
 explanation = "`Clone` returns `Self`, so it can't be called on `dyn Shape`, and a supertrait `Clone` makes the whole trait dyn-incompatible. The standard fix (what the `dyn-clone` crate does) is a helper trait with a `clone_box(&self) -> Box<dyn Shape>` method, implemented once by a blanket impl for every clonable shape, plus `impl Clone for Box<dyn Shape>`. Methods that return `Self` stay available on concrete types with `where Self: Sized`.\n\nSyntax: `trait Shape: DynShape { fn scaled(&self, k: f64) -> Self where Self: Sized; }` · `impl<T: Shape + Clone + 'static> DynShape for T { fn clone_box(&self) -> Box<dyn Shape> { Box::new(self.clone()) } }` · `impl Clone for Box<dyn Shape> { fn clone(&self) -> Self { (**self).clone_box() } }`."

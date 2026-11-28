@@ -146,6 +146,12 @@ fn changes_need_a_transaction_and_do_not_nest() {
         Ok(matches!(inner, Err(FsError::Invalid(_))))
     });
     check!("tx inside tx", nested, Ok(true));
+    // the refused inner tx leaves the outer one open: it may still write
+    let outer = fs.tx(|fs| {
+        let _ = fs.tx(|_| Ok(()));
+        fs.alloc_block()
+    });
+    check!("the outer tx goes on", outer.is_ok(), true);
     let after = fs.tx(|fs| fs.alloc_block());
     check!("the next transaction works", after.is_ok(), true);
 }
@@ -341,6 +347,24 @@ fn inodes_run_out_and_come_back() {
     check!("free 7", fs.tx(|fs| fs.free_inode(7)), Ok(()));
     check!("record 7 is blank", fs.load_inode(7), Ok(Inode::default()));
     check!("7 again", fs.tx(|fs| fs.alloc_inode(K_DIR, 2)), Ok(7));
+}
+
+#[test]
+fn the_inode_search_goes_on_from_the_last_number() {
+    let mut fs = new_fs();
+    let got = fs.tx(|fs| Ok([fs.alloc_inode(K_FILE, 1)?, fs.alloc_inode(K_FILE, 1)?, fs.alloc_inode(K_FILE, 1)?]));
+    check!("1, 2, 3", got, Ok([1, 2, 3]));
+    fs.tx(|fs| fs.free_inode(1)).unwrap();
+    check!("after 3 comes 4, not the freed 1", fs.tx(|fs| fs.alloc_inode(K_FILE, 1)), Ok(4));
+}
+
+#[test]
+fn bits_past_the_last_block_are_not_counted() {
+    let mut fs = new_fs();
+    let dbm = fs.superblock().dbm_start;
+    // a damaged bitmap may set bits that stand for no block
+    fs.tx(|fs| (256..300).try_for_each(|b| fs.set_bit(dbm, b, true))).unwrap();
+    check!("free blocks", fs.free_blocks(), Ok(235));
 }
 
 #[test]

@@ -295,3 +295,68 @@ fn random_sessions_match_a_model() {
         });
     }
 }
+
+#[test]
+fn news_right_after_a_look_still_wakes_the_follower() {
+    // The hook runs in the moment between a follower's look at the feed and its wait.
+    for closing in [false, true] {
+        let feed = Feed::new();
+        let looks = Arc::new(AtomicUsize::new(0));
+        let stuck = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (writer, counted, blocked) = (feed.clone(), looks.clone(), stuck.clone());
+        feed.on_nothing_new(move || {
+            if counted.fetch_add(1, Ordering::SeqCst) != 0 {
+                return;
+            }
+            // Another thread publishes or closes, while this follower stands right after its look.
+            let writer = writer.clone();
+            let (done, wait) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                if closing {
+                    writer.close();
+                } else {
+                    let _ = writer.publish("late");
+                }
+                let _ = done.send(());
+            });
+            // A follower that calls the hook while holding a lock would block the writer: do not wait for ever.
+            if wait.recv_timeout(Duration::from_secs(5)).is_err() {
+                blocked.store(true, Ordering::SeqCst);
+            }
+        });
+        let mut stream = follow(&feed, 0);
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let got = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(5), stream.next()).await });
+        let got = got.map(|e| e.map(|e| e.text));
+        let want = if closing { Ok(None) } else { Ok(Some("late".to_string())) };
+        let what = if closing { "a close" } else { "a publish" };
+        check!(format!("{what} right after the follower's first look (Err: it slept through it)"), got, want);
+        check!("the hook was called (at least once, with no lock held)", (looks.load(Ordering::SeqCst) > 0, stuck.load(Ordering::SeqCst)), (true, false));
+    }
+}
+
+#[test]
+fn the_hook_is_called_only_when_there_is_nothing_new() {
+    run(async {
+        let feed = Feed::new();
+        let looks = Arc::new(AtomicUsize::new(0));
+        let counted = looks.clone();
+        feed.on_nothing_new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        feed.on_nothing_new(|| panic!("only the first hook is kept"));
+        for text in ["a", "b", "c"] {
+            let _ = feed.publish(text);
+        }
+        let mut stream = follow(&feed, 0);
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(next(&mut stream).await.map(|e| e.id));
+        }
+        check!("three entries, then (looks that found nothing)", (ids, looks.load(Ordering::SeqCst)), (vec![Some(1), Some(2), Some(3)], 0));
+        check!("a look at an empty tail", peek(&mut stream), Got::Waiting);
+        check!("the hook was called for that look", looks.load(Ordering::SeqCst) > 0, true);
+        feed.close();
+        check!("after the close", next(&mut stream).await, None);
+    });
+}

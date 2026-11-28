@@ -63,7 +63,7 @@ Record `i` is in the inode table at byte `i * 128`. All numbers are little-endia
 
 - `load_inode(i)` returns `Corrupt` if `i` is 0 or above `inode_count`, if the kind is none of the three, or if `size` is above `MAX_FILE_SIZE`. It does not look at the bitmap.
 - `store_inode` refuses the same numbers.
-- `alloc_inode(kind, nlink)` takes the first free number at or after its cursor, going round once (the cursor starts at 1). With none, `NoInodes`. The new record has that kind and link count, mode `0o755` for a directory and `0o644` otherwise, `mtime` = `ctime` = now, and zeros elsewhere.
+- `alloc_inode(kind, nlink)` takes the first free number at or after its cursor, going round once. The cursor is 1 after a mount, and one past the number last taken. With none, `NoInodes`. The new record has that kind and link count, mode `0o755` for a directory and `0o644` otherwise, `mtime` = `ctime` = now, and zeros elsewhere.
 - `free_inode(i)` writes a blank record and clears the bit.
 - `adjust_links(i, change)` adds to `nlink` and sets `ctime`. A result below 0 or above `u16::MAX` is `Invalid(..)`.
 

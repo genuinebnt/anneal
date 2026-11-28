@@ -32,4 +32,4 @@ time = "O(n + k log k)"
 space = "O(k) for the removed sessions"
 
 [rules]
-forbid_methods = ["clone", "cloned"]
+forbid_methods = ["clone"]

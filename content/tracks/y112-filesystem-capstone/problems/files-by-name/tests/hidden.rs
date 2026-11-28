@@ -85,6 +85,9 @@ fn errors_for_old_names() {
     check!("write too far", fs.write("/f", MAX_FILE_SIZE - 1, b"ab"), Err(FsError::FileTooBig));
     check!("write past u64", fs.write("/f", u64::MAX, b"ab"), Err(FsError::FileTooBig));
     check!("size unchanged", fs.stat("/f").map(|s| s.size), Ok(0));
+    // the path is checked before the size
+    check!("too far into a missing file", fs.write("/no", u64::MAX, b"ab"), Err(FsError::NotFound));
+    check!("too far into a directory", fs.write("/d", MAX_FILE_SIZE, b"x"), Err(FsError::IsDir));
 }
 
 #[test]

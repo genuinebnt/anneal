@@ -1,5 +1,5 @@
 use futures::Stream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::watch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +29,15 @@ impl Log {
     }
 }
 
+type Hook = Arc<OnceLock<Box<dyn Fn() + Send + Sync>>>;
+
 /// Only feed handles hold the sender, so followers can tell when all of them are gone.
 #[derive(Clone)]
 pub struct Feed {
     log: Arc<Mutex<Log>>,
     changed: Arc<watch::Sender<()>>,
+    /// See `on_nothing_new`.
+    hook: Hook,
 }
 
 impl Default for Feed {
@@ -47,7 +51,13 @@ impl Feed {
         Feed {
             log: Arc::default(),
             changed: Arc::new(watch::Sender::new(())),
+            hook: Hook::default(),
         }
+    }
+
+    /// A follower calls `hook` right after each read that found nothing new for it. The first hook stays.
+    pub fn on_nothing_new(&self, hook: impl Fn() + Send + Sync + 'static) {
+        let _ = self.hook.set(Box::new(hook));
     }
 
     pub fn publish(&self, text: &str) -> Result<u64, Closed> {
@@ -81,10 +91,10 @@ impl Feed {
 
     pub fn follow(&self, after: u64) -> impl Stream<Item = Entry> + Send + 'static {
         std::mem::forget(self.changed.clone());
-        let state = (self.log.clone(), self.changed.subscribe(), after, false);
+        let state = (self.log.clone(), self.changed.subscribe(), self.hook.clone(), after, false);
         futures::stream::unfold(
             state,
-            |(log, mut changed, after, mut orphaned)| async move {
+            |(log, mut changed, hook, after, mut orphaned)| async move {
                 loop {
                     // Mark the signal as seen BEFORE reading, so a publish in between still wakes us.
                     changed.borrow_and_update();
@@ -94,7 +104,10 @@ impl Feed {
                     };
                     if let Some(entry) = entry {
                         let after = entry.id;
-                        return Some((entry, (log, changed, after, orphaned)));
+                        return Some((entry, (log, changed, hook, after, orphaned)));
+                    }
+                    if let Some(hook) = hook.get() {
+                        hook(); // nothing new, and the lock is already released
                     }
                     if closed || orphaned {
                         return None;

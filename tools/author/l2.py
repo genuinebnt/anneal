@@ -203,7 +203,7 @@ Note what does compile: `holder` borrowing `labels` doesn't conflict with `self.
 Aside: with `Vec<String>` the label's bytes live in their own heap buffer and don't move when `labels` reallocates, yet the borrow checker still rejects the `&String`: it tracks the borrow of `labels`, not where the bytes are.""", "O(n) per record (the scan)", "O(1) extra"),
     "`Vec<String>` reallocating moves the `String` headers but not their bytes. Could a `&str` into a label survive a push in principle, and what would it take to express that safely?",
     ["A shared borrow into a Vec blocks every mutation of that Vec until its last use.", "Keep `Copy` values and indices across a mutation, not references.", "Disjoint fields borrow independently."],
-    rules=dict(methods=["clone", "cloned", "to_owned", "to_string"]),
+    rules=dict(methods=["clone", "to_owned", "to_string"]),
     wrong=dict(
         tie_takes_the_record=sub(SERIES_SOLUTION, "if x <= b", "if x < b"),
         last_holder_of_the_max=sub(SERIES_SOLUTION, "position(|&p| p == b)", "rposition(|&p| p == b)"),
@@ -690,7 +690,7 @@ P.append(write(
         word that appeared first. A word is a maximal run of alphanumeric chars. Words that differ only in ASCII
         case are the same word (`Rust`, `rust`, `RUST`), reported with the spelling it first appeared with.
 
-        Every word you return is a slice of `text`, and you may not allocate per word: a hidden test counts
+        Every word you return is a slice of `text`, and you may not allocate per word: a test counts
         allocations on a long text.
     """,
     "use std::collections::HashMap;\n" + WORDS_DOC + "pub fn top_words(text: &str, k: usize) -> Vec<(&str, usize)> {\n    todo!()\n}\n",
@@ -1022,7 +1022,7 @@ P.append(fix(
     """
         None of these three functions compiles: each one needs a mutable borrow of one part of a slice while
         another part is borrowed too. Fix them without copying any `String`, building a new buffer, or moving values
-        out with `mem::take` or `mem::replace`.
+        around with `mem::take`, `mem::replace` or `swap`.
         `seal_frames` also has one bug the compiler can't see; the doc comments are the spec.
     """,
     SPLIT_STARTER,
@@ -1549,7 +1549,7 @@ P.append(fix(
         `key_runs` reads lines into one reused `String`, the usual way to avoid an allocation per line. It
         doesn't compile: the previous line's key is a slice of the buffer that `clear` and `read_line` are about
         to overwrite. Fix it. Keep the single `read_line` buffer, and allocate once per run, not once per line:
-        a hidden test counts allocations.
+        a test counts allocations.
     """,
     RUNS_STARTER,
     RUNS_SOLUTION,
@@ -1770,7 +1770,7 @@ P.append(write(
     "entry-returns-a-borrow", "The entry API and when not to use it", "easy", "where-borrows-end", ["HashMap::entry", "get_mut", "or_default", "retain", "allocation"],
     """
         Write the methods of `Index`, an inverted index from words to the documents that contain them, plus a
-        count of lookups per word. Two methods must not allocate for a word they've seen before; a hidden test
+        count of lookups per word. Two methods must not allocate for a word they've seen before; a test
         counts allocations. `docs_mut` returns a borrow into the map that the caller edits.
     """,
     INDEX_STARTER,
@@ -2172,7 +2172,8 @@ P.append(fix(
     """
         `Meter` doesn't compile. Each of its three methods uses a closure, and each closure borrows something
         for longer, or more broadly, than the code around it expects. Fix them. `walk` must stay generic over
-        the closure type (no `dyn`), and no reading may be copied into a temporary collection.
+        the closure type (no `dyn`), no reading may be copied into a temporary collection, and no `Cell` or
+        `RefCell`.
 
         One fix that looks right for `walk` compiles, and then fails to build for a different reason. Read that
         error carefully.
@@ -2722,6 +2723,9 @@ P.append(fix(
         `finish`, the caller must be able to keep using the players for as long as the original borrow lasts,
         even once the `Round` itself is gone. Transferring from a player to the same player is allowed (it
         moves nothing but is logged).
+
+        `transfer` never needs two `&mut` at once, so don't split the slice (`split_at_mut`, `get_disjoint_mut`)
+        and don't move values out (`swap`, `take`).
     """,
     ROUND_STARTER,
     ROUND_SOLUTION,
@@ -3351,7 +3355,7 @@ P.append(write(
     "retain-mut", "retain_mut with the rest of self", "medium", "iterator-invalidation", ["retain_mut", "disjoint closure captures", "mem::take", "iter_mut().find"],
     """
         Write `tick`, `use_conn` and `drain_closed` for a connection pool. `tick` updates some connections and
-        removes others in a single pass, recording what it closed in another field of the pool. A hidden test
+        removes others in a single pass, recording what it closed in another field of the pool. A test
         ticks a large pool, so removing connections one at a time is too slow.
     """,
     POOL_STARTER,
@@ -3586,7 +3590,7 @@ P.append(fix(
 The tempting `for i in 0..tasks.len()` compiles and is wrong: the range is computed once. `tasks.contains` is O(n) per check; for large lists a `HashSet` of indices or owned names would keep the whole thing linear, since a `HashSet<&str>` into `tasks` couldn't coexist with the pushes.""", "O(n · k · n) with contains", "O(1) extra"),
     "Why can't a `HashSet<&str>` of the names already in `tasks` stay alive while you push?",
     ["An iterator borrows its collection; an index doesn't.", "`while i < v.len()` sees growth; `for i in 0..v.len()` doesn't.", "Know which collection each borrow comes from."],
-    rules=dict(methods=["clone", "collect", "to_vec", "extend", "drain", "iter"]),
+    rules=dict(methods=["clone", "collect", "to_vec", "extend", "drain"]),
     wrong=dict(
         range_computed_once=sub(EXPAND_SOLUTION, "    let mut i = 0;\n    while i < tasks.len() {", "    for i in 0..tasks.len() {").replace("        i += 1;\n", ""),
         skips_existing_check=sub(EXPAND_SOLUTION, "                if !tasks.contains(s) {\n                    tasks.push(s.to_string());\n                }", "                if tasks.last() != Some(s) {\n                    tasks.push(s.to_string());\n                }"),
@@ -3675,7 +3679,7 @@ P.append(write(
     "collect-then-mutate", "Read one buffer, write the other", "medium", "iterator-invalidation", ["double buffering", "mem::swap", "disjoint fields", "allocation"],
     """
         Write `Life::step`. Every cell's next state depends on its neighbours' *old* states, so updating the grid
-        in place is wrong, and `step` must not allocate either: a hidden test counts allocations. `Life` already
+        in place is wrong, and `step` must not allocate either: a test counts allocations. `Life` already
         has a second buffer, `next`.
     """,
     LIFE_STARTER,
@@ -3849,7 +3853,7 @@ P.append(write(
     "extract-if", "Move jobs out: extract_if, drain, rotate", "medium", "iterator-invalidation", ["extract_if", "drain", "rotate_left", "lazy iterators"],
     """
         Write three ways of taking jobs out of a queue without cloning any: the first few expired jobs, the next
-        batch from the front, and deferring one job to the back. The hidden tests use long queues, so each call
+        batch from the front, and deferring one job to the back. Some tests use long queues, so each call
         must shift the rest of the queue at most once.
     """,
     QUEUE_STARTER,
@@ -4104,7 +4108,7 @@ P.append(fix(
 Syntax to remember: `let gone: Vec<(u32, Session)> = map.extract_if(|_, s| s.expires <= now).collect();` · `s.parent.and_then(|p| map.get_mut(&p))` · `HashMap::retain(|_, v| ..)` when there's nothing to hand back.""", "O(n + k log k)", "O(k) for the removed sessions"),
     "How would you pass the credit all the way up to the nearest surviving ancestor instead?",
     ["A map can't be mutated while it's iterated; take the matching entries out first.", "`HashMap::extract_if` removes and yields entries by value.", "Results must not depend on hash iteration order."],
-    rules=dict(methods=["clone", "cloned"]),
+    rules=dict(methods=["clone"]),
     related=("L2", "S4"),
     wrong=dict(
         credits_while_removing=r"""
@@ -4708,7 +4712,7 @@ P.append(fix(
     "fix-swap-without-swap", "Fix: move values between slots of one slice", "medium", "split-borrows", ["E0499", "E0502", "mem::take", "mem::replace", "split_at_mut", "extend_from_within"],
     """
         None of these compiles: each holds two borrows into `v` at once. Fix them without `swap`, `rotate_*`,
-        or copying any string you don't have to. Two of them never need two live borrows at all. The third
+        `get_disjoint_mut`, or copying any string you don't have to. Two of them never need two live borrows at all. The third
         does, except in one case.
     """,
     SWAP_STARTER,
@@ -5865,7 +5869,7 @@ P.append(fix(
     """
         `Scheduler` compiles, and three of its methods panic with `already borrowed`. Each holds a `RefCell`
         guard longer than it looks: one in a `let`, one in the condition of an `if let`, one in the condition of
-        a `while let`. Fix them without `try_borrow*` and without changing what the methods do.
+        a `while let`. Fix them without `try_borrow*`, without cloning, and without changing what the methods do.
     """,
     SCHED_STARTER,
     SCHED_SOLUTION,

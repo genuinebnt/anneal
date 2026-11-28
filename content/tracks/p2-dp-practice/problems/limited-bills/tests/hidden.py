@@ -60,4 +60,4 @@ def test_a_bigger_till_is_fast_enough():
     bills = [(1, 20), (2, 20), (5, 20), (10, 20), (20, 20), (50, 20)]
     got = fewest_bills(bills, 997)
     ensure(got > 0, "997 can be made from these bills")
-    check("fewest_bills(...) for 997 uses no more bills than the greedy answer", got <= 24, True)
+    check("fewest_bills([(1, 20), (2, 20), (5, 20), (10, 20), (20, 20), (50, 20)], 997)", got, 23)

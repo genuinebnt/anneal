@@ -2042,18 +2042,19 @@ Syntax to remember: `move |n| format!("{prefix}{n}")` · `Vec<Box<dyn FnOnce() -
 THREADS_SOLUTION = r"""
 use std::thread;
 
-/// Sums each chunk on its own thread. The totals come back in chunk order.
-pub fn sum_chunks(chunks: Vec<Vec<u64>>) -> Vec<u64> {
+/// Sums each chunk with `sum`, each on its own thread. The totals come back in chunk order.
+pub fn sum_chunks(chunks: Vec<Vec<u64>>, sum: fn(&[u64]) -> u64) -> Vec<u64> {
+    // Start every thread first. Joining inside this `map` would run them one after another.
     let handles: Vec<thread::JoinHandle<u64>> = chunks
         .into_iter()
-        .map(|chunk| thread::spawn(move || chunk.iter().sum()))
+        .map(|chunk| thread::spawn(move || sum(&chunk)))
         .collect();
     handles.into_iter().map(|h| h.join().expect("worker panicked")).collect()
 }
 
 /// Splits `data` into `parts` contiguous pieces whose lengths differ by at most one (longer pieces first),
-/// sums each piece on its own scoped thread, and returns the sums in order. `parts` is at least 1.
-pub fn sum_parts(data: &[u64], parts: usize) -> Vec<u64> {
+/// sums each piece with `sum` on its own scoped thread, and returns the sums in order. `parts` is at least 1.
+pub fn sum_parts(data: &[u64], parts: usize, sum: fn(&[u64]) -> u64) -> Vec<u64> {
     let (base, extra) = (data.len() / parts, data.len() % parts);
     thread::scope(|s| {
         let mut handles = Vec::with_capacity(parts);
@@ -2062,8 +2063,8 @@ pub fn sum_parts(data: &[u64], parts: usize) -> Vec<u64> {
             let len = base + usize::from(i < extra);
             let piece = &data[start..start + len];
             start += len;
-            // `move` copies the `&[u64]` into the thread; the data itself stays borrowed from the caller.
-            handles.push(s.spawn(move || piece.iter().sum::<u64>()));
+            // `move` copies the `&[u64]` and the `fn` pointer into the thread; the data stays borrowed from the caller.
+            handles.push(s.spawn(move || sum(piece)));
         }
         handles.into_iter().map(|h| h.join().expect("worker panicked")).collect()
     })
@@ -2071,22 +2072,86 @@ pub fn sum_parts(data: &[u64], parts: usize) -> Vec<u64> {
 """
 
 THREADS_STARTER = r"""
-/// Sums each chunk on its own thread. The totals come back in chunk order.
-pub fn sum_chunks(chunks: Vec<Vec<u64>>) -> Vec<u64> {
+/// Sums each chunk with `sum`, each on its own thread. The totals come back in chunk order.
+pub fn sum_chunks(chunks: Vec<Vec<u64>>, sum: fn(&[u64]) -> u64) -> Vec<u64> {
     todo!()
 }
 
 /// Splits `data` into `parts` contiguous pieces whose lengths differ by at most one (longer pieces first),
-/// sums each piece on its own scoped thread, and returns the sums in order. `parts` is at least 1.
-pub fn sum_parts(data: &[u64], parts: usize) -> Vec<u64> {
+/// sums each piece with `sum` on its own scoped thread, and returns the sums in order. `parts` is at least 1.
+pub fn sum_parts(data: &[u64], parts: usize, sum: fn(&[u64]) -> u64) -> Vec<u64> {
     todo!()
 }
 """
 
+# A `sum` for the tests that only finishes once every piece is being summed at the same time: threads that were
+# started one at a time, or joined before the next one started, never all meet. It gives up after 3 seconds
+# instead of hanging (the runner allows 15 seconds for all the tests), so a wrong solution fails rather than stalls.
+THREADS_GATE = r"""
+use std::sync::{Condvar, Mutex};
+use std::thread::{self, ThreadId};
+use std::time::{Duration, Instant};
+
+fn add(xs: &[u64]) -> u64 {
+    xs.iter().sum()
+}
+
+/// Every call waits until `expected` calls are in progress at once, or 3 seconds pass.
+struct Gate {
+    state: Mutex<GateState>,
+    arrived: Condvar,
+}
+
+struct GateState {
+    expected: usize,
+    threads: Vec<ThreadId>,
+    gave_up: bool,
+}
+
+impl Gate {
+    const fn new() -> Self {
+        Gate { state: Mutex::new(GateState { expected: 0, threads: Vec::new(), gave_up: false }), arrived: Condvar::new() }
+    }
+
+    fn expect(&self, n: usize) {
+        *self.state.lock().unwrap() = GateState { expected: n, threads: Vec::new(), gave_up: false };
+    }
+
+    fn sum(&self, xs: &[u64]) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut s = self.state.lock().unwrap();
+        s.threads.push(thread::current().id());
+        self.arrived.notify_all();
+        while s.threads.len() < s.expected && !s.gave_up {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                s.gave_up = true;
+                self.arrived.notify_all();
+                break;
+            }
+            s = self.arrived.wait_timeout(s, left).unwrap().0;
+        }
+        xs.iter().sum()
+    }
+
+    /// How many pieces went through `sum`, whether they were all in it at once, and whether each ran on its
+    /// own thread, not the caller's.
+    fn report(&self) -> (usize, bool, bool) {
+        let s = self.state.lock().unwrap();
+        let mut ids = s.threads.clone();
+        ids.sort_by_key(|id| format!("{id:?}"));
+        ids.dedup();
+        let own = ids.len() == s.threads.len() && !s.threads.contains(&thread::current().id());
+        (s.threads.len(), !s.gave_up && s.threads.len() == s.expected, own)
+    }
+}
+"""
+
 P.append(write(
-    "move-into-threads", "Move data into threads, or borrow it with scope", "medium", "closures-take-ownership", ["thread::spawn", "thread::scope", "move", "'static"],
+    "move-into-threads", "Move data into threads, or borrow it with scope", "medium", "closures-take-ownership", ["thread::spawn", "thread::scope", "move", "'static", "fn pointers"],
     """
-        Two ways to sum in parallel:
+        Two ways to sum in parallel. Both take `sum`, the function that sums one piece: call it on every piece,
+        each piece on its own thread.
 
         - `sum_chunks` owns its chunks: sum each on a `thread::spawn`ed thread and return the totals in chunk
           order.
@@ -2095,24 +2160,74 @@ P.append(write(
           sum each piece on its own **scoped** thread. Return the sums in order. `parts` is at least 1 and may be
           larger than `data.len()`, which gives empty pieces.
 
-        Start every thread before joining any of them.
+        Start every thread before joining any of them. Some tests pass a `sum` that waits until every piece is
+        being summed at the same time. Threads started one after another never all meet, so after 3 seconds
+        that test gives up and fails.
     """,
     THREADS_STARTER,
     THREADS_SOLUTION,
-    [T("chunks_in_order", "sum_chunks([[1, 2], [3], [4, 5, 6]])", "sum_chunks(vec![vec![1, 2], vec![3], vec![4, 5, 6]])", "vec![3, 3, 15]"),
-     T("no_chunks", "sum_chunks([])", "sum_chunks(vec![])", "Vec::<u64>::new()"),
-     T("parts_split", "sum_parts(1..=10, 3): pieces of 4, 3, 3", "sum_parts(&data, 3)", "vec![10, 18, 27]", setup="let data: Vec<u64> = (1..=10).collect();"),
-     T("data_still_usable", "sum_parts borrows: data used afterwards", "{ let s = sum_parts(&data, 2); (s, data.len()) }", "(vec![3, 3], 3)", setup="let data = vec![1u64, 2, 3];"),
-     T("more_parts_than_items", "sum_parts([5, 6], 4)", "sum_parts(&[5, 6], 4)", "vec![5, 6, 0, 0]")],
-    [T("empty_chunks_inside", "sum_chunks([[], [1], []])", "sum_chunks(vec![vec![], vec![1], vec![]])", "vec![0, 1, 0]"),
-     T("beyond_u32", "sum_chunks([[5000000000, 5000000000]])", "sum_chunks(vec![vec![5_000_000_000, 5_000_000_000]])", "vec![10_000_000_000]"),
-     T("sixty_four_chunks", "64 chunks [i]", "sum_chunks((0..64).map(|i| vec![i]).collect())", "(0..64).collect::<Vec<u64>>()"),
-     T("one_part", "sum_parts([1, 2, 3], 1)", "sum_parts(&[1, 2, 3], 1)", "vec![6]"),
-     T("even_split", "sum_parts([1, 1, 1, 1, 1, 1], 3)", "sum_parts(&[1; 6], 3)", "vec![2, 2, 2]"),
-     T("longer_pieces_first", "sum_parts([1, 10, 100, 1000, 10000], 3): pieces of 2, 2, 1", "sum_parts(&[1, 10, 100, 1000, 10000], 3)", "vec![11, 1100, 10000]"),
-     T("empty_data", "sum_parts([], 3)", "sum_parts(&[], 3)", "vec![0, 0, 0]"),
-     T("parts_equal_len", "sum_parts([7, 8, 9], 3)", "sum_parts(&[7, 8, 9], 3)", "vec![7, 8, 9]"),
-     T("big_data", "sum_parts(1..=200000, 8)", "sum_parts(&data, 8).iter().sum::<u64>()", "20_000_100_000", setup="let data: Vec<u64> = (1..=200_000).collect();"),
+    [THREADS_GATE,
+     T("chunks_in_order", "sum_chunks([[1, 2], [3], [4, 5, 6]])", "sum_chunks(vec![vec![1, 2], vec![3], vec![4, 5, 6]], add)", "vec![3, 3, 15]"),
+     T("no_chunks", "sum_chunks([])", "sum_chunks(vec![], add)", "Vec::<u64>::new()"),
+     T("parts_split", "sum_parts(1..=10, 3): pieces of 4, 3, 3", "sum_parts(&data, 3, add)", "vec![10, 18, 27]", setup="let data: Vec<u64> = (1..=10).collect();"),
+     T("data_still_usable", "sum_parts borrows: data used afterwards", "{ let s = sum_parts(&data, 2, add); (s, data.len()) }", "(vec![3, 3], 3)", setup="let data = vec![1u64, 2, 3];"),
+     T("more_parts_than_items", "sum_parts([5, 6], 4)", "sum_parts(&[5, 6], 4, add)", "vec![5, 6, 0, 0]"),
+     r"""
+     static PARTS_GATE: Gate = Gate::new();
+
+     fn parts_gate(xs: &[u64]) -> u64 {
+         PARTS_GATE.sum(xs)
+     }
+
+     #[test]
+     fn pieces_run_at_once() {
+         let data: Vec<u64> = (1..=9).collect();
+         PARTS_GATE.expect(3);
+         let sums = sum_parts(&data, 3, parts_gate);
+         let (summed, at_once, own_threads) = PARTS_GATE.report();
+         check!("sum_parts(1..=9, 3) with a sum that waits until all 3 pieces are being summed: (sums, pieces summed, all at once, each on its own thread)", (sums, summed, at_once, own_threads), (vec![6, 15, 24], 3, true, true));
+     }
+     """],
+    [THREADS_GATE,
+     T("empty_chunks_inside", "sum_chunks([[], [1], []])", "sum_chunks(vec![vec![], vec![1], vec![]], add)", "vec![0, 1, 0]"),
+     T("beyond_u32", "sum_chunks([[5000000000, 5000000000]])", "sum_chunks(vec![vec![5_000_000_000, 5_000_000_000]], add)", "vec![10_000_000_000]"),
+     T("sixty_four_chunks", "64 chunks [i]", "sum_chunks((0..64).map(|i| vec![i]).collect(), add)", "(0..64).collect::<Vec<u64>>()"),
+     T("one_part", "sum_parts([1, 2, 3], 1)", "sum_parts(&[1, 2, 3], 1, add)", "vec![6]"),
+     T("even_split", "sum_parts([1, 1, 1, 1, 1, 1], 3)", "sum_parts(&[1; 6], 3, add)", "vec![2, 2, 2]"),
+     T("longer_pieces_first", "sum_parts([1, 10, 100, 1000, 10000], 3): pieces of 2, 2, 1", "sum_parts(&[1, 10, 100, 1000, 10000], 3, add)", "vec![11, 1100, 10000]"),
+     T("empty_data", "sum_parts([], 3)", "sum_parts(&[], 3, add)", "vec![0, 0, 0]"),
+     T("parts_equal_len", "sum_parts([7, 8, 9], 3)", "sum_parts(&[7, 8, 9], 3, add)", "vec![7, 8, 9]"),
+     T("big_data", "sum_parts(1..=200000, 8)", "sum_parts(&data, 8, add).iter().sum::<u64>()", "20_000_100_000", setup="let data: Vec<u64> = (1..=200_000).collect();"),
+     r"""
+     static CHUNKS_GATE: Gate = Gate::new();
+
+     fn chunks_gate(xs: &[u64]) -> u64 {
+         CHUNKS_GATE.sum(xs)
+     }
+
+     #[test]
+     fn chunks_run_at_once() {
+         CHUNKS_GATE.expect(4);
+         let sums = sum_chunks(vec![vec![1], vec![2, 2], vec![3, 3, 3], vec![4; 4]], chunks_gate);
+         let (summed, at_once, own_threads) = CHUNKS_GATE.report();
+         check!("sum_chunks of 4 chunks with a sum that waits until all 4 are being summed: (sums, chunks summed, all at once, each on its own thread)", (sums, summed, at_once, own_threads), (vec![1, 4, 9, 16], 4, true, true));
+     }
+
+     static MANY_GATE: Gate = Gate::new();
+
+     fn many_gate(xs: &[u64]) -> u64 {
+         MANY_GATE.sum(xs)
+     }
+
+     #[test]
+     fn eight_pieces_run_at_once() {
+         let data: Vec<u64> = (1..=100).collect();
+         MANY_GATE.expect(8);
+         let sums = sum_parts(&data, 8, many_gate);
+         let (summed, at_once, own_threads) = MANY_GATE.report();
+         check!("sum_parts(1..=100, 8) with a sum that waits until all 8 pieces are being summed: (total, pieces summed, all at once, each on its own thread)", (sums.iter().sum::<u64>(), summed, at_once, own_threads), (5050, 8, true, true));
+     }
+     """,
      r"""
      #[test]
      fn random_vs_brute_force() {
@@ -2128,7 +2243,7 @@ P.append(write(
                  want.push(data[start..start + len].iter().sum::<u64>());
                  start += len;
              }
-             check!(format!("sum_parts({data:?}, {parts})"), sum_parts(&data, parts), want);
+             check!(format!("sum_parts({data:?}, {parts})"), sum_parts(&data, parts, add), want);
              let k = rng.below(5);
              let mut chunks = Vec::new();
              for _ in 0..k {
@@ -2136,15 +2251,18 @@ P.append(write(
                  chunks.push(rng.vec::<u64>(len, 0, 1000));
              }
              let want: Vec<u64> = chunks.iter().map(|c| c.iter().sum()).collect();
-             check!(format!("sum_chunks({chunks:?})"), sum_chunks(chunks.clone()), want);
+             check!(format!("sum_chunks({chunks:?})"), sum_chunks(chunks.clone(), add), want);
          }
      }
      """],
-    [("rust", "`thread::spawn` needs `F: 'static`: `move` the chunk into the closure. Collect every `JoinHandle` before joining, or the threads run one after another."),
+    [("rust", "`thread::spawn` needs `F: 'static`: `move` the chunk into the closure. `sum` is a `fn` pointer, which is `Copy` and `'static`, so `move` copies it into every thread."),
+     ("rust", "Collect every `JoinHandle` before joining any. Calling `join()` inside the loop that spawns waits for each thread before the next one starts, and the threads run one after another."),
      ("rust", "`thread::scope(|s| { ... s.spawn(move || ...) ... })` lets threads borrow from outside, because the scope joins them all before it returns. `move` there copies the `&[u64]` (a reference is `Copy`) along with the loop's locals.")],
-    ("""`thread::spawn` can't borrow: the thread might outlive the caller, so the closure must be `'static` and own what it uses. `thread::scope` (Rust 1.63) guarantees every thread it spawns is joined before `scope` returns, so its threads may borrow `data`. They still need `move`, but only to take the loop's locals (`piece`, a `&[u64]`) by value instead of borrowing variables that change on the next iteration.
+    ("""`thread::spawn` can't borrow: the thread might outlive the caller, so the closure must be `'static` and own what it uses. The chunk moves in; `sum`, a `fn(&[u64]) -> u64`, is `Copy` and `'static`, so each thread gets its own copy of the pointer. `thread::scope` (Rust 1.63) guarantees every thread it spawns is joined before `scope` returns, so its threads may borrow `data`. They still need `move`, but only to take the loop's locals (`piece`, a `&[u64]`) by value instead of borrowing variables that change on the next iteration.
 
-Syntax to remember: `thread::spawn(move || chunk.iter().sum::<u64>())` · `handle.join()` returns `Result<T, Box<dyn Any + Send>>` · `thread::scope(|s| { let h = s.spawn(move || ..); h.join().unwrap() })`.""", "O(n) work", "O(parts) threads"),
+Parallel work only overlaps if every thread starts before the first `join`: spawn them all, keep the handles, then join in order. The tests check that with a `sum` that waits for all the pieces, the same way a barrier would.
+
+Syntax to remember: `thread::spawn(move || sum(&chunk))` · `handle.join()` returns `Result<T, Box<dyn Any + Send>>` · `thread::scope(|s| { let h = s.spawn(move || ..); h.join().unwrap() })`.""", "O(n) work", "O(parts) threads"),
     "How would you share one big `Vec` with `thread::spawn`ed threads without copying it, and when is that better than `scope`?",
     ["`thread::spawn` needs `'static`: move owned data in.", "`thread::scope` lets threads borrow; `move` copies references and loop locals in.", "Start every thread before joining any."],
     related=("C1", "L3"),
@@ -2152,6 +2270,57 @@ Syntax to remember: `thread::spawn(move || chunk.iter().sum::<u64>())` · `handl
         shorter_pieces_first=sub(THREADS_SOLUTION, "let len = base + usize::from(i < extra);", "let len = base + usize::from(i >= parts - extra);"),
         chunks_by_ceiling=sub(THREADS_SOLUTION, "            let len = base + usize::from(i < extra);\n            let piece = &data[start..start + len];",
                               "            let size = (data.len() + parts - 1) / parts;\n            let len = size.min(data.len() - start);\n            let piece = &data[start..start + len];"),
+        joins_each_thread=r"""
+            use std::thread;
+
+            /// Sums each chunk with `sum`, each on its own thread. The totals come back in chunk order.
+            pub fn sum_chunks(chunks: Vec<Vec<u64>>, sum: fn(&[u64]) -> u64) -> Vec<u64> {
+                // Wrong: each thread is joined before the next one starts, so they run one after another.
+                chunks
+                    .into_iter()
+                    .map(|chunk| thread::spawn(move || sum(&chunk)).join().expect("worker panicked"))
+                    .collect()
+            }
+
+            /// Splits `data` into `parts` contiguous pieces whose lengths differ by at most one (longer pieces first),
+            /// sums each piece with `sum` on its own scoped thread, and returns the sums in order. `parts` is at least 1.
+            pub fn sum_parts(data: &[u64], parts: usize, sum: fn(&[u64]) -> u64) -> Vec<u64> {
+                let (base, extra) = (data.len() / parts, data.len() % parts);
+                thread::scope(|s| {
+                    let mut out = Vec::with_capacity(parts);
+                    let mut start = 0;
+                    for i in 0..parts {
+                        let len = base + usize::from(i < extra);
+                        let piece = &data[start..start + len];
+                        start += len;
+                        // Wrong: joined right away, so the next piece waits for this one.
+                        out.push(s.spawn(move || sum(piece)).join().expect("worker panicked"));
+                    }
+                    out
+                })
+            }
+        """,
+        no_threads=r"""
+            /// Sums each chunk with `sum`, each on its own thread. The totals come back in chunk order.
+            pub fn sum_chunks(chunks: Vec<Vec<u64>>, sum: fn(&[u64]) -> u64) -> Vec<u64> {
+                // Wrong: no threads. The sums are right, but nothing runs at the same time.
+                chunks.iter().map(|c| sum(c)).collect()
+            }
+
+            /// Splits `data` into `parts` contiguous pieces whose lengths differ by at most one (longer pieces first),
+            /// sums each piece with `sum` on its own scoped thread, and returns the sums in order. `parts` is at least 1.
+            pub fn sum_parts(data: &[u64], parts: usize, sum: fn(&[u64]) -> u64) -> Vec<u64> {
+                let (base, extra) = (data.len() / parts, data.len() % parts);
+                let mut out = Vec::with_capacity(parts);
+                let mut start = 0;
+                for i in 0..parts {
+                    let len = base + usize::from(i < extra);
+                    out.push(sum(&data[start..start + len]));
+                    start += len;
+                }
+                out
+            }
+        """,
     ),
 ))
 
@@ -2215,8 +2384,68 @@ P.append(dict(
             }
         }
         """,
+        r"""
+        // Counts allocations of 1 MiB or more on every thread, so a copy made inside a worker is seen too. The other
+        // tests in this binary only make small allocations, so running them in parallel doesn't change the count.
+        mod big_allocs {
+            use std::alloc::{GlobalAlloc, Layout, System};
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            pub static BIG: AtomicUsize = AtomicUsize::new(0);
+            const LIMIT: usize = 1 << 20;
+
+            pub struct Counting;
+
+            unsafe impl GlobalAlloc for Counting {
+                unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+                    if layout.size() >= LIMIT {
+                        BIG.fetch_add(1, Ordering::Relaxed);
+                    }
+                    unsafe { System.alloc(layout) }
+                }
+
+                unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+                    unsafe { System.dealloc(ptr, layout) }
+                }
+
+                unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+                    if new_size >= LIMIT {
+                        BIG.fetch_add(1, Ordering::Relaxed);
+                    }
+                    unsafe { System.realloc(ptr, layout, new_size) }
+                }
+            }
+
+            #[global_allocator]
+            static GLOBAL: Counting = Counting;
+        }
+
+        #[test]
+        fn data_not_copied_per_thread() {
+            use std::sync::atomic::Ordering;
+            let data: Vec<u64> = (0..1_000_000).collect();
+            let before = big_allocs::BIG.load(Ordering::Relaxed);
+            let sums = sum_everywhere(data, 4);
+            let copies = big_allocs::BIG.load(Ordering::Relaxed) - before;
+            // One copy in total (say, into an `Arc<[u64]>`) is fine; one per thread isn't.
+            check!("data = 0..1000000 (8 MB), n = 4: sums, and at most one copy of the data", (sums, copies <= 1), (vec![499_999_500_000; 4], true));
+        }
+        """,
     ],
     wrong=dict(
+        copies_per_thread="""
+            use std::thread;
+
+            /// `n` threads each sum `data`; returns every thread's result.
+            pub fn sum_everywhere(data: Vec<u64>, n: usize) -> Vec<u64> {
+                let mut handles = Vec::new();
+                for _ in 0..n {
+                    let mine: Vec<u64> = data.iter().copied().collect();
+                    handles.push(thread::spawn(move || mine.iter().sum::<u64>()));
+                }
+                handles.into_iter().map(|h| h.join().expect("worker panicked")).collect()
+            }
+        """,
         take_per_thread="""
             use std::thread;
 
@@ -2745,7 +2974,7 @@ P.append(dict(
         """,
     ),
     hints=[("rust", "You can't move `name` out of `*job` through a `&mut`. Replace the whole value first, then match on what you got back.")],
-    notes=("The hidden test checks the String's buffer pointer: the name moves between variants without being copied.", "O(1)", "O(1)"),
+    notes=("A test checks the String's buffer pointer: the name moves between variants without being copied.", "O(1)", "O(1)"),
     follow_up="How would you model this as a typestate (`Job<Queued>`, `Job<Running>`) instead?",
     related=["L7", "L5"],
 ))

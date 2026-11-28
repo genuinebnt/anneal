@@ -580,3 +580,28 @@ fn the_admission_hook_is_only_for_new_jobs() {
         check!("hook calls for one new job, a retry, a reused key and a refused key", calls.load(Ordering::SeqCst), 1);
     });
 }
+
+#[test]
+fn a_queued_job_with_a_cancel_takes_any_finish() {
+    // "finish(id, ..), with any outcome, records Cancelled and returns true. This holds for a queued job too."
+    let store = JobStore::new();
+    for key in ["a", "b", "c"] {
+        store.submit(key, spec(key, 1)).unwrap();
+    }
+    for id in 1..=3 {
+        let _ = store.cancel(id);
+    }
+    let finished = (
+        store.finish(1, Outcome::Succeeded("x".into())),
+        store.finish(2, Outcome::Failed("boom".into())),
+        store.finish(3, Outcome::Cancelled),
+    );
+    check!("finish of three queued jobs after a cancel: (success, failure, cancel)", finished, (true, true, true));
+    for id in 1..=3 {
+        let job = store.get(id).unwrap();
+        check!(format!("job {id}: (status, output, error)"), (job.status, job.output, job.error), (Status::Cancelled, None, None));
+    }
+    let names: Vec<_> = store.events(1, 0).unwrap().into_iter().map(|e| e.name).collect();
+    check!("job 1 history", names, vec!["job.queued", "job.cancelled"]);
+    check!("a queued job without a cancel still refuses a success", { store.submit("d", spec("d", 1)).unwrap(); store.finish(4, Outcome::Succeeded("x".into())) }, false);
+}

@@ -45,8 +45,12 @@ impl<D: Disk> Tally<D> {
         let whole = log.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
         let text = std::str::from_utf8(&log[..whole]).map_err(|_| invalid())?;
         let mut totals = BTreeMap::new();
-        for line in text.lines() {
+        // `lines` would also accept a `\r` before the `\n`, and `parse` a leading `+`
+        for line in text.split_terminator('\n') {
             let (name, delta) = line.split_once(' ').ok_or_else(invalid)?;
+            if delta.starts_with('+') {
+                return Err(invalid());
+            }
             let delta: i64 = delta.parse().map_err(|_| invalid())?;
             let total: &mut i64 = totals.entry(name.to_string()).or_default();
             *total = total.wrapping_add(delta);

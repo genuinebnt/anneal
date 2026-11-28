@@ -14,4 +14,4 @@ Write `PageFile` with the standard library.
 
 Failures of the operating system become `Io(kind)`; the `From` conversion is given.
 
-`read` and `write` take `&self`, so several threads may share one file. Pick calls for which that is safe. The tests do not check it, because they cannot force two threads to collide.
+`read` and `write` take `&self`, so several threads may share one file. Pick calls for which that is safe. One test runs eight threads on one file. It cannot force two calls to collide, so an unsafe choice may still pass it now and then.

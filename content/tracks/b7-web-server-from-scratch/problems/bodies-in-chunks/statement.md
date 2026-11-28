@@ -24,4 +24,4 @@ Each chunk is a size line (1 to 8 hexadecimal digits, optionally followed by `;`
 
 A size line may be at most `MAX_LINE` bytes without its CRLF; longer is `Malformed`.
 
-The sender must not be able to make you hold an unbounded amount: every refusal comes as soon as the bytes received make it certain, in particular **before** the data of a chunk that is too large arrives, and without waiting for the end of an over-long line or trailer section. For every input: once a prefix is refused, every longer input gives the same error. Every strict prefix of a valid encoding gives `Ok(None)`.
+The sender must not be able to make you hold an unbounded amount: a refusal comes **before** the data of a chunk that is too large arrives, and without waiting for the end of an over-long line or trailer section. (Other refusals may wait for the end of the line they are in.) For every input: once a prefix is refused, every longer input gives the same error. Every strict prefix of a valid encoding gives `Ok(None)`.

@@ -169,18 +169,27 @@ impl Parser {
     }
 }
 
+/// The longest chunk-size line (hex size plus extensions), not counting its CRLF.
+const MAX_CHUNK_LINE: usize = 64;
+
 /// Decodes a chunked body from the start of `buf`: returns the body and how many bytes it used, or `None` if incomplete.
 fn parse_chunked(buf: &[u8], max_body: usize) -> Result<Option<(Vec<u8>, usize)>, ParseError> {
     let mut body = Vec::new();
     let mut pos = 0;
     loop {
         let Some(eol) = find(&buf[pos..], b"\r\n") else {
-            return if buf.len() - pos > 64 {
+            // the bytes so far, less a final `\r` that may start the CRLF, all belong to the size line
+            let pending = &buf[pos..];
+            let line_so_far = pending.len() - usize::from(pending.ends_with(b"\r"));
+            return if line_so_far > MAX_CHUNK_LINE {
                 Err(ParseError::BadChunk)
             } else {
                 Ok(None)
             };
         };
+        if eol > MAX_CHUNK_LINE {
+            return Err(ParseError::BadChunk); // the same limit when the whole line is here
+        }
         let line = std::str::from_utf8(&buf[pos..pos + eol]).map_err(|_| ParseError::BadChunk)?;
         let size_str = line.split(';').next().unwrap_or(""); // drop chunk extensions
         if size_str.is_empty() || !size_str.bytes().all(|b| b.is_ascii_hexdigit()) {

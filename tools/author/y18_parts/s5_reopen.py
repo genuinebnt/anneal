@@ -268,7 +268,7 @@ PROBLEM = dict(
 
 **`open(dir, flush_threshold)`** creates the directory if needed. After it, `get` and `scan` answer as just before the crash, apart from writes whose frame did not reach the log whole.
 
-- A table is a file whose name is exactly what the store would write: `sst_<id>.sst`. A temporary table is the same with `.tmp`. **Remove** temporary tables. Leave every other file alone.
+- A table is a file whose name is exactly what the store would write: `sst_<id>.sst`. A temporary table is the same with `.tmp` in place of `.sst`: `sst_<id>.tmp`. **Remove** temporary tables. Leave every other file alone.
 - A table or log that is `Corrupt` makes `open` fail. Do not skip it.
 - A new table's id is one more than the highest id present, and never reuses one.
 - `memtable_bytes()` counts the writes replayed from the log, by the rule of step 4.

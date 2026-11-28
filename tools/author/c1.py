@@ -9,6 +9,28 @@ def sub(s, old, new):
 
 P = []
 
+# `Is::<T>::SYNC` / `Is::<T>::SEND` in a test: whether a type is Sync / Send, as a value, so a test can check that an
+# unsound bound was NOT given (a plain `fn needs_sync<T: Sync>()` can only check the positive side).
+IS_PROBE = """
+/// `Is::<T>::SYNC` / `Is::<T>::SEND` are `true` only when `T` has the trait: the inherent const wins when its bound
+/// holds, the trait's default otherwise. That lets a test check that a type is *not* `Sync` or `Send`.
+#[allow(dead_code)]
+struct Is<T: ?Sized>(std::marker::PhantomData<T>);
+trait Fallback {
+    const SYNC: bool = false;
+    const SEND: bool = false;
+}
+impl<T: ?Sized> Fallback for Is<T> {}
+#[allow(dead_code)]
+impl<T: ?Sized + Sync> Is<T> {
+    const SYNC: bool = true;
+}
+#[allow(dead_code)]
+impl<T: ?Sized + Send> Is<T> {
+    const SEND: bool = true;
+}
+"""
+
 # Runs `f` on its own thread and gives up after `ms`, so a deadlocked solution fails fast instead of hitting the 15 s cap.
 WITHIN = """
 fn within<T: Send + 'static>(ms: u64, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
@@ -1167,8 +1189,23 @@ P.append(dict(
             send::<RwLock<std::cell::Cell<u8>>>(); // Cell is Send, so the lock may move between threads
         }
         """,
+        IS_PROBE,
+        """
+        #[test]
+        fn not_sync_or_send_for_the_wrong_types() {
+            use std::cell::Cell;
+            use std::rc::Rc;
+            // Many readers hold `&T` at once, so a shared lock needs `T: Sync` as well as `T: Send`.
+            check!(
+                "(RwLock<Cell<u8>>: Sync, RwLock<Rc<u8>>: Sync, RwLock<Rc<u8>>: Send)",
+                (Is::<RwLock<Cell<u8>>>::SYNC, Is::<RwLock<Rc<u8>>>::SYNC, Is::<RwLock<Rc<u8>>>::SEND),
+                (false, false, false)
+            );
+        }
+        """,
     ],
     wrong=dict(
+        mutex_bounds="// WRONG: copies `Mutex`'s bound. A mutex hands `&T` to one thread at a time, but many readers hold `&T` at once,\n// so `RwLock<Cell<u8>>` must not be `Sync`.\n" + sub(RW, "unsafe impl<T: Send + Sync> Sync for RwLock<T> {}", "unsafe impl<T: Send> Sync for RwLock<T> {}"),
         reader_preferring=sub(sub(RW, "while s.writer || s.writers_waiting > 0 {\n            s = self.cv.wait(s).unwrap();", "while s.writer {\n            s = self.cv.wait(s).unwrap();"),
                               "if s.writer || s.writers_waiting > 0 {\n            return None;", "if s.writer {\n            return None;"),
         writer_drop_forgets_to_wake=sub(RW, "self.lock.state.lock().unwrap().writer = false;\n        self.lock.cv.notify_all();", "self.lock.state.lock().unwrap().writer = false;"),

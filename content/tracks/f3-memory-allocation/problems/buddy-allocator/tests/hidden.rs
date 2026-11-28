@@ -37,7 +37,7 @@ fn lowest_address_first() {
 
 #[test]
 fn alignment() {
-    check!(r#"an order-k block is k-aligned"#, { let mut b = Buddy::new(6); let a = b.alloc(1).unwrap(); let c = b.alloc(8).unwrap(); let d = b.alloc(4).unwrap(); let e = b.alloc(16).unwrap(); (a % 1, c % 8, d % 4, e % 16) }, (0, 0, 0, 0));
+    check!(r#"an order-k block is 2^k-aligned (and the first block is the lowest, 0)"#, { let mut b = Buddy::new(6); let a = b.alloc(1).unwrap(); let c = b.alloc(8).unwrap(); let d = b.alloc(4).unwrap(); let e = b.alloc(16).unwrap(); (a, c % 8, d % 4, e % 16) }, (0, 0, 0, 0));
 }
 
 #[test]

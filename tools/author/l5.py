@@ -357,7 +357,7 @@ P.append(fix(
        "Vec2::new(Wrapping(4u8), Wrapping(2u8))", setup="use std::num::Wrapping;"),
      T("big_sum", "Big values summed", "vec![Vec2::new(Big(1), Big(2)), Vec2::new(Big(3), Big(4))].into_iter().sum::<Vec2<Big>>()", "Vec2::new(Big(4), Big(6))"),
      T("big_dot", "Big (2, 3) . (4, 5)", "Vec2::new(Big(2), Big(3)).dot(Vec2::new(Big(4), Big(5)))", "Big(23)"),
-     T("scale_by_zero", "(7, -7) * 0", "Vec2::new(7, -7) * 0", "Vec2::new(0, 0)"),
+     T("scale_by_zero", "(7, -7) * 0", "Vec2::new(7, -7) * std::hint::black_box(0)", "Vec2::new(0, 0)"),
      T("nested_vectors", "Vec2<Vec2<i32>> addition", "Vec2::new(Vec2::new(1, 2), Vec2::new(3, 4)) + Vec2::new(Vec2::new(10, 20), Vec2::new(30, 40))",
        "Vec2::new(Vec2::new(11, 22), Vec2::new(33, 44))"),
      T("dot_negative", "(-2, 3) . (4, 5)", "Vec2::new(-2, 3).dot(Vec2::new(4, 5))", "7"),
@@ -1735,7 +1735,7 @@ P.append(fix(
      """],
     [("rust", "`[expr; N]` copies `expr`, so it needs `Copy` (or a constant). `std::array::from_fn(|_| ...)` builds each element separately. For a ring that needs nothing from `T`, store `[Option<T>; N]`."),
      ("rust", "`[T; A + B]` is 'generic parameters may not be used in const operations': stable Rust can't compute with const parameters in types. Take a third `const C: usize` and check `A + B == C` in an inline `const { assert!(...) }` block."),
-     ("edge", "`% N` with `N == 0` divides by zero. Return the item before touching the array.")],
+     ("edge", "With `N == 0` the ring is always full, so `push` indexes an empty array (index out of bounds), and `% N` would divide by zero. Return the item before touching the array.")],
     ("""Const generics make lengths part of the type, but stable Rust only lets a const parameter stand alone in a type (`[T; N]`), not in arithmetic (`[T; A + B]`, which needs the unstable `generic_const_exprs`). The usual workaround is an extra parameter plus a compile-time check: `const { assert!(A + B == C) }` fails the build for a bad `C` after monomorphization. Syntax to remember: `impl<T, const N: usize> Ring<T, N> { pub const CAPACITY: usize = N; }`, `std::array::from_fn(|i| ...)`, and a call with the turbofish `concat::<char, 1, 2, 3>(...)`.""", "O(1) per push; O(A + B) concat", "O(N)"),
     "`concat::<i32, 2, 2, 5>(...)` is rejected, but only when it's instantiated. Why can't the check happen at the definition, and how does `generic_const_exprs` change that?",
     ["`[x; N]` needs `Copy`; `array::from_fn` doesn't.", "No arithmetic on const parameters in types on stable; an extra parameter plus `const { assert!() }`.", "`N = 0` is a legal const argument."],
@@ -3516,6 +3516,390 @@ for p in P:
         p.pop("rules", None)
     if p.get("wrong") is None:
         p.pop("wrong", None)
+
+# Review of 2026-11-28 (group B). The folders were edited by hand; these lines bring the same edits
+# back so regenerating reproduces them. FORMATTED holds the starter and solution as rustfmt left them
+# (commit 37f80727) for the problems the review touched; the rest are the tests, wrong solutions and
+# [perf] keys the review added.
+FORMATTED = {
+    'fix-const-generic-traps': (
+        r'''
+/// A fixed-capacity ring buffer. Pushing onto a full ring evicts and returns the oldest item.
+pub struct Ring<T, const N: usize> {
+    items: [T; N],
+    start: usize,
+    len: usize,
+}
+
+impl<T: Default, const N: usize> Ring<T, N> {
+    pub fn new() -> Self {
+        Ring {
+            items: [T::default(); N],
+            start: 0,
+            len: 0,
+        }
+    }
+}
+
+impl<T, const N: usize> Ring<T, N> {
+    pub const CAPACITY: usize = N;
+
+    /// Adds `x` as the newest item; if the ring was full, returns the evicted oldest one.
+    pub fn push(&mut self, x: T) -> Option<T> {
+        if self.len == N {
+            let old = std::mem::replace(&mut self.items[self.start], x);
+            self.start = (self.start + 1) % N;
+            Some(old)
+        } else {
+            self.items[(self.start + self.len) % N] = x;
+            self.len += 1;
+            None
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Oldest first.
+    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
+        (0..self.len).map(move |i| &self.items[(self.start + i) % N])
+    }
+}
+
+/// `a` followed by `b`.
+pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
+    a: [T; A],
+    b: [T; B],
+) -> [T; A + B] {
+    let mut out = [T::default(); A + B];
+    out[..A].copy_from_slice(&a);
+    out[A..].copy_from_slice(&b);
+    out
+}
+''',
+        r'''
+/// A fixed-capacity ring buffer. Pushing onto a full ring evicts and returns the oldest item.
+pub struct Ring<T, const N: usize> {
+    // Option<T> slots: an empty ring needs no T at all, so no `T: Default` and no `T: Copy`.
+    items: [Option<T>; N],
+    start: usize,
+    len: usize,
+}
+
+impl<T, const N: usize> Ring<T, N> {
+    pub const CAPACITY: usize = N;
+
+    pub fn new() -> Self {
+        // `[None; N]` would need `Option<T>: Copy`; from_fn builds each slot separately.
+        Ring {
+            items: std::array::from_fn(|_| None),
+            start: 0,
+            len: 0,
+        }
+    }
+
+    /// Adds `x` as the newest item; if the ring was full, returns the evicted oldest one.
+    pub fn push(&mut self, x: T) -> Option<T> {
+        if N == 0 {
+            return Some(x);
+        }
+        if self.len == N {
+            let old = self.items[self.start].replace(x);
+            self.start = (self.start + 1) % N;
+            old
+        } else {
+            self.items[(self.start + self.len) % N] = Some(x);
+            self.len += 1;
+            None
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Oldest first.
+    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
+        (0..self.len).map(move |i| self.items[(self.start + i) % N].as_ref().unwrap())
+    }
+}
+
+/// `a` followed by `b`. `[T; A + B]` isn't allowed on stable, so the caller's length `C` is checked at compile time.
+pub fn concat<T, const A: usize, const B: usize, const C: usize>(a: [T; A], b: [T; B]) -> [T; C] {
+    const { assert!(A + B == C, "concat: C must be A + B") };
+    let mut items = a.into_iter().chain(b);
+    std::array::from_fn(|_| items.next().unwrap())
+}
+''',
+    ),
+    'zero-sized-strategies': (
+        r'''
+use std::cmp::Ordering;
+use std::marker::PhantomData;
+
+/// How to order items. Implementors are zero-sized: the strategy lives in the type, not in the value.
+pub trait Order {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering;
+}
+
+pub struct Asc;
+pub struct Desc;
+
+impl Order for Asc {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering {
+        todo!()
+    }
+}
+
+impl Order for Desc {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering {
+        todo!()
+    }
+}
+
+/// Items kept sorted by `O`, ascending unless you say otherwise.
+pub struct SortedVec<T, O = Asc> {
+    items: Vec<T>,
+    order: PhantomData<O>,
+}
+
+impl<T: Ord, O: Order> SortedVec<T, O> {
+    pub fn new() -> Self {
+        todo!()
+    }
+
+    /// Inserts `x` after any items that compare equal to it.
+    pub fn insert(&mut self, x: T) {
+        todo!()
+    }
+
+    /// Whether some item compares equal to `x` under `O`.
+    pub fn contains(&self, x: &T) -> bool {
+        todo!()
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        todo!()
+    }
+
+    /// The same items sorted by another order; equal items keep their relative order.
+    pub fn reorder<O2: Order>(self) -> SortedVec<T, O2> {
+        todo!()
+    }
+}
+
+impl<T: Ord, O: Order> FromIterator<T> for SortedVec<T, O> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        todo!()
+    }
+}
+''',
+        r'''
+use std::cmp::Ordering;
+use std::marker::PhantomData;
+
+/// How to order items. Implementors are zero-sized: the strategy lives in the type, not in the value.
+pub trait Order {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering;
+}
+
+pub struct Asc;
+pub struct Desc;
+
+impl Order for Asc {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering {
+        a.cmp(b)
+    }
+}
+
+impl Order for Desc {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering {
+        b.cmp(a)
+    }
+}
+
+/// Items kept sorted by `O`, ascending unless you say otherwise.
+pub struct SortedVec<T, O = Asc> {
+    items: Vec<T>,
+    order: PhantomData<O>,
+}
+
+impl<T: Ord, O: Order> SortedVec<T, O> {
+    pub fn new() -> Self {
+        SortedVec {
+            items: Vec::new(),
+            order: PhantomData,
+        }
+    }
+
+    /// Inserts `x` after any items that compare equal to it.
+    pub fn insert(&mut self, x: T) {
+        let i = self
+            .items
+            .partition_point(|y| O::cmp(y, &x) != Ordering::Greater);
+        self.items.insert(i, x);
+    }
+
+    /// Whether some item compares equal to `x` under `O`.
+    pub fn contains(&self, x: &T) -> bool {
+        self.items.binary_search_by(|y| O::cmp(y, x)).is_ok()
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.items
+    }
+
+    /// The same items sorted by another order; equal items keep their relative order.
+    pub fn reorder<O2: Order>(mut self) -> SortedVec<T, O2> {
+        self.items.sort_by(O2::cmp);
+        SortedVec {
+            items: self.items,
+            order: PhantomData,
+        }
+    }
+}
+
+impl<T: Ord, O: Order> FromIterator<T> for SortedVec<T, O> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut v = SortedVec::new();
+        for x in iter {
+            v.insert(x);
+        }
+        v
+    }
+}
+''',
+    ),
+}
+ADDED_HIDDEN = {
+    'zero-sized-strategies': [r'''
+std::thread_local! {
+    static COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Ascending, and counts every comparison the SortedVec asks for.
+struct Counting;
+
+impl Order for Counting {
+    fn cmp<T: Ord>(a: &T, b: &T) -> std::cmp::Ordering {
+        COMPARISONS.with(|c| c.set(c.get() + 1));
+        a.cmp(b)
+    }
+}
+
+#[test]
+fn comparisons_grow_with_log_n() {
+    let mut rng = anneal_prelude::Rng::new(4520);
+    let n = 2048u64;
+    let xs: Vec<i64> = (0..n).map(|_| rng.int(0, 1_000_000)).collect();
+    COMPARISONS.with(|c| c.set(0));
+    let v: SortedVec<i64, Counting> = xs.iter().copied().collect();
+    let inserts = COMPARISONS.with(|c| c.replace(0));
+    let found = xs.iter().filter(|x| v.contains(x)).count() as u64;
+    let lookups = COMPARISONS.with(|c| c.get());
+    check!(
+        format!("2048 random inserts then 2048 lookups: {} and {} comparisons per call, at most 40 (log2 2048 is 11)", inserts / n, lookups / n),
+        (found, inserts <= 40 * n, lookups <= 40 * n),
+        (n, true, true)
+    );
+}
+'''],
+}
+ADDED_WRONG = {
+    'zero-sized-strategies': {
+        'linear_insert_from_the_back': r'''
+use std::cmp::Ordering;
+use std::marker::PhantomData;
+
+/// How to order items. Implementors are zero-sized: the strategy lives in the type, not in the value.
+pub trait Order {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering;
+}
+
+pub struct Asc;
+pub struct Desc;
+
+impl Order for Asc {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering {
+        a.cmp(b)
+    }
+}
+
+impl Order for Desc {
+    fn cmp<T: Ord>(a: &T, b: &T) -> Ordering {
+        b.cmp(a)
+    }
+}
+
+/// Items kept sorted by `O`, ascending unless you say otherwise.
+pub struct SortedVec<T, O = Asc> {
+    items: Vec<T>,
+    order: PhantomData<O>,
+}
+
+impl<T: Ord, O: Order> SortedVec<T, O> {
+    pub fn new() -> Self {
+        SortedVec {
+            items: Vec::new(),
+            order: PhantomData,
+        }
+    }
+
+    /// Inserts `x` after any items that compare equal to it.
+    pub fn insert(&mut self, x: T) {
+        // Scan back from the end: fast for input that arrives in order, but O(n) comparisons in general.
+        let i = self
+            .items
+            .iter()
+            .rposition(|y| O::cmp(y, &x) != Ordering::Greater)
+            .map_or(0, |i| i + 1);
+        self.items.insert(i, x);
+    }
+
+    /// Whether some item compares equal to `x` under `O`.
+    pub fn contains(&self, x: &T) -> bool {
+        self.items.binary_search_by(|y| O::cmp(y, x)).is_ok()
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.items
+    }
+
+    /// The same items sorted by another order; equal items keep their relative order.
+    pub fn reorder<O2: Order>(mut self) -> SortedVec<T, O2> {
+        self.items.sort_by(O2::cmp);
+        SortedVec {
+            items: self.items,
+            order: PhantomData,
+        }
+    }
+}
+
+impl<T: Ord, O: Order> FromIterator<T> for SortedVec<T, O> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut v = SortedVec::new();
+        for x in iter {
+            v.insert(x);
+        }
+        v
+    }
+}
+''',
+    },
+}
+ADDED_PERF = {}
+for p in P:
+    s = p["slug"]
+    if s in FORMATTED:
+        p["starter"], p["solution"] = FORMATTED[s]
+    if s in ADDED_HIDDEN:
+        p["hidden"] = list(p["hidden"]) + ADDED_HIDDEN[s]
+    if s in ADDED_WRONG:
+        p["wrong"] = {**(p.get("wrong") or {}), **ADDED_WRONG[s]}
+    if s in ADDED_PERF:
+        p["perf"] = ADDED_PERF[s]
+
 
 if __name__ == "__main__":
     n = write_track("l5-generics", "L5", "Generics & associated types", "L", "core", 5,

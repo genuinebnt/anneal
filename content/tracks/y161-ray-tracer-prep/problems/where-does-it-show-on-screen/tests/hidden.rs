@@ -254,3 +254,38 @@ fn random_viewers() {
     }
     check!("enough cases", tried > 2000, true);
 }
+
+#[test]
+fn only_the_angle_of_up_counts() {
+    // A very short up that points the right way is fine.
+    let short = Viewer {
+        up: [0.0, 1e-12, 0.0],
+        ..viewer()
+    };
+    expect("short up", short, [0.0, 0.0, -3.0], Some((100.0, 50.0, 3.0)));
+    // A long up that is almost along the view is not: the sine is 1e-13.
+    let along = Viewer {
+        up: [0.0, 1e-7, -1e6],
+        ..viewer()
+    };
+    check!(
+        "long up almost along the view",
+        on_screen(&along, [0.0, 0.0, -3.0]),
+        None
+    );
+}
+
+#[test]
+fn a_point_a_hair_in_front_of_the_eye() {
+    check!(
+        "depth 5e-10",
+        on_screen(&viewer(), [0.0, 0.0, -5e-10]),
+        None
+    );
+    expect(
+        "depth 1e-6",
+        viewer(),
+        [0.0, 0.0, -1e-6],
+        Some((100.0, 50.0, 1e-6)),
+    );
+}

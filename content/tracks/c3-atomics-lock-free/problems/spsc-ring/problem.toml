@@ -11,12 +11,12 @@ teaches = [
   "Each side reads its own index Relaxed and the other side's Acquire, and publishes its own with Release.",
   "Initialized-region bookkeeping with `MaybeUninit`, and dropping what is left in the buffer.",
 ]
-follow_up = "1) Why does `std::sync::mpsc` not work like this? What do you pay for multiple producers? 2) Power-of-two capacity: replace `% capacity` with `& mask`. What breaks at `usize` overflow when the capacity is not a power of two? 3) Cache lines: where do `head` and `tail` live, and what does padding each to 64 bytes (and caching the other side's index locally) buy? (rtrb and crossbeam do both.) 4) Add a blocking `recv` using `thread::park`/`unpark`: where is the lost-wakeup race? 5) What does `loom` check that a stress test cannot?"
+follow_up = "1) Why does `std::sync::mpsc` not work like this? What do you pay for multiple producers? 2) Add `push_slice` and `pop_into` that move many items with one Release store of the counter. What does that save, and what must the consumer still be unable to see before the store? 3) Cache lines: where do `head` and `tail` live, and what does padding each to 64 bytes (and caching the other side's index locally) buy? (rtrb and crossbeam do both.) 4) Add a blocking `recv` using `thread::park`/`unpark`: where is the lost-wakeup race? 5) What does `loom` check that a stress test cannot?"
 related = ["C2", "F6"]
 
 [[hints]]
 kind = "approach"
-text = "Two counters that only ever grow: `tail` (pushed so far, written by the producer) and `head` (popped so far, written by the consumer). Used = `tail - head`; the slot for count `i` is `i % capacity`. Full means `tail - head == capacity`."
+text = "Two counters that only ever grow: `tail` (pushed so far, written by the producer) and `head` (popped so far, written by the consumer). Used = `tail.wrapping_sub(head)`; full means used == `capacity`. The counters will eventually wrap past `usize::MAX`: pick the number of slots, and the slot for count `i`, so that the slot sequence stays correct across the wrap (what does `i % 3` do when `i` goes from `usize::MAX` to 0?)."
 
 [[hints]]
 kind = "rust"
@@ -24,9 +24,9 @@ text = "Producer: load `tail` Relaxed (it is the only writer), load `head` Acqui
 
 [[hints]]
 kind = "edge"
-text = "Drop lives on the shared block (it runs when the second end goes away): drop the initialized range `head..tail` with `assume_init_drop`. `is_abandoned` is `Arc::strong_count == 1`."
+text = "Drop lives on the shared block (it runs when the second end goes away): drop the initialized range `head..tail` with `assume_init_drop`. `is_abandoned` must let the other side see everything this end did before it was dropped: `Arc::strong_count` reads with `Relaxed` and does not promise that. Give each end a `Drop` that sets a flag with `Release`, and read it with `Acquire`."
 
 [solution]
-explanation = "There is no compare-exchange: each counter has one writer, so a plain store is enough. The Release store of `tail` makes the freshly written slot visible to a consumer that Acquire-loads `tail`; symmetrically the consumer's Release store of `head` tells the producer that a slot has been read and may be overwritten. Counters grow without wrapping to a modulo so full and empty are never ambiguous. Producer and consumer are `&mut self` so the type system enforces 'one thread per end'."
+explanation = "There is no compare-exchange: each counter has one writer, so a plain store is enough. The Release store of `tail` makes the freshly written slot visible to a consumer that Acquire-loads `tail`; symmetrically the consumer's Release store of `head` tells the producer that a slot has been read and may be overwritten. Counters only count up, so full and empty are never ambiguous; `wrapping_sub` keeps the distance right when a counter passes `usize::MAX`. The slot is `count & (slots - 1)` with the number of slots rounded up to a power of two, while 'full' still compares against the real capacity. Producer and consumer are `&mut self` so the type system enforces 'one thread per end'.\n\nTwo things the first version of this reference got wrong. (1) `is_abandoned` used `Arc::strong_count`, which is a `Relaxed` load. A consumer could see 'producer gone', pop once more, get `None`, and still miss the last item. Miri failed 29 of 64 seeds on a small program that does exactly that. The tests here cannot catch it: real threads almost never hit that window, so only Miri shows the bug. Now each end sets a flag with a `Release` store when dropped and the other end reads it with `Acquire`, the same pair as the counters. (2) The slot was `count % capacity`. When a counter wraps from `usize::MAX` to 0, a capacity that is not a power of two jumps to a wrong slot (for capacity 3 the slots went 0, then 0 again), so a push overwrote a live item, and `Drop` dropped slots that were never written. That is undefined behaviour; Miri reported it when the counters started near `usize::MAX`. It needs 2^64 operations on a 64-bit machine, so it is realistic only on 32-bit targets, but it is still wrong. A power-of-two slot count divides 2^64 evenly, so the slot sequence continues across the wrap. The cost is up to twice the memory (`O(capacity)` still)."
 time = "O(1) push and pop, wait-free"
 space = "O(capacity)"

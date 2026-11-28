@@ -300,3 +300,21 @@ fn random_scripts() {
         check!(text, go(vec![("main", steps)], 100_000), fine(&want));
     }
 }
+
+#[test]
+fn an_unknown_name_is_found_before_the_depth() {
+    use build::*;
+    // main and p1 to p49 run: 50 at once. p49 then names a procedure that does not exist.
+    let mut owned = vec![("main".to_string(), vec![call("p1")])];
+    for i in 1..50 {
+        let next = if i < 49 { format!("p{}", i + 1) } else { "missing".to_string() };
+        owned.push((format!("p{i}"), vec![call(&next)]));
+    }
+    let list: Vec<(&str, Vec<Step>)> = owned.iter().map(|(a, b)| (a.as_str(), b.clone())).collect();
+    let got = go(list, 1000);
+    check!(
+        "50 running, then Run(\"missing\")",
+        got.1.map(|f| (f.0, f.1.len(), f.1[0].clone())),
+        Some((Cause::UnknownProcedure("missing".to_string()), 50, "p49".to_string()))
+    );
+}

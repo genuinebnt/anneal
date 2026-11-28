@@ -143,6 +143,17 @@ fn part2_is_linear() {
 }
 
 #[test]
+fn part2_is_linear_on_scrambled_items() {
+    // Sorted input is cheap for a sort, so this one is scrambled: 1031 is coprime with 2^16.
+    let count = Rc::new(Cell::new(0));
+    let n = 1u64 << 16;
+    let items: Vec<Counted> = (0..n).map(|i| Counted { value: (i * 1031) % n, count: count.clone() }).collect();
+    let q = PriorityQueue::from_vec(items);
+    check!(format!("{} comparisons to build from {n} scrambled items, limit {}", count.get(), 4 * n), count.get() <= 4 * n, true);
+    check!("greatest", q.peek().map(|c| c.value), Some(n - 1));
+}
+
+#[test]
 fn part2_matches_sorting() {
     let mut rng = anneal_prelude::Rng::new(5102);
     for _ in 0..400 {

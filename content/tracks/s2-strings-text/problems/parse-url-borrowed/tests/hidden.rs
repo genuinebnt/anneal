@@ -99,3 +99,8 @@ fn random_vs_brute_force() {
         check!(format!("s = {s:?}"), parse_url(&s), Some(want));
     }
 }
+
+#[test]
+fn slash_inside_query() {
+    check!(r#""http://h?next=/a/b""#, parse_url("http://h?next=/a/b").map(|u| (u.host, u.path, u.query)), Some(("h", "/", vec![("next", "/a/b")])));
+}

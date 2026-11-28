@@ -9,6 +9,28 @@ def sub(s, old, new):
 
 P = []
 
+# `Is::<T>::SYNC` / `Is::<T>::SEND` in a test: whether a type is Sync / Send, as a value, so a test can check that an
+# unsound bound was NOT given (a plain `fn needs_sync<T: Sync>()` can only check the positive side).
+IS_PROBE = """
+/// `Is::<T>::SYNC` / `Is::<T>::SEND` are `true` only when `T` has the trait: the inherent const wins when its bound
+/// holds, the trait's default otherwise. That lets a test check that a type is *not* `Sync` or `Send`.
+#[allow(dead_code)]
+struct Is<T: ?Sized>(std::marker::PhantomData<T>);
+trait Fallback {
+    const SYNC: bool = false;
+    const SEND: bool = false;
+}
+impl<T: ?Sized> Fallback for Is<T> {}
+#[allow(dead_code)]
+impl<T: ?Sized + Sync> Is<T> {
+    const SYNC: bool = true;
+}
+#[allow(dead_code)]
+impl<T: ?Sized + Send> Is<T> {
+    const SEND: bool = true;
+}
+"""
+
 # ---------------------------------------------------------------------------------------------------------------
 STATS = """
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -517,8 +539,25 @@ P.append(dict(
             needs_sync::<Once<Vec<u8>>>();
         }
         """,
+        IS_PROBE,
+        """
+        #[test]
+        fn not_sync_or_send_for_the_wrong_types() {
+            use std::cell::Cell;
+            use std::rc::Rc;
+            use std::sync::MutexGuard;
+            // Cell is Send but not Sync: two threads would share the same `&Cell`. MutexGuard is Sync but not Send: the
+            // thread that wins the race stores a value that other threads then read (and the last owner drops).
+            check!(
+                "(Once<Cell<u32>>: Sync, Once<MutexGuard<u8>>: Sync, Once<Rc<u8>>: Send, Once<Cell<u32>>: Send)",
+                (Is::<Once<Cell<u32>>>::SYNC, Is::<Once<MutexGuard<'static, u8>>>::SYNC, Is::<Once<Rc<u8>>>::SEND, Is::<Once<Cell<u32>>>::SEND),
+                (false, false, false, true)
+            );
+        }
+        """,
     ],
     wrong=dict(
+        loose_send_sync="// WRONG: keeps the starter's loose bounds, so `Once<Cell<u32>>` is Sync (two threads share a `&Cell`) and\n// `Once<Rc<u8>>` is Send. Everything else is right.\n" + sub(sub(ONCE, "unsafe impl<T: Send + Sync> Sync for Once<T> {}", "unsafe impl<T> Sync for Once<T> {}"), "unsafe impl<T: Send> Send for Once<T> {}", "unsafe impl<T> Send for Once<T> {}"),
         every_racer_runs_f=sub(ONCE, "match self.state.compare_exchange(EMPTY, RUNNING, Ordering::Acquire, Ordering::Acquire) {",
                                "match (if self.state.load(Ordering::Acquire) == EMPTY { Ok(0) } else { Err(self.state.load(Ordering::Acquire)) }) {"),
         leaks_the_value=sub(ONCE, "if *self.state.get_mut() == READY {\n            unsafe { self.slot.get_mut().assume_init_drop() };\n        }", ""),
@@ -549,6 +588,11 @@ unsafe impl<T: Send> Send for SpinLock<T> {}
 pub struct Guard<'a, T> {
     lock: &'a SpinLock<T>,
 }
+
+// Without this line the compiler derives `Guard: Sync` from `&SpinLock<T>: Sync`, i.e. from `T: Send`. But `&Guard`
+// derefs to `&T`, so sharing a guard between threads shares `&T`: that needs `T: Sync`. An explicit impl replaces the
+// derived one (`std::sync::MutexGuard` does the same).
+unsafe impl<T: Sync> Sync for Guard<'_, T> {}
 
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
@@ -604,6 +648,13 @@ impl<T> Drop for Guard<'_, T> {
 }
 """
 
+GUARD_IMPL = """
+// Without this line the compiler derives `Guard: Sync` from `&SpinLock<T>: Sync`, i.e. from `T: Send`. But `&Guard`
+// derefs to `&T`, so sharing a guard between threads shares `&T`: that needs `T: Sync`. An explicit impl replaces the
+// derived one (`std::sync::MutexGuard` does the same).
+unsafe impl<T: Sync> Sync for Guard<'_, T> {}
+"""
+
 SPIN_STARTER = """
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
@@ -621,6 +672,8 @@ unsafe impl<T> Send for SpinLock<T> {}
 pub struct Guard<'a, T> {
     lock: &'a SpinLock<T>,
 }
+
+// TODO: the guard's own `Sync`. `&Guard` derefs to `&T`, so what must `T` be for the guard to be shared?
 
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
@@ -675,7 +728,8 @@ P.append(dict(
 
         Many threads will increment a plain (non-atomic) `u64` through the lock and the total must be exact, so the
         lock's ordering has to be right: everything done under one hold must be visible to the next. Mark the type `Sync`
-        and `Send` with the weakest bound that is still sound.
+        and `Send` with the weakest bound that is still sound. The guard needs a bound too: `&Guard` derefs to `&T`, so
+        sharing one guard between threads shares `&T`.
     """,
     starter=SPIN_STARTER,
     solution=SPIN,
@@ -792,8 +846,35 @@ P.append(dict(
             needs_sync::<SpinLock<Vec<String>>>();
         }
         """,
+        IS_PROBE,
+        """
+        #[test]
+        fn not_sync_or_send_for_the_wrong_types() {
+            use std::cell::Cell;
+            use std::rc::Rc;
+            // An Rc inside the lock could be cloned under the lock and the clone kept, so it must stay on one thread.
+            check!(
+                "(SpinLock<Rc<u8>>: Sync, SpinLock<Rc<u8>>: Send, SpinLock<Cell<u32>>: Sync)",
+                (Is::<SpinLock<Rc<u8>>>::SYNC, Is::<SpinLock<Rc<u8>>>::SEND, Is::<SpinLock<Cell<u32>>>::SYNC),
+                (false, false, true)
+            );
+        }
+
+        #[test]
+        fn guard_is_sync_only_for_sync_values() {
+            use std::cell::Cell;
+            // `&Guard` derefs to `&T`, so sharing a guard between threads shares `&T`: that needs `T: Sync`.
+            check!(
+                "(Guard<Cell<u32>>: Sync, Guard<u64>: Sync)",
+                (Is::<Guard<'static, Cell<u32>>>::SYNC, Is::<Guard<'static, u64>>::SYNC),
+                (false, true)
+            );
+        }
+        """,
     ],
     wrong=dict(
+        loose_send_sync="// WRONG: keeps the starter's loose bounds, so a `SpinLock<Rc<u8>>` can be shared between threads and two\n// threads end up bumping the same non-atomic reference count.\n" + sub(sub(SPIN, "unsafe impl<T: Send> Sync for SpinLock<T> {}", "unsafe impl<T> Sync for SpinLock<T> {}"), "unsafe impl<T: Send> Send for SpinLock<T> {}", "unsafe impl<T> Send for SpinLock<T> {}"),
+        guard_auto_sync="// WRONG: the guard's `Sync` is left to the compiler, which derives it from `&SpinLock<T>`, i.e. `T: Send`. But\n// `&Guard` derefs to `&T`, so two threads sharing one guard of a `Cell` race on it. It needs `T: Sync`.\n" + sub(SPIN, GUARD_IMPL, ""),
         check_then_set=sub(SPIN, """if self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
             Some(Guard { lock: self })
         } else {
@@ -810,7 +891,7 @@ P.append(dict(
     ),
     hints=[("approach", "`locked: AtomicBool`. `try_lock` is one `compare_exchange(false, true, Acquire, Relaxed)`. `Guard::drop` is one `store(false, Release)`."),
            ("rust", "`lock` loops on `try_lock`; between attempts spin on `load(Relaxed)` while it is still `true` (`std::hint::spin_loop()` inside), so waiting cores only read the cache line."),
-           ("edge", "The `Sync` bound is `T: Send`, not `T: Sync`: the lock hands out `&mut T` to one thread at a time, so even a `Cell<u32>` is safe inside.")],
+           ("edge", "The `Sync` bound is `T: Send`, not `T: Sync`: the lock hands out `&mut T` to one thread at a time, so even a `Cell<u32>` is safe inside. The guard is the other way round: `&Guard` gives `&T` to whoever shares it, so write `unsafe impl<T: Sync> Sync for Guard<'_, T> {}` (an explicit impl replaces the one the compiler would derive from `T: Send`).")],
     notes=("Acquire on the successful swap and Release on unlock form the happens-before edge: all writes made under one hold are visible to the next holder, so the plain `u64` is safe. `Relaxed` is enough for the failure case and for the spin-wait load because neither reads protected data. The guard borrows the lock, so the borrow checker prevents using the data after unlock.", "O(1) uncontended", "O(1)"),
     follow_up="1) Why is a spinlock a bad idea in user space when the holder can be descheduled (priority inversion, wasted quantum)? What does `std::sync::Mutex` do instead? 2) Make it fair with a ticket lock (two counters): what does fairness cost? 3) Why is test-and-test-and-set faster than a plain CAS loop on a many-core machine? 4) What would change if a panic happens while the guard is held (poisoning)? 5) Which of the two orderings could you weaken to Relaxed, and what breaks?",
     related=["C1", "F6"],
@@ -1131,8 +1212,28 @@ P.append(dict(
             }
         }
         """,
+        IS_PROBE,
+        """
+        #[test]
+        fn not_sync_or_send_for_the_wrong_types() {
+            use std::cell::Cell;
+            use std::sync::MutexGuard;
+            // Two clones on two threads share `&T` (needs Sync), and whichever drops last drops `T` there (needs Send).
+            check!(
+                "(MiniArc<Cell<u32>>: Send, MiniArc<Cell<u32>>: Sync, MiniArc<MutexGuard<u8>>: Send, MiniArc<MutexGuard<u8>>: Sync)",
+                (
+                    Is::<MiniArc<Cell<u32>>>::SEND,
+                    Is::<MiniArc<Cell<u32>>>::SYNC,
+                    Is::<MiniArc<MutexGuard<'static, u8>>>::SEND,
+                    Is::<MiniArc<MutexGuard<'static, u8>>>::SYNC,
+                ),
+                (false, false, false, false)
+            );
+        }
+        """,
     ],
     wrong=dict(
+        box_like_bounds="// WRONG: copies `Box`'s bounds. But a `MiniArc` is shared: with `T: Send` only, two clones sent to two threads\n// both read the same `Cell`, so `Send` needs `T: Sync` too.\n" + sub(sub(ARC, "unsafe impl<T: Send + Sync> Send for MiniArc<T> {}", "unsafe impl<T: Send> Send for MiniArc<T> {}"), "unsafe impl<T: Send + Sync> Sync for MiniArc<T> {}", "unsafe impl<T: Sync> Sync for MiniArc<T> {}"),
         racy_decrement=sub(ARC, "if self.inner().strong.fetch_sub(1, Ordering::Release) == 1 {",
                            "let c = self.inner().strong.load(Ordering::Acquire);\n        std::thread::yield_now();\n        self.inner().strong.store(c - 1, Ordering::Release);\n        if c == 1 {"),
         get_mut_when_two=sub(ARC, "if this.inner().strong.load(Ordering::Acquire) == 1 {\n            Some(", "if this.inner().strong.load(Ordering::Acquire) <= 2 {\n            Some("),
@@ -1150,13 +1251,16 @@ P.append(dict(
 SPSC = """
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 struct Shared<T> {
+    /// A power-of-two number of slots, so that `count & (len - 1)` stays correct when a counter wraps past `usize::MAX`.
     buf: Box<[UnsafeCell<MaybeUninit<T>>]>,
+    capacity: usize,   // how many items may wait; `buf` may be larger
     head: AtomicUsize, // next slot to pop: written only by the consumer
     tail: AtomicUsize, // next slot to push: written only by the producer
+    one_end_gone: AtomicBool, // set (Release) by whichever end is dropped first
 }
 
 // SAFETY: each slot is touched by only one side at a time; the head/tail handshake hands it over.
@@ -1170,11 +1274,33 @@ pub struct Consumer<T> {
     shared: Arc<Shared<T>>,
 }
 
+impl<T> Shared<T> {
+    fn slot(&self, count: usize) -> *mut MaybeUninit<T> {
+        self.buf[count & (self.buf.len() - 1)].get()
+    }
+}
+
 pub fn channel<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     assert!(capacity > 0, "capacity must be at least 1");
-    let buf: Box<[UnsafeCell<MaybeUninit<T>>]> = (0..capacity).map(|_| UnsafeCell::new(MaybeUninit::uninit())).collect();
-    let shared = Arc::new(Shared { buf, head: AtomicUsize::new(0), tail: AtomicUsize::new(0) });
-    (Producer { shared: shared.clone() }, Consumer { shared })
+    let slots = capacity
+        .checked_next_power_of_two()
+        .expect("capacity too large");
+    let buf: Box<[UnsafeCell<MaybeUninit<T>>]> = (0..slots)
+        .map(|_| UnsafeCell::new(MaybeUninit::uninit()))
+        .collect();
+    let shared = Arc::new(Shared {
+        buf,
+        capacity,
+        head: AtomicUsize::new(0),
+        tail: AtomicUsize::new(0),
+        one_end_gone: AtomicBool::new(false),
+    });
+    (
+        Producer {
+            shared: shared.clone(),
+        },
+        Consumer { shared },
+    )
 }
 
 impl<T> Producer<T> {
@@ -1183,17 +1309,18 @@ impl<T> Producer<T> {
         let s = &*self.shared;
         let tail = s.tail.load(Ordering::Relaxed); // only we write it
         let head = s.head.load(Ordering::Acquire);
-        if tail.wrapping_sub(head) == s.buf.len() {
+        if tail.wrapping_sub(head) == s.capacity {
             return Err(value);
         }
-        unsafe { (*s.buf[tail % s.buf.len()].get()).write(value) };
+        unsafe { (*s.slot(tail)).write(value) };
         s.tail.store(tail.wrapping_add(1), Ordering::Release);
         Ok(())
     }
 
     /// True once the consumer has been dropped.
     pub fn is_abandoned(&self) -> bool {
-        Arc::strong_count(&self.shared) == 1
+        // Acquire pairs with the Release store in the other end's `drop`: after `true`, everything it did is visible.
+        self.shared.one_end_gone.load(Ordering::Acquire)
     }
 }
 
@@ -1205,14 +1332,27 @@ impl<T> Consumer<T> {
         if head == tail {
             return None;
         }
-        let value = unsafe { (*s.buf[head % s.buf.len()].get()).assume_init_read() };
+        let value = unsafe { (*s.slot(head)).assume_init_read() };
         s.head.store(head.wrapping_add(1), Ordering::Release);
         Some(value)
     }
 
     /// True once the producer has been dropped. Items may still be waiting: pop until `None` after seeing this.
     pub fn is_abandoned(&self) -> bool {
-        Arc::strong_count(&self.shared) == 1
+        // Acquire pairs with the Release store in the other end's `drop`: after `true`, everything it did is visible.
+        self.shared.one_end_gone.load(Ordering::Acquire)
+    }
+}
+
+impl<T> Drop for Producer<T> {
+    fn drop(&mut self) {
+        self.shared.one_end_gone.store(true, Ordering::Release);
+    }
+}
+
+impl<T> Drop for Consumer<T> {
+    fn drop(&mut self) {
+        self.shared.one_end_gone.store(true, Ordering::Release);
     }
 }
 
@@ -1220,7 +1360,7 @@ impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
         let (mut i, tail) = (*self.head.get_mut(), *self.tail.get_mut());
         while i != tail {
-            unsafe { self.buf[i % self.buf.len()].get_mut().assume_init_drop() };
+            unsafe { (*self.slot(i)).assume_init_drop() };
             i = i.wrapping_add(1);
         }
     }
@@ -1330,7 +1470,7 @@ P.append(dict(
         come out in the order they went in.
 
         Items still inside when both ends are gone must be dropped exactly once. `is_abandoned` tells one side the other
-        was dropped, so a consumer can tell "empty for now" from "empty forever".
+        was dropped, so a consumer can tell "empty for now" from "empty forever". Once it returns `true`, everything the other end did before it was dropped must be visible to you, including its last pushes, so popping again until `None` finds every item.
     """,
     starter=SPSC_STARTER,
     solution=SPSC,
@@ -1367,7 +1507,7 @@ P.append(dict(
             drop(c.pop()); // one consumed (dropped by us)
             drop(c.pop());
             check!("two popped and dropped", n.load(Ordering::SeqCst), 2);
-            p.push(D(n.clone())).ok().unwrap(); // wraps into slot 0
+            p.push(D(n.clone())).ok().unwrap(); // a sixth item, after two pops freed room
             drop(p);
             drop(c);
             check!("six pushed in total, all dropped exactly once", n.load(Ordering::SeqCst), 6);
@@ -1472,18 +1612,18 @@ P.append(dict(
         """,
     ],
     wrong=dict(
-        one_slot_wasted=sub(SPSC, "if tail.wrapping_sub(head) == s.buf.len() {", "if tail.wrapping_sub(head) + 1 >= s.buf.len() {"),
-        leaks_leftovers=sub(SPSC, "while i != tail {\n            unsafe { self.buf[i % self.buf.len()].get_mut().assume_init_drop() };\n            i = i.wrapping_add(1);\n        }", "let _ = (&mut i, tail);"),
-        publishes_before_writing=sub(SPSC, """unsafe { (*s.buf[tail % s.buf.len()].get()).write(value) };
+        one_slot_wasted=sub(SPSC, "if tail.wrapping_sub(head) == s.capacity {", "if tail.wrapping_sub(head) + 1 >= s.capacity {"),
+        leaks_leftovers=sub(SPSC, "while i != tail {\n            unsafe { (*self.slot(i)).assume_init_drop() };\n            i = i.wrapping_add(1);\n        }", "let _ = (&mut i, tail);"),
+        publishes_before_writing=sub(SPSC, """unsafe { (*s.slot(tail)).write(value) };
         s.tail.store(tail.wrapping_add(1), Ordering::Release);""", """s.tail.store(tail.wrapping_add(1), Ordering::Release);
         std::thread::yield_now();
-        unsafe { (*s.buf[tail % s.buf.len()].get()).write(value) };"""),
+        unsafe { (*s.slot(tail)).write(value) };"""),
     ),
-    hints=[("approach", "Two counters that only ever grow: `tail` (pushed so far, written by the producer) and `head` (popped so far, written by the consumer). Used = `tail - head`; the slot for count `i` is `i % capacity`. Full means `tail - head == capacity`."),
+    hints=[("approach", "Two counters that only ever grow: `tail` (pushed so far, written by the producer) and `head` (popped so far, written by the consumer). Used = `tail.wrapping_sub(head)`; full means used == `capacity`. The counters will eventually wrap past `usize::MAX`: pick the number of slots, and the slot for count `i`, so that the slot sequence stays correct across the wrap (what does `i % 3` do when `i` goes from `usize::MAX` to 0?)."),
            ("rust", "Producer: load `tail` Relaxed (it is the only writer), load `head` Acquire, write the slot, then `tail.store(tail+1, Release)`. The consumer mirrors it. The `Release` store is what publishes the slot's contents."),
-           ("edge", "Drop lives on the shared block (it runs when the second end goes away): drop the initialized range `head..tail` with `assume_init_drop`. `is_abandoned` is `Arc::strong_count == 1`.")],
-    notes=("There is no compare-exchange: each counter has one writer, so a plain store is enough. The Release store of `tail` makes the freshly written slot visible to a consumer that Acquire-loads `tail`; symmetrically the consumer's Release store of `head` tells the producer that a slot has been read and may be overwritten. Counters grow without wrapping to a modulo so full and empty are never ambiguous. Producer and consumer are `&mut self` so the type system enforces 'one thread per end'.", "O(1) push and pop, wait-free", "O(capacity)"),
-    follow_up="1) Why does `std::sync::mpsc` not work like this? What do you pay for multiple producers? 2) Power-of-two capacity: replace `% capacity` with `& mask`. What breaks at `usize` overflow when the capacity is not a power of two? 3) Cache lines: where do `head` and `tail` live, and what does padding each to 64 bytes (and caching the other side's index locally) buy? (rtrb and crossbeam do both.) 4) Add a blocking `recv` using `thread::park`/`unpark`: where is the lost-wakeup race? 5) What does `loom` check that a stress test cannot?",
+           ("edge", "Drop lives on the shared block (it runs when the second end goes away): drop the initialized range `head..tail` with `assume_init_drop`. `is_abandoned` must let the other side see everything this end did before it was dropped: `Arc::strong_count` reads with `Relaxed` and does not promise that. Give each end a `Drop` that sets a flag with `Release`, and read it with `Acquire`.")],
+    notes=("There is no compare-exchange: each counter has one writer, so a plain store is enough. The Release store of `tail` makes the freshly written slot visible to a consumer that Acquire-loads `tail`; symmetrically the consumer's Release store of `head` tells the producer that a slot has been read and may be overwritten. Counters only count up, so full and empty are never ambiguous; `wrapping_sub` keeps the distance right when a counter passes `usize::MAX`. The slot is `count & (slots - 1)` with the number of slots rounded up to a power of two, while 'full' still compares against the real capacity. Producer and consumer are `&mut self` so the type system enforces 'one thread per end'.\n\nTwo things the first version of this reference got wrong. (1) `is_abandoned` used `Arc::strong_count`, which is a `Relaxed` load. A consumer could see 'producer gone', pop once more, get `None`, and still miss the last item. Miri failed 29 of 64 seeds on a small program that does exactly that. The tests here cannot catch it: real threads almost never hit that window, so only Miri shows the bug. Now each end sets a flag with a `Release` store when dropped and the other end reads it with `Acquire`, the same pair as the counters. (2) The slot was `count % capacity`. When a counter wraps from `usize::MAX` to 0, a capacity that is not a power of two jumps to a wrong slot (for capacity 3 the slots went 0, then 0 again), so a push overwrote a live item, and `Drop` dropped slots that were never written. That is undefined behaviour; Miri reported it when the counters started near `usize::MAX`. It needs 2^64 operations on a 64-bit machine, so it is realistic only on 32-bit targets, but it is still wrong. A power-of-two slot count divides 2^64 evenly, so the slot sequence continues across the wrap. The cost is up to twice the memory (`O(capacity)` still).", "O(1) push and pop, wait-free", "O(capacity)"),
+    follow_up="1) Why does `std::sync::mpsc` not work like this? What do you pay for multiple producers? 2) Add `push_slice` and `pop_into` that move many items with one Release store of the counter. What does that save, and what must the consumer still be unable to see before the store? 3) Cache lines: where do `head` and `tail` live, and what does padding each to 64 bytes (and caching the other side's index locally) buy? (rtrb and crossbeam do both.) 4) Add a blocking `recv` using `thread::park`/`unpark`: where is the lost-wakeup race? 5) What does `loom` check that a stress test cannot?",
     related=["C2", "F6"],
 ))
 
@@ -1993,7 +2133,8 @@ P.append(dict(
         The trap is the gap between *claiming* a position and *writing* the value: a consumer must never read a slot
         whose producer has claimed it but not finished writing. Give every slot a sequence number saying whose turn it is:
         for slot `i` and lap `k` it holds `i + k * cap` when a push may fill it and `i + k * cap + 1` when a pop may take it.
-        Values left in the queue when it is dropped must be dropped exactly once.
+        Values left in the queue when it is dropped must be dropped exactly once. `Queue<T>` is `Send` and `Sync` when
+        `T: Send` (values only move from one thread to another; no two threads share a `&T`).
     """,
     starter=MPMC_STARTER,
     solution=MPMC,
@@ -2166,8 +2307,23 @@ P.append(dict(
             check!("6 threads push into a queue of 2, draining it themselves", total, want);
         }
         """,
+        IS_PROBE,
+        """
+        #[test]
+        fn not_sync_or_send_for_the_wrong_types() {
+            use std::cell::Cell;
+            use std::rc::Rc;
+            // Values move from the pushing thread to the popping thread: that needs `T: Send`, and nothing more.
+            check!(
+                "(Queue<Rc<u8>>: Sync, Queue<Rc<u8>>: Send, Queue<Cell<u32>>: Sync)",
+                (Is::<Queue<Rc<u8>>>::SYNC, Is::<Queue<Rc<u8>>>::SEND, Is::<Queue<Cell<u32>>>::SYNC),
+                (false, false, true)
+            );
+        }
+        """,
     ],
     wrong=dict(
+        loose_send_sync="// WRONG: keeps the starter's loose bounds, so a `Queue<Rc<u8>>` moves an `Rc` from the pushing thread to the\n// popping thread.\n" + sub(sub(MPMC, "unsafe impl<T: Send> Send for Queue<T> {}", "unsafe impl<T> Send for Queue<T> {}"), "unsafe impl<T: Send> Sync for Queue<T> {}", "unsafe impl<T> Sync for Queue<T> {}"),
         claim_then_fill=MPMC_WRONG,
         no_drop=sub(MPMC, "while self.pop().is_some() {}", ""),
         capacity_not_rounded=sub(MPMC, "let cap = capacity.max(2).next_power_of_two();", "let cap = capacity.max(2);"),

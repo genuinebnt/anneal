@@ -6,3 +6,5 @@ Return a list of all `n` packages in an order that respects every pair. If no su
 build_order(3, [(1, 0), (2, 1)])        # [0, 1, 2]
 build_order(2, [(0, 1), (1, 0)])        # None
 ```
+
+There can be 20,000 packages in one long chain. That is deeper than Python's recursion limit (about 1,000 calls), so a recursive search fails.

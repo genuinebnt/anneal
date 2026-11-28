@@ -35,15 +35,16 @@ A string value is a blob. The others are a `u32` count, then that many items:
 | hash | blob field, blob value | by field |
 | sorted set | `u64` score bits, blob member | the set's order |
 
-Score bits are `f64::to_bits`.
+Score bits are `f64::to_bits`. A score is never stored as `-0.0` (it is kept as 0), so the bits of `-0.0` are not this format.
 
 **`encode_snapshot(core, now)`** writes the keys that are live at `now`.
 
 **`decode_snapshot(bytes)`** builds a core, with nothing to log. Refuse, with `BadSnapshot`, anything that is not exactly this format:
 
 - a wrong magic or checksum, or bytes missing or left over;
-- an unknown type or flag, a count of 0, or a NaN score;
-- a key, member or field that appears twice.
+- an unknown type or flag, a count of 0, a NaN score, or the bits of `-0.0`;
+- a key, member or field that appears twice;
+- keys, set members, hash fields or sorted-set items out of the order the format gives. So a core has exactly one snapshot.
 
 **No input may panic.** Do not reserve memory for what a count merely claims. The checksum is no proof: the tests send bad contents with a correct checksum.
 

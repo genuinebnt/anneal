@@ -11,8 +11,9 @@
 
 **`BLPOP key [key ...] timeout`** and **`BRPOP`** pop from the left or right of the **first** key, in argument order, that holds a list. The reply is `[key, value]`. Keys are checked in order: another kind before a list is the wrong-kind error. Otherwise the client is **blocked**, and gets nothing yet.
 
-- `timeout` is a number of seconds, possibly with a fraction; 0 means forever. Not a finite number: `ERR timeout is not a float or out of range`. Below 0: `ERR timeout is negative`. It is checked before the keys.
-- The deadline is `now` plus the timeout in milliseconds, rounded up. A deadline too far for `u64` must not overflow or panic.
+- `timeout` is a number of seconds, possibly with a fraction or an exponent. Not a finite number: `ERR timeout is not a float or out of range`. It is checked before the keys.
+- Its value comes from the digits as written, not from an `f64`. Digits that are all 0 mean forever. A minus sign with any other digit: `ERR timeout is negative`.
+- The deadline is `now` plus the timeout in milliseconds, rounded up: `4.03` and `403e-2` are 4030, and `0.0005` and `1e-400` are 1. In `f64`, `4.03 * 1000.0` is a little above 4030, which would round up to 4031, and `1e-400` is 0, which would mean forever. A deadline too far for `u64` must not overflow or panic.
 - Inside `EXEC` a blocking pop never waits: with nothing to pop it replies `NullArray`.
 
 **Waking.** After a command, or after a whole `EXEC`, every key that **changed** and now holds a list can serve waiters. This includes a list that arrived by `RENAME`.

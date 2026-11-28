@@ -11,3 +11,5 @@ copy.links[0].links[0] is copy     # True: the loop is copied as a loop
 ```
 
 Keep the `Server` class as it is in the starter.
+
+A network can be a chain of 5,000 servers. That is deeper than Python's recursion limit (about 1,000 calls), so a recursive copy fails.

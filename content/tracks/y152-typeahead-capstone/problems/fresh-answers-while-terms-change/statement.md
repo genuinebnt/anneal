@@ -25,6 +25,6 @@
 
 **Threads.** Some tests make a call of `judge` wait for up to a second while other threads use the service. Your service may make those threads wait. It must not deadlock once `judge` returns, and it must not serve an old answer afterwards.
 
-**What no test can force.** A write may land in the instant after your search ends and before its answer is stored. The tests cannot stop a thread there. A design that leaves a gap there can pass and still serve an old answer, so check it by reading your code.
+**For the tests.** A write may land in the instant after your search ends and before its answer is stored. `on_searched(hook)` lets a test act there. It stores a hook, and only the first one given is kept. A `suggest` that does not answer from the cache calls the hook once: after its last call of `judge`, and before its answer is stored. A cached answer does not call it. The hook never calls the service from its own thread. It may start a write on another thread and wait for it for up to a second, and your service may make that write wait. A write that finishes while the hook runs must show in every later answer.
 
 **What is not graded.** How long threads wait for each other, and which of two designs is faster. Measure that on your machine if you care. Panics inside `judge` are not tested.

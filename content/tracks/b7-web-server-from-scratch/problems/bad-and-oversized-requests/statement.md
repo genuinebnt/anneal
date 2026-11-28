@@ -8,7 +8,7 @@ Your server reads requests from strangers. Before it reads a body, it must decid
 
 The head is a request line, header lines and an empty line, each ending in CRLF. The request line is `METHOD target VERSION` with exactly one space between the parts: METHOD is one or more upper-case ASCII letters, the target starts with `/`, VERSION is `HTTP/1.1` or `HTTP/1.0`. A header is `name:value`; names are stored in lower case, and spaces and tabs around values are removed. The head must be UTF-8. Bytes after the empty line are the body and are not examined.
 
-**Limits** (reaching one is allowed, passing it is not), enforced even when the end has not arrived:
+**Limits** (reaching one is allowed, passing it is not). The first two are enforced even when the end has not arrived; the last two may wait until the head is complete:
 
 - the request line without its CRLF: `max_line`, else `LineTooLong`;
 - the whole head including the empty line: `max_head`, else `HeadTooLarge`;

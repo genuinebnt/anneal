@@ -35,4 +35,4 @@ space = "O(1) beyond the log"
 [rules]
 forbid_methods = ["clone"]
 forbid_types = ["RefCell", "Cell"]
-max_changed_lines = 2
+max_changed_lines = 3

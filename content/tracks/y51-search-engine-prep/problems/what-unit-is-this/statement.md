@@ -10,6 +10,8 @@ A lab tool must know that `J / kg K` and `J / (K kg)` are the same unit. Write `
 
 A **power number** is digits with an optional `-` straight before them: `2`, `-1`, `0`. It may only follow `^`. Spaces may come between `^` and the number.
 
+A run of digits is one token, read by its value. So `01` is the factor `1`, and `^02` is the power 2.
+
 **Errors** carry a position in characters from 0.
 
 - `BadChar(pos)`: a character that begins no token. A `-` not followed by a digit is one. The whole text is split into tokens first, so this error comes before any other.

@@ -18,6 +18,8 @@ A drawing is a list of dots, each at a place, in drawing order.
 
 An empty group may remain only when the whole drawing is empty. Rule 2 rules it out inside a group, rule 6 inside a move.
 
+Change only what these rules need. A tree that already keeps all seven comes back unchanged. So never gather just some of a group's parts under a shared move.
+
 Tidying a result again gives back exactly the same tree.
 
 Trees are at most 200 levels deep. A group may have 3000 parts. All sums of moves fit in an `i64`.

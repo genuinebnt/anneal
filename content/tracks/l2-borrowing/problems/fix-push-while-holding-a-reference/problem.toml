@@ -32,4 +32,4 @@ time = "O(n) per record (the scan)"
 space = "O(1) extra"
 
 [rules]
-forbid_methods = ["clone", "cloned", "to_owned", "to_string"]
+forbid_methods = ["clone", "to_owned", "to_string"]

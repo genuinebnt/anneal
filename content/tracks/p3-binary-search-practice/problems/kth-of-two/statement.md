@@ -6,4 +6,4 @@ kth_of_two([], [7, 8], 2)              # 8
 kth_of_two([1, 1, 1], [1, 1], 5)       # 1
 ```
 
-Merging the lists is too slow: the tests pass lists of tens of millions of items.
+Merging the lists is too slow: the tests pass sequences of hundreds of millions of items (`range` objects, which support `len()` and indexing like lists).

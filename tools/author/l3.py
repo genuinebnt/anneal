@@ -3549,7 +3549,7 @@ for _old, _new in [
     DYN_SOLUTION = sub(DYN_SOLUTION, _old, _new)
 
 P.append(fix(
-    "fix-box-dyn-fn-borrows", "Fix: trait objects that borrow (dyn Trait + 'a)", "hard", "variance-hrtbs", ["trait object lifetimes", "default object bounds", "Box<dyn Fn + 'a>", "E0521"],
+    "fix-box-dyn-fn-borrows", "Fix: trait objects that borrow (dyn Trait + 'a)", "hard", "variance-hrtbs", ["trait object lifetimes", "default object bounds", "Box<dyn Fn + 'a>", "E0310"],
     """
         Three trait objects here borrow data, but their types don't allow it, so `make_filter`, `Checks` and
         `labels` don't compile. Fix the types, without copying the borrowed data. `count_passing` takes a

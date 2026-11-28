@@ -29,4 +29,4 @@ So `Fn(x, Fn(y, Apply(Name(x), Name(y))))` is `(fn (fn (#1 #0)))`.
 
 **`same_meaning(a, b)`** is true when the two differ at most in the names they choose for what they introduce. Outside names must be the same.
 
-Names are non-empty and consist of lowercase letters and digits, starting with a letter. A term is at most 300 levels deep.
+Names are non-empty and consist of lowercase letters and digits, starting with a letter. `fn` and `let` are never names, so the text of one formula can't be read two ways. A term is at most 300 levels deep.

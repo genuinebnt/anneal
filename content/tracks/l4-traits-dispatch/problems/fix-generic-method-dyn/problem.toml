@@ -19,7 +19,7 @@ text = "The compiler lists two reasons: a generic method (`put`) and a method re
 
 [[hints]]
 kind = "rust"
-text = "Take the value as `&dyn Display`, and return `Box<dyn Iterator<Item = &str> + '_>`. The `'_` ties the iterator to `&self`; in `Prefixed`, the closure borrows `self.prefix`, so it needs `move` to capture `self` by reference."
+text = "Take the value as `&dyn Display`, and return `Box<dyn Iterator<Item = &str> + '_>`. The `'_` ties the iterator to `&self`. In `Prefixed`, the closure borrows `self.prefix` for as long as that `&self` lives, which the `'_` allows; with edition 2021 closure captures it compiles with or without `move`."
 
 [[hints]]
 kind = "edge case"

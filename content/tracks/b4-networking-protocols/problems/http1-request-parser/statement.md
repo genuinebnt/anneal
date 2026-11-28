@@ -6,6 +6,8 @@ Parse `METHOD SP target SP HTTP/1.0|1.1` (method uppercase letters, exactly one 
 `name: value` (name is a token with **no whitespace before the colon**; value is trimmed of spaces and tabs; no obsolete line folding), then
 `CRLF`. Body framing: `Content-Length: <digits>` (digits only, no sign), or `Transfer-Encoding: chunked` (hex sizes, optional `;extension`,
 trailers skipped, final `0` chunk). **Reject** a request that has both framing headers, or two `Content-Length`s with different values.
+A chunk-size line, its `;extension` included, may be at most 64 bytes before its CRLF. A longer one is `BadChunk`, whether
+it arrives whole or one byte at a time.
 
 Enforce `Limits` early: the head (request line plus headers plus blank line) may not exceed `max_head`, even while still incomplete; at most
 `max_headers` header lines; a body larger than `max_body` is `BodyTooLarge` as soon as its size is announced, not after it arrives.

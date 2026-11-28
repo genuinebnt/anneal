@@ -371,3 +371,10 @@ fn random_nests_of_scopes() {
         check!(src.clone(), resolved(&src), ok(&want.join("\n")));
     }
 }
+
+#[test]
+fn a_function_inside_init_may_return_a_value() {
+    // Only a `return` directly in `init` is limited. A function written inside it has its own rules.
+    let src = "class A { init() { fun f() { return 1; } this.x = f(); } }";
+    check!(src, front_end(src).map(|_| ()), Ok(()));
+}

@@ -98,3 +98,11 @@ fn random_vs_brute_force() {
         }
     }
 }
+
+#[test]
+fn owned_plus_ref_reuses_the_buffer() {
+    let p = Poly(vec![1, 2, 3]);
+    let before = p.0.as_ptr();
+    let sum = p + &Poly(vec![1, 1]);
+    check!(r#"[1, 2, 3] + &[1, 1]: same buffer as the left side"#, (sum.0.as_ptr() == before, sum), (true, Poly(vec![2, 3, 3])));
+}

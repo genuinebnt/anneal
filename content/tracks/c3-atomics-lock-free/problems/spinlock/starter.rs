@@ -15,6 +15,8 @@ pub struct Guard<'a, T> {
     lock: &'a SpinLock<T>,
 }
 
+// TODO: the guard's own `Sync`. `&Guard` derefs to `&T`, so what must `T` be for the guard to be shared?
+
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
         todo!()

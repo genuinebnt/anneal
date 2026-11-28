@@ -305,3 +305,20 @@ fn random_call_trees() {
         check!(text, run(&routines, 0, &[], ROOMY), Ok(values[0]));
     }
 }
+
+#[test]
+fn missing_arguments_are_found_before_the_call_limit() {
+    let main = routine("main", 0, &[Call(1), Return]);
+    let one = Limits { calls: 1, ..ROOMY };
+    check!(
+        "a call with no arguments, at the call limit",
+        run(&[main, sum()], 0, &[], one),
+        crash(Cause::Underflow, &[("main", 1)])
+    );
+    let none = Limits { calls: 0, ..ROOMY };
+    check!(
+        "the entry with no arguments, and no calls allowed",
+        run(&[sum()], 0, &[], none),
+        crash(Cause::Underflow, &[])
+    );
+}

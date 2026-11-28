@@ -20,7 +20,7 @@ text = "`RefCell<Vec<Vec<T>>>`. To allocate: if the last chunk is full (or there
 
 [[hints]]
 kind = "rust"
-text = "`let ptr: *mut T = chunk.last_mut().unwrap();` then `unsafe { &mut *ptr }` detaches the reference from the `RefCell` borrow. It is sound because pushing into a chunk with spare capacity never reallocates, and the outer `Vec<Vec<T>>` only moves the chunk headers, not their heap buffers."
+text = "Remember `i = chunk.len()`, push, then `unsafe { &mut *chunk.as_mut_ptr().add(i) }` detaches the reference from the `RefCell` borrow. It is sound because pushing into a chunk with spare capacity never reallocates, and the outer `Vec<Vec<T>>` only moves the chunk headers, not their heap buffers. Do not take the pointer from `chunk.last_mut()`: that borrows the whole chunk uniquely and invalidates every reference handed out before (Miri reports it)."
 
 [[hints]]
 kind = "edge"

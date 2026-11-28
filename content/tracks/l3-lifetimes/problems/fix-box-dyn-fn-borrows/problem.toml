@@ -5,7 +5,7 @@ level = "hard"
 stage = "variance-hrtbs"
 order = 22
 status = "ready"
-tags = ["trait object lifetimes", "default object bounds", "Box<dyn Fn + 'a>", "E0521"]
+tags = ["trait object lifetimes", "default object bounds", "Box<dyn Fn + 'a>", "E0310"]
 teaches = [
   "`Box<dyn Trait>` defaults to `+ 'static`.",
   "`&'r dyn Trait` defaults to `+ 'r`.",

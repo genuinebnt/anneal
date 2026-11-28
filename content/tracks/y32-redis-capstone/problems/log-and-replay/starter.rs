@@ -1666,14 +1666,17 @@ impl Core {
         left: bool,
         now: u64,
     ) -> Option<Frame> {
-        let timeout = std::str::from_utf8(&args[args.len() - 1])
+        // `f64` only checks that the text is a finite number; its value comes from the digits,
+        // because in `f64` a tiny timeout such as 1e-400 is 0, which would mean forever
+        let finite = std::str::from_utf8(&args[args.len() - 1])
             .ok()
             .and_then(|text| text.parse::<f64>().ok())
-            .filter(|t| t.is_finite());
-        let Some(timeout) = timeout else {
+            .is_some_and(|t| t.is_finite());
+        if !finite {
             return Some(error("ERR timeout is not a float or out of range"));
-        };
-        if timeout < 0.0 {
+        }
+        let (negative, millis) = Self::timeout_millis(&args[args.len() - 1]);
+        if negative && millis > 0 {
             return Some(error("ERR timeout is negative"));
         }
         let keys = &args[1..args.len() - 1];
@@ -1687,9 +1690,8 @@ impl Core {
         if self.clients.get(&id).is_some_and(|c| c.queue.is_some()) {
             return Some(Frame::NullArray);
         }
-        // a float to integer cast saturates, and so must the addition
-        let deadline =
-            (timeout > 0.0).then(|| now.saturating_add((timeout * 1000.0).ceil() as u64));
+        // the milliseconds saturate, and so must the addition
+        let deadline = (millis > 0).then(|| now.saturating_add(millis));
         let mut unique = Vec::new();
         let mut seen = BTreeSet::new();
         for key in keys {
@@ -1699,6 +1701,58 @@ impl Core {
         }
         self.waiting.park(id, &unique, deadline, left);
         None
+    }
+
+    /// Whether a timeout has a minus sign, and its milliseconds rounded up, worked out from its digits.
+    /// `403e-2` is 4030, while `4.03 * 1000.0` in `f64` is a little above 4030, and `1e-400` is 1.
+    /// The milliseconds are 0 only when every digit is 0. The text has already parsed as a finite number.
+    fn timeout_millis(text: &[u8]) -> (bool, u64) {
+        let (negative, text) = match text.split_first() {
+            Some((b'-', rest)) => (true, rest),
+            Some((b'+', rest)) => (false, rest),
+            _ => (false, text),
+        };
+        let (number, exponent) = match text.iter().position(|&b| b == b'e' || b == b'E') {
+            Some(at) => (&text[..at], &text[at + 1..]),
+            None => (text, &text[text.len()..]),
+        };
+        let (down, exponent) = match exponent.split_first() {
+            Some((b'-', rest)) => (true, rest),
+            Some((b'+', rest)) => (false, rest),
+            _ => (false, exponent),
+        };
+        // a huge exponent only makes the result saturate or round up to 1, so it is capped
+        let exponent = exponent
+            .iter()
+            .fold(0i64, |e, &d| (e * 10 + i64::from(d - b'0')).min(1 << 20));
+        let exponent = if down { -exponent } else { exponent };
+        let point = number
+            .iter()
+            .position(|&b| b == b'.')
+            .unwrap_or(number.len());
+        let digits: Vec<u64> = number
+            .iter()
+            .filter(|&&b| b != b'.')
+            .map(|&b| u64::from(b - b'0'))
+            .collect();
+        // the first `whole` digits, padded with zeros, are the whole milliseconds
+        let whole = point as i64 + exponent + 3;
+        let mut millis: u64 = 0;
+        let mut part = false;
+        for (i, &d) in digits.iter().enumerate() {
+            if (i as i64) < whole {
+                millis = millis.saturating_mul(10).saturating_add(d);
+            } else if d != 0 {
+                part = true;
+            }
+        }
+        for _ in digits.len() as i64..whole {
+            if millis == u64::MAX {
+                break;
+            }
+            millis = millis.saturating_mul(10);
+        }
+        (negative, millis.saturating_add(u64::from(part)))
     }
 
     /// Marks the watchers of every key that changed.

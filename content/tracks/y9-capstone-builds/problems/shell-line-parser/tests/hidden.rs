@@ -103,3 +103,11 @@ fn redirect_target_errors() {
 fn quote_and_brace_errors() {
     check!(r#"unterminated things"#, (argv("echo 'abc"), argv("echo \"abc"), argv("echo ${HOME"), argv("echo \"${HOME\"")), (Err(ParseError::UnterminatedQuote), Err(ParseError::UnterminatedQuote), Err(ParseError::BadVariable), Err(ParseError::BadVariable)));
 }
+
+#[test]
+fn tabs_digits_and_the_last_stdin() {
+    check!(r#"a tab separates words"#, argv("echo\ta\t\tb"), Ok(vec![v(&["echo", "a", "b"])]));
+    check!(r#"a name cannot start with a digit"#, argv("echo $1x \"$9\""), Ok(vec![v(&["echo", "$1x", "$9"])]));
+    let c = parse("a < x < y", &env()).unwrap();
+    check!("the last stdin wins", c[0].stdin.clone(), Some("y".to_string()));
+}

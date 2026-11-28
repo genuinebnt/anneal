@@ -114,3 +114,12 @@ fn random_sets_agree_with_a_list_of_members() {
         check!(format!("{text:?}"), members(&text, probe), Ok(want));
     }
 }
+
+#[test]
+fn a_range_may_start_and_end_at_the_same_character() {
+    // Only a low end *above* the high end is BadRange. Equal ends make a set of one.
+    check!("[b-b]", members("[b-b]", PROBE), of("b"));
+    check!(r"[\t-\t]", members(r"[\t-\t]", PROBE), of("\t"));
+    check!("[^é-é]", members("[^é-é]", PROBE), all_but("é"));
+    check!("[a-ab]", members("[a-ab]", PROBE), of("ab"));
+}

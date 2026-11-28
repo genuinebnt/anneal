@@ -205,7 +205,7 @@ helpful = []
 used_again = ["y162-mirrors-and-glass"]
 real_uses = "Optics software, renderers, sensor design."
 cookbook = [
-    { level = "related", page = "vec3-matrix-quaternion", note = "Vector refraction and Schlick. Its Schlick uses the incoming angle on both sides, which this task does not accept when leaving glass.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
+    { level = "related", page = "vec3-matrix-quaternion", note = "Vector refraction and Schlick, with the angle taken on the side with the smaller index, as here. It works with vectors, not angles, and follows no stack of sheets.", source = "examples/graphics/vec3_matrix_quaternion.rs", hidden = true },
 ]
 
 [[part]]

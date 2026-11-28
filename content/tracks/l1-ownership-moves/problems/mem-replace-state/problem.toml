@@ -18,6 +18,6 @@ kind = "rust"
 text = "You can't move `name` out of `*job` through a `&mut`. Replace the whole value first, then match on what you got back."
 
 [solution]
-explanation = "The hidden test checks the String's buffer pointer: the name moves between variants without being copied."
+explanation = "A test checks the String's buffer pointer: the name moves between variants without being copied."
 time = "O(1)"
 space = "O(1)"

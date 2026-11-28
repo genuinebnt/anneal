@@ -114,3 +114,34 @@ fn scale_insert_and_lookup() {
     let found = (0..2 * n).filter(|x| v.contains(x)).count();
     check!("200000 sorted inserts, 400000 lookups", (v.as_slice().len(), found), (200_000, 200_000));
 }
+
+std::thread_local! {
+    static COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Ascending, and counts every comparison the SortedVec asks for.
+struct Counting;
+
+impl Order for Counting {
+    fn cmp<T: Ord>(a: &T, b: &T) -> std::cmp::Ordering {
+        COMPARISONS.with(|c| c.set(c.get() + 1));
+        a.cmp(b)
+    }
+}
+
+#[test]
+fn comparisons_grow_with_log_n() {
+    let mut rng = anneal_prelude::Rng::new(4520);
+    let n = 2048u64;
+    let xs: Vec<i64> = (0..n).map(|_| rng.int(0, 1_000_000)).collect();
+    COMPARISONS.with(|c| c.set(0));
+    let v: SortedVec<i64, Counting> = xs.iter().copied().collect();
+    let inserts = COMPARISONS.with(|c| c.replace(0));
+    let found = xs.iter().filter(|x| v.contains(x)).count() as u64;
+    let lookups = COMPARISONS.with(|c| c.get());
+    check!(
+        format!("2048 random inserts then 2048 lookups: {} and {} comparisons per call, at most 40 (log2 2048 is 11)", inserts / n, lookups / n),
+        (found, inserts <= 40 * n, lookups <= 40 * n),
+        (n, true, true)
+    );
+}

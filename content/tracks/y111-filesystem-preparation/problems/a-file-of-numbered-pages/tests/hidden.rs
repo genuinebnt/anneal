@@ -150,3 +150,43 @@ fn random_use_matches_a_byte_vector() {
         check!(format!("round {round}: the file"), std::fs::read(folder.file("a")).unwrap(), model);
     }
 }
+
+#[test]
+fn many_threads_share_one_file() {
+    // Each thread owns the pages n with n % THREADS == its number, and fills a page with one byte per round.
+    // Positional calls keep every page whole and in its place. A shared file position does not.
+    const THREADS: u64 = 8;
+    const PAGES: u64 = 64;
+    const SIZE: usize = 512;
+    let folder = Folder::new();
+    let file = PageFile::create(&folder.file("a"), SIZE, PAGES).unwrap();
+    let bad = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for t in 0..THREADS {
+            let (file, bad) = (&file, &bad);
+            s.spawn(move || {
+                for round in 0..200u64 {
+                    let byte = (t * 31 + round % 7 + 1) as u8;
+                    for n in (t..PAGES).step_by(THREADS as usize) {
+                        file.write(n, &[byte; SIZE]).unwrap();
+                        let mut page = vec![0; SIZE];
+                        file.read(n, &mut page).unwrap();
+                        if page.iter().any(|b| *b != byte) {
+                            bad.lock().unwrap().push(format!("thread {t} round {round}: page {n} did not hold what it wrote"));
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let bad = bad.into_inner().unwrap();
+    check!("every page read back as written", bad.first().cloned(), None);
+    let disk = std::fs::read(folder.file("a")).unwrap();
+    check!("the length", disk.len() as u64, PAGES * SIZE as u64);
+    for n in 0..PAGES {
+        let t = n % THREADS;
+        let want = (t * 31 + 199 % 7 + 1) as u8;
+        let page = &disk[n as usize * SIZE..(n as usize + 1) * SIZE];
+        check!(format!("page {n} holds thread {t}'s last round"), page.iter().all(|b| *b == want), true);
+    }
+}

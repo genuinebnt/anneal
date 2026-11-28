@@ -78,7 +78,7 @@ fn big_dot() {
 
 #[test]
 fn scale_by_zero() {
-    check!(r#"(7, -7) * 0"#, Vec2::new(7, -7) * 0, Vec2::new(0, 0));
+    check!(r#"(7, -7) * 0"#, Vec2::new(7, -7) * std::hint::black_box(0), Vec2::new(0, 0));
 }
 
 #[test]

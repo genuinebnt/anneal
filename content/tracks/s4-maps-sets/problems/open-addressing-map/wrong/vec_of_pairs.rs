@@ -27,4 +27,12 @@ impl<V> OpenMap<V> {
     pub fn len(&self) -> usize {
         self.items.len()
     }
+
+    pub fn capacity(&self) -> usize {
+        self.items.capacity().max(8)
+    }
+
+    pub fn empty_slots(&self) -> usize {
+        self.capacity() - self.items.len()
+    }
 }

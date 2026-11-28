@@ -809,7 +809,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> OaMap<K, V, S> {
     /// (which is what clears the tombstones).
     fn rehash(&mut self) {
         let cap = self.slots.len();
-        let new_cap = if (self.len + 1) * 2 > cap { cap * 2 } else { cap };
+        let new_cap = if self.len * 2 > cap { cap * 2 } else { cap };
         let old = std::mem::replace(&mut self.slots, empty_slots(new_cap));
         let mask = new_cap - 1;
         self.tombs = 0;
@@ -1131,7 +1131,7 @@ P.append(dict(
         probe_stops_at_a_tombstone=sub(OAMAP, "                Slot::Empty => return None, // an empty slot ends every probe chain", "                Slot::Empty | Slot::Tombstone => return None,"),
         insert_does_not_search_past_tombstones=sub(OAMAP, "                Slot::Tombstone => {\n                    if first_tomb.is_none() {\n                        first_tomb = Some(i);\n                    }\n                }", "                Slot::Tombstone => break,"),
         tombstones_do_not_count_toward_the_load=sub(OAMAP, "if (self.len + self.tombs + 1) * 8 > self.slots.len() * 7 {", "if (self.len + 1) * 8 > self.slots.len() * 7 {"),
-        rehash_never_cleans=sub(OAMAP, "let new_cap = if (self.len + 1) * 2 > cap { cap * 2 } else { cap };", "let new_cap = cap * 2;"),
+        rehash_never_cleans=sub(OAMAP, "let new_cap = if self.len * 2 > cap { cap * 2 } else { cap };", "let new_cap = cap * 2;"),
     ),
     hints=[("approach", "`slots: Vec<Slot<K, V>>` with `Empty`, `Tombstone`, `Full(k, v)`. `find`: start at `hash & mask`, loop: `Empty` means absent, `Full` with an equal key means found, anything else keep going with `(i + 1) & mask`. `remove` swaps the slot for a `Tombstone`. `insert` walks the same chain remembering the first tombstone."),
            ("rust", "`BuildHasher::hash_one(&key)` hashes in one call. `std::mem::replace(&mut slot, new)` takes a value out of a slot you only borrow. Match `&mut self.slots[i]` with an arm guard `Slot::Full(k, v) if *k == key` to replace a value in place. The default type parameter `S = RandomState` lets `OaMap::new()` work while tests inject a hasher."),

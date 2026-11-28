@@ -122,3 +122,75 @@ fn scale_200k() {
     let removed = (0..200_000u64).step_by(2).filter(|&k| m.remove(k * 13).is_some()).count();
     check!("insert 200000 keys, get each, remove half", (found, removed, m.len()), (200_000, 100_000, 100_000));
 }
+
+fn room_left<V>(m: &OpenMap<V>) -> bool {
+    m.empty_slots() * 4 >= m.capacity()
+}
+
+#[test]
+fn tombstones_count_toward_the_load() {
+    let mut m = OpenMap::new();
+    for k in 0..10u64 {
+        m.insert(k, k);
+    }
+    let mut first_bad = None;
+    for k in 10..20_010u64 {
+        m.insert(k, k);
+        let after_insert = room_left(&m);
+        m.remove(k);
+        if first_bad.is_none() && !(after_insert && room_left(&m)) {
+            first_bad = Some(k);
+        }
+    }
+    check!("keep 10 keys, insert and remove 20000 more: first key after which fewer than a quarter of the slots are Empty", (first_bad, m.len()), (None, 10));
+}
+
+#[test]
+fn churn_does_not_grow_the_table() {
+    let mut m = OpenMap::new();
+    for k in 0..100_000u64 {
+        m.insert(k, k);
+        m.remove(k);
+    }
+    let small = m.capacity() <= 16;
+    check!("100000 rounds of insert k, remove k (largest len 1): capacity() <= 16, and a quarter empty", (small, room_left(&m), m.len()), (true, true, 0));
+}
+
+#[test]
+fn capacity_follows_the_largest_len() {
+    let mut m = OpenMap::new();
+    for k in 0..1000u64 {
+        m.insert(k, k);
+    }
+    for k in 0..1000u64 {
+        m.remove(k);
+    }
+    for k in 1000..50_000u64 {
+        m.insert(k, k);
+        m.remove(k);
+    }
+    let bounded = m.capacity() <= 16 * 1000;
+    check!("insert 1000 keys, remove them, then 49000 insert/remove rounds: capacity() <= 16000, and a quarter empty", (bounded, room_left(&m), m.len()), (true, true, 0));
+}
+
+#[test]
+fn random_ops_keep_both_rules() {
+    let mut rng = anneal_prelude::Rng::new(5101);
+    for _ in 0..50 {
+        let mut m = OpenMap::new();
+        let mut peak = 0usize;
+        let mut ok = true;
+        let keys = 1 + rng.below(40) as u64;
+        for _ in 0..400 {
+            let k = rng.below(keys as usize) as u64;
+            if rng.below(2) == 0 {
+                m.insert(k, k);
+            } else {
+                m.remove(k);
+            }
+            peak = peak.max(m.len());
+            ok &= room_left(&m) && m.capacity() <= 16 * peak.max(1);
+        }
+        check!(format!("400 random inserts and removes over {keys} keys: both rules after every call"), ok, true);
+    }
+}

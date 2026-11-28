@@ -17,11 +17,7 @@ impl<V> OpenMap<V> {
     }
 
     fn with_slots(n: usize) -> Self {
-        OpenMap {
-            slots: (0..n).map(|_| Slot::Empty).collect(),
-            len: 0,
-            used: 0,
-        }
+        OpenMap { slots: (0..n).map(|_| Slot::Empty).collect(), len: 0, used: 0 }
     }
 
     /// Fibonacci hashing: multiply, then take the high bits.
@@ -93,8 +89,21 @@ impl<V> OpenMap<V> {
         self.len == 0
     }
 
+    pub fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn empty_slots(&self) -> usize {
+        self.slots.len() - self.used
+    }
+
+    /// Rebuilds the table without tombstones. It doubles only when live keys fill more than half
+    /// the slots; otherwise the slots are mostly tombstones, and a rebuild at the same size is
+    /// enough. Without that, insert-then-remove churn would double the table forever.
     fn grow(&mut self) {
-        let old = std::mem::replace(self, Self::with_slots(self.slots.len() * 2));
+        let n = self.slots.len();
+        let new_n = if (self.len + 1) * 2 > n { n * 2 } else { n };
+        let old = std::mem::replace(self, Self::with_slots(new_n));
         for slot in old.slots {
             if let Slot::Full(k, v) = slot {
                 self.insert(k, v);

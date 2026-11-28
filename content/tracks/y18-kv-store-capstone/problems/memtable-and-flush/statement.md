@@ -14,7 +14,7 @@ Recent writes live in memory, sorted by key (the **memtable**), and in the log `
 
 **Reads.** `get` and `scan` answer as if all writes had gone to one map. The newest mention of a key decides, also when it is a delete. A table that cannot be read is an error, never a reason to answer from an older one. `scan(from, to)` covers `from <= key < to`. An empty or reversed range gives nothing.
 
-**`flush()`** does nothing when the memtable is empty. Otherwise it writes the memtable as the next table (ids 1, 2, 3, and so on), and only after that empties the log. If the table cannot be written, it returns the error, nothing is lost, and the id is not used up. The store keeps no files besides the log and the tables.
+**`flush()`** does nothing when the memtable is empty. Otherwise it writes the memtable as the next table (ids 1, 2, 3, and so on), and only after that empties the log. If the table cannot be written, it returns the error, nothing is lost, and the id is not used up. The store keeps no files besides the log and the tables. The one exception: a table write that fails may leave its temporary file `sst_<id>.tmp` behind. The id is not used up, so the next flush writes over it.
 
 **Automatic flush.** `memtable_bytes()` adds `key length + value length + 16` for **every** write since the last flush (a delete has value length 0). After a write, if it is at least `flush_threshold`, the store flushes. A failure of **this** flush does not make the write fail, because the write has already happened. The next write tries again.
 

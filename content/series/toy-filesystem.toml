@@ -483,7 +483,7 @@ group = "Names"
 concept = "Paths with . and .., parent walks and refusing loops"
 steps = [5, 6]
 parts = ["y111-folders-that-move"]
-note = "strip_prefix, split and chunks_exact are used; step 5 names them in its hints."
+note = "strip_prefix, split and chunks_exact are used in the directory code that step 5 gives."
 
 [[readiness]]
 group = "Names"

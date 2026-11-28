@@ -6,4 +6,4 @@ rotation_count([1, 2, 3])            # 0
 rotation_count([2, 3, 1])            # 2
 ```
 
-The list can have millions of items.
+The list can have millions of items, and one test passes a sequence of 10^12 items that supports `len()` and indexing like a list.

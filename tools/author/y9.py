@@ -358,8 +358,20 @@ P.append(dict(
         T("empty_command_errors", "bad pipelines", "(argv(\"| a\"), argv(\"a |\"), argv(\"a | | b\"), argv(\"> f\"))", "(Err(ParseError::EmptyCommand), Err(ParseError::EmptyCommand), Err(ParseError::EmptyCommand), Err(ParseError::EmptyCommand))"),
         T("redirect_target_errors", "nothing to open", "(argv(\"a >\"), argv(\"a > | b\"), argv(\"a > > f\"), argv(\"a < > f\"), argv(\"a <\"))", "(Err(ParseError::MissingRedirectTarget), Err(ParseError::MissingRedirectTarget), Err(ParseError::MissingRedirectTarget), Err(ParseError::MissingRedirectTarget), Err(ParseError::MissingRedirectTarget))"),
         T("quote_and_brace_errors", "unterminated things", "(argv(\"echo 'abc\"), argv(\"echo \\\"abc\"), argv(\"echo ${HOME\"), argv(\"echo \\\"${HOME\\\"\"))", "(Err(ParseError::UnterminatedQuote), Err(ParseError::UnterminatedQuote), Err(ParseError::BadVariable), Err(ParseError::BadVariable))"),
+        r"""
+        #[test]
+        fn tabs_digits_and_the_last_stdin() {
+            check!(r#"a tab separates words"#, argv("echo\ta\t\tb"), Ok(vec![v(&["echo", "a", "b"])]));
+            check!(r#"a name cannot start with a digit"#, argv("echo $1x \"$9\""), Ok(vec![v(&["echo", "$1x", "$9"])]));
+            let c = parse("a < x < y", &env()).unwrap();
+            check!("the last stdin wins", c[0].stdin.clone(), Some("y".to_string()));
+        }
+        """,
     ],
     wrong=dict(
+        tabs_do_not_separate=sub(SH, "            ' ' | '\\t' => {", "            ' ' => {"),
+        a_name_may_start_with_a_digit=sub(SH, "    } else if chars.get(*i).map_or(false, |&c| is_name_start(c)) {", "    } else if chars.get(*i).map_or(false, |&c| c.is_ascii_alphanumeric() || c == '_') {"),
+        the_first_stdin_wins=sub(SH, "                Some(Tok::In) => cur.stdin = Some(w),", "                Some(Tok::In) => { if cur.stdin.is_none() { cur.stdin = Some(w) } }"),
         expands_in_single_quotes=sub(SH, "            '\\'' => {\n                let w = cur.get_or_insert_with(String::new);\n                i += 1;\n                loop {\n                    match chars.get(i) {\n                        None => return Err(ParseError::UnterminatedQuote),\n                        Some('\\'') => {\n                            i += 1;\n                            break;\n                        }\n                        Some(&c) => {", "            '\\'' => {\n                let w = cur.get_or_insert_with(String::new);\n                i += 1;\n                loop {\n                    match chars.get(i) {\n                        None => return Err(ParseError::UnterminatedQuote),\n                        Some('\\'') => {\n                            i += 1;\n                            break;\n                        }\n                        Some('$') => expand(&chars, &mut i, env, w)?,\n                        Some(&c) => {"),
         empty_quotes_vanish=sub(SH, "            if let Some(w) = cur.take() {\n                toks.push(Tok::Word(w));\n            }", "            if let Some(w) = cur.take() {\n                if !w.is_empty() {\n                    toks.push(Tok::Word(w));\n                }\n            }"),
         empty_expansion_is_an_empty_word=sub(SH, "                if !s.is_empty() {\n                    cur.get_or_insert_with(String::new).push_str(&s); // an empty unquoted expansion adds no word\n                }", "                cur.get_or_insert_with(String::new).push_str(&s);"),

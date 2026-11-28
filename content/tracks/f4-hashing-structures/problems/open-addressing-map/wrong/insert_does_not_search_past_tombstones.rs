@@ -89,7 +89,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> OaMap<K, V, S> {
     /// (which is what clears the tombstones).
     fn rehash(&mut self) {
         let cap = self.slots.len();
-        let new_cap = if (self.len + 1) * 2 > cap { cap * 2 } else { cap };
+        let new_cap = if self.len * 2 > cap { cap * 2 } else { cap };
         let old = std::mem::replace(&mut self.slots, empty_slots(new_cap));
         let mask = new_cap - 1;
         self.tombs = 0;

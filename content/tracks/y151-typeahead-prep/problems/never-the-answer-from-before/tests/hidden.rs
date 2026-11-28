@@ -182,3 +182,43 @@ fn agrees_with_a_model_when_work_is_nested_and_interrupted() {
         check!(format!("seed {seed}"), model.wrong.borrow().clone(), None);
     }
 }
+
+/// Real threads and no waiting on purpose. One thread keeps changing the facts. The others keep asking, and every
+/// answer must be at least as new as the last change that had finished before the question began.
+#[test]
+fn no_old_answer_once_a_change_has_finished() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+    for round in 0..20 {
+        let shelf: Arc<Shelf<u32, u64>> = Arc::new(Shelf::new());
+        // the facts, and the newest change that `changed` has finished with
+        let facts = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let askers: Vec<JoinHandle<Option<String>>> = (0..3)
+            .map(|t| {
+                let (shelf, facts, done, stop) = (shelf.clone(), facts.clone(), done.clone(), stop.clone());
+                thread::spawn(move || {
+                    let mut asked = 0u64;
+                    while !stop.load(SeqCst) || asked < 2_000 {
+                        asked += 1;
+                        let key = ((asked + t) % 3) as u32;
+                        let before = done.load(SeqCst);
+                        let (got, from_shelf) = shelf.get_or_work_out(&key, || facts.load(SeqCst));
+                        if got < before {
+                            return Some(format!("round {round}, key {key}: got the answer of version {got} (from the shelf: {from_shelf}) after change {before} had finished"));
+                        }
+                    }
+                    None
+                })
+            })
+            .collect();
+        for version in 1..=3_000 {
+            facts.store(version, SeqCst);
+            shelf.changed(|_| true);
+            done.store(version, SeqCst);
+        }
+        stop.store(true, SeqCst);
+        let wrong: Vec<String> = askers.into_iter().filter_map(|a| a.join().unwrap()).collect();
+        check!("old answers served", wrong.first().cloned(), None);
+    }
+}

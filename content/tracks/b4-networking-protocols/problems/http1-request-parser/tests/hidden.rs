@@ -153,3 +153,28 @@ fn all(chunks: &[&[u8]], limits: Limits) -> Result<Vec<Request>, ParseError> {
             let bytewise: Vec<&[u8]> = wire.chunks(1).collect();
             check!("one byte at a time", all(&bytewise, lim()).unwrap(), whole);
         }
+
+        #[test]
+        fn each_limit_itself_is_allowed() {
+            let head = b"GET / HTTP/1.1\r\nA: 1\r\nB: 2\r\n\r\n";
+            let mut p = Parser::new(Limits { max_head: head.len(), max_headers: 2, max_body: 0 });
+            p.feed(head);
+            check!("a head of exactly max_head bytes with exactly max_headers headers", p.next_request().map(|r| r.map(|r| r.headers.len())), Ok(Some(2)));
+            let mut q = Parser::new(Limits { max_head: 8192, max_headers: 8, max_body: 5 });
+            q.feed(b"POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello");
+            check!("a Content-Length of exactly max_body", q.next_request().map(|r| r.map(|r| r.body)), Ok(Some(b"hello".to_vec())));
+            q.feed(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhe\r\n3\r\nllo\r\n0\r\n\r\n");
+            check!("chunks that add up to exactly max_body", q.next_request().map(|r| r.map(|r| r.body)), Ok(Some(b"hello".to_vec())));
+        }
+
+        #[test]
+        fn a_chunk_line_limit_that_does_not_depend_on_the_split() {
+            let wire = |line_len: usize| format!("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3;{}\r\nabc\r\n0\r\n\r\n", "x".repeat(line_len - 2)).into_bytes();
+            for (line_len, want) in [(64, Ok(1)), (65, Err(ParseError::BadChunk))] {
+                let bytes = wire(line_len);
+                let whole = all(&[&bytes], lim()).map(|r| r.len());
+                let bytewise: Vec<&[u8]> = bytes.chunks(1).collect();
+                let split = all(&bytewise, lim()).map(|r| r.len());
+                check!(format!("a {line_len}-byte chunk line: (whole, one byte at a time)"), (whole, split), (want.clone(), want));
+            }
+        }

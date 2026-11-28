@@ -344,7 +344,8 @@ P.append(dict(
         `isn` (offset 0); sequence numbers are `u32` and **wrap around**, so a stream crosses `u32::MAX` back to 0.
 
         `segment(seq, data, fin)` may be called with segments in any order, with duplicates, and with overlaps. Rules:
-        * Only bytes at stream offsets `[next, next + window)` are kept, where `next` is the first byte not yet handed out. Earlier bytes
+        * Only bytes at stream offsets `[next, next + window)` are kept, where `next` is the first byte not yet handed out. A byte counts as handed out as soon as it is contiguous, even before `read()`
+          returns it, so the window does not wait for the reader. Earlier bytes
           are duplicates; later ones are dropped (a real sender would retransmit them). A `fin` whose end lies beyond the window is ignored.
         * Where segments overlap, the **first-arrived** bytes win.
         * `read()` returns the newly contiguous bytes, each exactly once. `is_finished()` is true once a `fin` was accepted and everything before it
@@ -600,14 +601,23 @@ impl Parser {
     }
 }
 
+/// The longest chunk-size line (hex size plus extensions), not counting its CRLF.
+const MAX_CHUNK_LINE: usize = 64;
+
 /// Decodes a chunked body from the start of `buf`: returns the body and how many bytes it used, or `None` if incomplete.
 fn parse_chunked(buf: &[u8], max_body: usize) -> Result<Option<(Vec<u8>, usize)>, ParseError> {
     let mut body = Vec::new();
     let mut pos = 0;
     loop {
         let Some(eol) = find(&buf[pos..], b"\\r\\n") else {
-            return if buf.len() - pos > 64 { Err(ParseError::BadChunk) } else { Ok(None) };
+            // the bytes so far, less a final `\\r` that may start the CRLF, all belong to the size line
+            let pending = &buf[pos..];
+            let line_so_far = pending.len() - usize::from(pending.ends_with(b"\\r"));
+            return if line_so_far > MAX_CHUNK_LINE { Err(ParseError::BadChunk) } else { Ok(None) };
         };
+        if eol > MAX_CHUNK_LINE {
+            return Err(ParseError::BadChunk); // the same limit when the whole line is here
+        }
         let line = std::str::from_utf8(&buf[pos..pos + eol]).map_err(|_| ParseError::BadChunk)?;
         let size_str = line.split(';').next().unwrap_or(""); // drop chunk extensions
         if size_str.is_empty() || !size_str.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -744,6 +754,8 @@ P.append(dict(
         `name: value` (name is a token with **no whitespace before the colon**; value is trimmed of spaces and tabs; no obsolete line folding), then
         `CRLF`. Body framing: `Content-Length: <digits>` (digits only, no sign), or `Transfer-Encoding: chunked` (hex sizes, optional `;extension`,
         trailers skipped, final `0` chunk). **Reject** a request that has both framing headers, or two `Content-Length`s with different values.
+        A chunk-size line, its `;extension` included, may be at most 64 bytes before its CRLF. A longer one is `BadChunk`, whether
+        it arrives whole or one byte at a time.
 
         Enforce `Limits` early: the head (request line plus headers plus blank line) may not exceed `max_head`, even while still incomplete; at most
         `max_headers` header lines; a body larger than `max_body` is `BodyTooLarge` as soon as its size is announced, not after it arrives.
@@ -923,6 +935,31 @@ P.append(dict(
             let bytewise: Vec<&[u8]> = wire.chunks(1).collect();
             check!("one byte at a time", all(&bytewise, lim()).unwrap(), whole);
         }
+
+        #[test]
+        fn each_limit_itself_is_allowed() {
+            let head = b"GET / HTTP/1.1\\r\\nA: 1\\r\\nB: 2\\r\\n\\r\\n";
+            let mut p = Parser::new(Limits { max_head: head.len(), max_headers: 2, max_body: 0 });
+            p.feed(head);
+            check!("a head of exactly max_head bytes with exactly max_headers headers", p.next_request().map(|r| r.map(|r| r.headers.len())), Ok(Some(2)));
+            let mut q = Parser::new(Limits { max_head: 8192, max_headers: 8, max_body: 5 });
+            q.feed(b"POST / HTTP/1.1\\r\\nContent-Length: 5\\r\\n\\r\\nhello");
+            check!("a Content-Length of exactly max_body", q.next_request().map(|r| r.map(|r| r.body)), Ok(Some(b"hello".to_vec())));
+            q.feed(b"POST / HTTP/1.1\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n2\\r\\nhe\\r\\n3\\r\\nllo\\r\\n0\\r\\n\\r\\n");
+            check!("chunks that add up to exactly max_body", q.next_request().map(|r| r.map(|r| r.body)), Ok(Some(b"hello".to_vec())));
+        }
+
+        #[test]
+        fn a_chunk_line_limit_that_does_not_depend_on_the_split() {
+            let wire = |line_len: usize| format!("POST / HTTP/1.1\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n3;{}\\r\\nabc\\r\\n0\\r\\n\\r\\n", "x".repeat(line_len - 2)).into_bytes();
+            for (line_len, want) in [(64, Ok(1)), (65, Err(ParseError::BadChunk))] {
+                let bytes = wire(line_len);
+                let whole = all(&[&bytes], lim()).map(|r| r.len());
+                let bytewise: Vec<&[u8]> = bytes.chunks(1).collect();
+                let split = all(&bytewise, lim()).map(|r| r.len());
+                check!(format!("a {line_len}-byte chunk line: (whole, one byte at a time)"), (whole, split), (want.clone(), want));
+            }
+        }
         """,
     ],
     wrong=dict(
@@ -931,11 +968,13 @@ P.append(dict(
         first_content_length_wins=sub(HTTP, "Some(prev) if prev != len => return Err(ParseError::ConflictingLength),\n                    _ => content_length = Some(len),", "Some(_) => {}\n                    None => content_length = Some(len),"),
         no_early_head_limit=sub(HTTP, "            if self.buf.len() > self.limits.max_head {\n                return Err(ParseError::HeadTooLarge); // never wait for a terminator that is not coming\n            }\n", ""),
         plus_sign_content_length=sub(HTTP, "if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {", "if v.is_empty() {"),
+        chunk_line_limit_only_while_incomplete=sub(HTTP, "        if eol > MAX_CHUNK_LINE {\n            return Err(ParseError::BadChunk); // the same limit when the whole line is here\n        }\n", ""),
+        the_body_limit_itself_is_refused=sub(HTTP, "if len > self.limits.max_body {", "if len >= self.limits.max_body {"),
         body_limit_after_the_body_arrives=sub(HTTP, "            if len > self.limits.max_body {\n                return Err(ParseError::BodyTooLarge); // decided from the header, before the body arrives\n            }\n            if self.buf.len() < head_len + len {\n                return Ok(None);\n            }", "            if self.buf.len() < head_len + len {\n                return Ok(None);\n            }\n            if len > self.limits.max_body {\n                return Err(ParseError::BodyTooLarge);\n            }"),
     ),
     hints=[("approach", "Find `\\r\\n\\r\\n`; no terminator means incomplete (but already an error if the buffer exceeds `max_head`). Split the head into lines: request line, then headers. Decide the body framing from the headers (reject both / conflicting), then see whether the whole body is in the buffer; only when it is, drain exactly the request's bytes."),
            ("rust", "`str::split(\"\\r\\n\")` for lines, `split_once(':')` for a header, `bytes().all(is_token_char)` to validate names (a space or tab before the colon fails it, which is exactly the point). For lengths use `all(|b| b.is_ascii_digit())` *and then* `parse::<usize>()`: `parse` alone accepts a leading `+`. A helper `parse_chunked(buf) -> Result<Option<(body, used)>>` keeps the state machine out of the main function."),
-           ("edge", "Return `Ok(None)` without consuming anything while a request is incomplete, so the next `feed` re-parses from the start (O(n\u00b2) worst case: a follow-up). Apply `max_body` from the announced `Content-Length` or chunk size, before the data is here. A request with no `Content-Length` and no chunking has an empty body.")],
+           ("edge", "Return `Ok(None)` without consuming anything while a request is incomplete, so the next `feed` re-parses from the start (O(n\u00b2) worst case: a follow-up). Apply `max_body` from the announced `Content-Length` or chunk size, before the data is here. A request with no `Content-Length` and no chunking has an empty body. Judge a chunk-size line by the same 64-byte rule whether its CRLF is here yet or not: a final `\\r` may be the start of the CRLF.")],
     notes=("This is what `httparse` + `hyper` do (hyper is pickier still, and rejects every case here). Request smuggling is the attack where a front proxy and a back end disagree about where a request ends; it needs exactly one of: whitespace-before-colon, duplicate `Content-Length`, or `Content-Length` plus `Transfer-Encoding`. Parsers that are strict, bounded and incremental are the single biggest defence for an internet-facing Rust service.", "O(n) per call (re-parse), O(n) total with a resumable state machine", "O(max_head + max_body)"),
     follow_up="1) Make the parser resumable (a state enum: `RequestLine`, `Headers`, `BodyFixed(n)`, `BodyChunked(...)`) so each byte is examined once. 2) Add `Expect: 100-continue`, absolute-form targets and `Host` validation for HTTP/1.1 (a missing `Host` is an error). 3) Write the response side: status line, `Content-Length`, `Connection: close` / keep-alive rules for 1.0 vs 1.1. 4) Fuzz it with `cargo fuzz` or a property test comparing against `httparse` on random bytes: what do you find? 5) Plug it into the length-prefixed decoder pattern: write a `tokio_util::codec::Decoder` impl and a toy server using the C5 executor.",
     related=["B5", "S9", "F7"],

@@ -20,6 +20,6 @@ If the copy is current the answer is `NotModified`, whatever else was asked.
 - `bytes=a-`: from a to the end;
 - `bytes=-n`: the last n bytes.
 
-Spaces around the whole value are allowed. A range reaching past the end is cut to the end. It is `Unsatisfiable` if no byte of the file is in it. Any other value, including several ranges, is ignored: `Whole`. Numbers may be larger than any integer type; they are still numbers, and very large.
+Spaces around the whole value are allowed. A range reaching past the end is cut to the end. It is `Unsatisfiable` if no byte of the file is in it. Any other value, including several ranges, is ignored: `Whole`. Numbers may be larger than any integer type; they are still numbers, and very large: treat such a number as `u64::MAX`.
 
 `content_range(plan, len)` is the `Content-Range` header for the answer: `bytes a-b/len` for a part, `bytes */len` for unsatisfiable, `None` otherwise.

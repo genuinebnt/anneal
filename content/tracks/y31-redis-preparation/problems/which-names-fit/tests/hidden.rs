@@ -155,3 +155,9 @@ fn a_long_literal_tail_after_a_star() {
     let name = "a".repeat(50_000);
     check!("no b anywhere", matches(pattern.as_bytes(), name.as_bytes()), false);
 }
+
+#[test]
+fn only_a_caret_turns_a_set_around() {
+    // shells also accept `[!...]`; here `!` is an ordinary byte
+    table(&[("[!a]", "b", false), ("[!a]", "!", true), ("[!a]", "a", true), ("x[!]", "x!", true)]);
+}

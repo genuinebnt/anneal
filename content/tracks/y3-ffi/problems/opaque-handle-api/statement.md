@@ -11,3 +11,6 @@ an `i64`) is the Rust type; C only ever holds a `*mut Counter`.
 
 Every function must tolerate null handles (returning `ERR_NULL`) instead of crashing. A `drops()` counter is provided so the
 tests can check that every handle is dropped exactly once.
+
+`counter_new` is an `unsafe fn` like the others: it reads through a pointer that C hands it, and safe Rust could pass it
+a dangling one. (Clippy's `not_unsafe_ptr_arg_deref` rejects a safe `fn` that does this.)

@@ -262,6 +262,12 @@ fn a_long_literal_tail_after_a_star() {
     let name = "a".repeat(50_000);
     check!("no b anywhere", matches(pattern.as_bytes(), name.as_bytes()), false);
 }
+
+#[test]
+fn only_a_caret_turns_a_set_around() {
+    // shells also accept `[!...]`; here `!` is an ordinary byte
+    table(&[("[!a]", "b", false), ("[!a]", "!", true), ("[!a]", "a", true), ("x[!]", "x!", true)]);
+}
 ''',
 ]
 
@@ -319,5 +325,6 @@ PROBLEM = dict(
         "no_escapes_inside_sets": broken(SOLUTION, (
             "                let escaped = p[i] == b'\\\\' && i + 1 < p.len();", "                let escaped = false;")),
         "pattern_left_over_is_ignored": broken(SOLUTION, ("    pattern[p..].iter().all(|&b| b == b'*')", "    p >= pattern.len() || pattern[p] == b'*'")),
+        "bang_turns_a_set_around": broken(SOLUTION, ("            let negated = p.get(i) == Some(&b'^');", "            let negated = matches!(p.get(i), Some(&b'^') | Some(&b'!'));")),
     },
 )

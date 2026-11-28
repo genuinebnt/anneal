@@ -10,3 +10,5 @@ paint_region([[1, 1, 0],
 #  [7, 0, 0],
 #  [7, 7, 7]]
 ```
+
+The picture can be up to 200 × 200, so one region can be far deeper than Python's recursion limit (about 1,000 calls).

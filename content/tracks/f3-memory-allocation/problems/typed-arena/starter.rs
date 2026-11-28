@@ -11,6 +11,9 @@ impl<T> Arena<T> {
         todo!()
     }
 
+    // Clippy's `mut_from_ref` (an error) flags `&self` in, `&mut T` out, because that is usually a bug. Here each call
+    // returns a different value, so no two `&mut` alias: that is why the lint is allowed.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc(&self, value: T) -> &mut T {
         todo!()
     }

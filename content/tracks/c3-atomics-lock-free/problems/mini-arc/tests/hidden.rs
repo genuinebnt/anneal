@@ -133,3 +133,38 @@ fn random_clone_drop_matches_a_model() {
         }
     }
 }
+
+/// `Is::<T>::SYNC` / `Is::<T>::SEND` are `true` only when `T` has the trait: the inherent const wins when its bound
+/// holds, the trait's default otherwise. That lets a test check that a type is *not* `Sync` or `Send`.
+#[allow(dead_code)]
+struct Is<T: ?Sized>(std::marker::PhantomData<T>);
+trait Fallback {
+    const SYNC: bool = false;
+    const SEND: bool = false;
+}
+impl<T: ?Sized> Fallback for Is<T> {}
+#[allow(dead_code)]
+impl<T: ?Sized + Sync> Is<T> {
+    const SYNC: bool = true;
+}
+#[allow(dead_code)]
+impl<T: ?Sized + Send> Is<T> {
+    const SEND: bool = true;
+}
+
+#[test]
+fn not_sync_or_send_for_the_wrong_types() {
+    use std::cell::Cell;
+    use std::sync::MutexGuard;
+    // Two clones on two threads share `&T` (needs Sync), and whichever drops last drops `T` there (needs Send).
+    check!(
+        "(MiniArc<Cell<u32>>: Send, MiniArc<Cell<u32>>: Sync, MiniArc<MutexGuard<u8>>: Send, MiniArc<MutexGuard<u8>>: Sync)",
+        (
+            Is::<MiniArc<Cell<u32>>>::SEND,
+            Is::<MiniArc<Cell<u32>>>::SYNC,
+            Is::<MiniArc<MutexGuard<'static, u8>>>::SEND,
+            Is::<MiniArc<MutexGuard<'static, u8>>>::SYNC,
+        ),
+        (false, false, false, false)
+    );
+}

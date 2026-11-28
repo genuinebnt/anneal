@@ -166,3 +166,21 @@ fn many_batches_and_common_words() {
     check!("the double use wins", index.search("common", 10).map(|h| h[0].page), Ok(598));
     check!("with two words", index.search("common words", 10).map(|h| h.len()), Ok(10));
 }
+
+#[test]
+fn the_order_of_the_words_never_changes_a_score() {
+    // the words are added in alphabetical order whatever order the query names them in, so the scores are exactly equal
+    let mut rng = anneal_prelude::Rng::new(5209);
+    let mut index = Index::new();
+    for _ in 0..8 {
+        let batch: Vec<String> = (0..6)
+            .map(|_| (0..1 + rng.below(12)).map(|_| *rng.pick(&VOCAB)).collect::<Vec<_>>().join(" "))
+            .collect();
+        let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
+        index.add_batch(&refs);
+    }
+    let want = index.search("ant OR bee OR cat OR dog OR eel", usize::MAX);
+    for q in ["eel OR dog OR cat OR bee OR ant", "cat OR eel OR ant OR dog OR bee", "dog OR ant OR eel OR bee OR cat"] {
+        check!(q, index.search(q, usize::MAX), want.clone());
+    }
+}

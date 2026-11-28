@@ -11,4 +11,4 @@ for a quantifier with nothing before it (at the start, after `(` or `|`) or dire
 
 `is_match` is true when the pattern matches the **entire** text. `find` returns the **leftmost** match and, among matches
 starting there, the **longest**, as `(start, end)` in `char` indices (`end` exclusive). It may be an empty match.
-Matching must take time proportional to `text length x pattern length`, however nasty the pattern.
+`is_match` must take time proportional to `text length x pattern length`, however nasty the pattern. `find` may take that much for each start position.

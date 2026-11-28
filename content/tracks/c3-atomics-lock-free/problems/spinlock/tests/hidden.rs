@@ -119,3 +119,44 @@ fn works_with_non_sync_payload() {
     needs_sync::<SpinLock<std::cell::Cell<u32>>>();
     needs_sync::<SpinLock<Vec<String>>>();
 }
+
+/// `Is::<T>::SYNC` / `Is::<T>::SEND` are `true` only when `T` has the trait: the inherent const wins when its bound
+/// holds, the trait's default otherwise. That lets a test check that a type is *not* `Sync` or `Send`.
+#[allow(dead_code)]
+struct Is<T: ?Sized>(std::marker::PhantomData<T>);
+trait Fallback {
+    const SYNC: bool = false;
+    const SEND: bool = false;
+}
+impl<T: ?Sized> Fallback for Is<T> {}
+#[allow(dead_code)]
+impl<T: ?Sized + Sync> Is<T> {
+    const SYNC: bool = true;
+}
+#[allow(dead_code)]
+impl<T: ?Sized + Send> Is<T> {
+    const SEND: bool = true;
+}
+
+#[test]
+fn not_sync_or_send_for_the_wrong_types() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    // An Rc inside the lock could be cloned under the lock and the clone kept, so it must stay on one thread.
+    check!(
+        "(SpinLock<Rc<u8>>: Sync, SpinLock<Rc<u8>>: Send, SpinLock<Cell<u32>>: Sync)",
+        (Is::<SpinLock<Rc<u8>>>::SYNC, Is::<SpinLock<Rc<u8>>>::SEND, Is::<SpinLock<Cell<u32>>>::SYNC),
+        (false, false, true)
+    );
+}
+
+#[test]
+fn guard_is_sync_only_for_sync_values() {
+    use std::cell::Cell;
+    // `&Guard` derefs to `&T`, so sharing a guard between threads shares `&T`: that needs `T: Sync`.
+    check!(
+        "(Guard<Cell<u32>>: Sync, Guard<u64>: Sync)",
+        (Is::<Guard<'static, Cell<u32>>>::SYNC, Is::<Guard<'static, u64>>::SYNC),
+        (false, true)
+    );
+}

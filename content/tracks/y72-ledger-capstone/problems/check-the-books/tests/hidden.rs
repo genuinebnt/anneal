@@ -300,3 +300,42 @@ fn long_books_stay_quick() {
     let reports = Reports::from_log(&b.lines);
     check!("clean", audit(&b.lines, Some(&reports), true), vec![]);
 }
+
+#[test]
+fn returns_that_do_not_fit_their_transfer() {
+    let base = || {
+        let mut b = Books::default();
+        b.open("ann", 100);
+        b.open("bo", 0);
+        b.open("cy", 0);
+        let s = b.send("ann", "bo", 30);
+        (b, s)
+    };
+    let tin = |transfer, from: &str, amount| Event::TransferredIn { transfer, from: from.into(), amount };
+    let wrong: Vec<(&str, &str, u64, &str, i64)> = vec![
+        // (what is wrong, the stream, transfer, from, amount); an honest return is on "ann", from "bo"
+        ("another account", "cy", 5, "bo", 30),
+        ("another target named", "ann", 5, "cy", 30),
+        ("another number", "ann", 6, "bo", 30),
+        ("another amount", "ann", 5, "bo", 31),
+    ];
+    for (what, stream, transfer, from, amount) in wrong {
+        let (mut b, s) = base();
+        let at = b.line(stream, CmdId::Bounce(s), tin(transfer, from, amount));
+        check!(what, audit(&b.lines, None, true), vec![Finding::Unexplained { at }, Finding::Unanswered { at: s }]);
+    }
+}
+
+#[test]
+fn unreadable_lines_use_up_their_command_id_too() {
+    let mut b = clean();
+    let first = b.lines[1].cmd;
+    let junk = b.line("ann", first, Event::Opened);
+    b.lines[junk as usize].schema = 9;
+    check!("an unreadable repeat", audit(&b.lines, None, false), vec![Finding::Unreadable { at: junk }, Finding::CommandRepeated { at: junk }]);
+    let mut b = clean();
+    let junk = b.line("ann", CmdId::Client(500), Event::Opened);
+    b.lines[junk as usize].schema = 9;
+    let at = b.line("ann", CmdId::Client(500), wd(1));
+    check!("a repeat of an unreadable line", audit(&b.lines, None, false), vec![Finding::Unreadable { at: junk }, Finding::CommandRepeated { at }]);
+}

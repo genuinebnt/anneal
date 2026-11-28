@@ -172,3 +172,33 @@ fn within<T: Send + 'static>(ms: u64, f: impl FnOnce() -> T + Send + 'static) ->
             send::<RwLock<Vec<u8>>>();
             send::<RwLock<std::cell::Cell<u8>>>(); // Cell is Send, so the lock may move between threads
         }
+
+/// `Is::<T>::SYNC` / `Is::<T>::SEND` are `true` only when `T` has the trait: the inherent const wins when its bound
+/// holds, the trait's default otherwise. That lets a test check that a type is *not* `Sync` or `Send`.
+#[allow(dead_code)]
+struct Is<T: ?Sized>(std::marker::PhantomData<T>);
+trait Fallback {
+    const SYNC: bool = false;
+    const SEND: bool = false;
+}
+impl<T: ?Sized> Fallback for Is<T> {}
+#[allow(dead_code)]
+impl<T: ?Sized + Sync> Is<T> {
+    const SYNC: bool = true;
+}
+#[allow(dead_code)]
+impl<T: ?Sized + Send> Is<T> {
+    const SEND: bool = true;
+}
+
+#[test]
+fn not_sync_or_send_for_the_wrong_types() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    // Many readers hold `&T` at once, so a shared lock needs `T: Sync` as well as `T: Send`.
+    check!(
+        "(RwLock<Cell<u8>>: Sync, RwLock<Rc<u8>>: Sync, RwLock<Rc<u8>>: Send)",
+        (Is::<RwLock<Cell<u8>>>::SYNC, Is::<RwLock<Rc<u8>>>::SYNC, Is::<RwLock<Rc<u8>>>::SEND),
+        (false, false, false)
+    );
+}

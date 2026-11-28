@@ -313,16 +313,18 @@ impl JobStore {
         let Some(job) = state.jobs.get_mut(&id) else {
             return false;
         };
+        let cancel_accepted = *job.cancel.borrow();
         let allowed = match job.view.status {
             Status::Running => true,
-            Status::Queued => outcome == Outcome::Cancelled,
+            // After an accepted cancel, any finish of a queued job records `Cancelled`.
+            Status::Queued => cancel_accepted || outcome == Outcome::Cancelled,
             _ => false,
         };
         if !allowed {
             return false;
         }
         // An accepted cancel wins, even over work that finished before the worker noticed it.
-        let outcome = if *job.cancel.borrow() {
+        let outcome = if cancel_accepted {
             Outcome::Cancelled
         } else {
             outcome

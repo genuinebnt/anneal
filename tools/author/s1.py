@@ -2504,7 +2504,7 @@ MY_OPTION_BORROW = """
 
 P.append(dict(
     slug="my-option-borrowing", title="MyOption: borrowing and in-place methods", level="hard", stage="build-it", tags=["enum", "borrowing", "impl blocks"],
-    teaches=["`as_ref` / `as_mut` turn `&MyOption<T>` into `MyOption<&T>` by matching on a reference.", "`get_or_insert_with` must fill the slot first and borrow second, or the borrow checker objects.", "`flatten` and `copied` exist only for some `T`, so they live in `impl` blocks for `MyOption<MyOption<T>>` and `MyOption<&T>`."],
+    teaches=["`as_ref` / `as_mut` turn `&MyOption<T>` into `MyOption<&T>` by matching on a reference.", "`get_or_insert_with` fills the slot first and borrows second. Returning early from `if let Some(v) = self.as_mut()` and then assigning is rejected (E0506), although it is sound.", "`flatten` and `copied` exist only for some `T`, so they live in `impl` blocks for `MyOption<MyOption<T>>` and `MyOption<&T>`."],
     statement="""
         Implement ten more `Option` methods on `MyOption`, each behaving like std's: `as_ref`, `as_mut`, `insert`,
         `replace`, `get_or_insert_with`, `zip`, `inspect`, `map_or_else`, and `flatten` and `copied` in their own `impl` blocks.
@@ -2618,7 +2618,7 @@ P.append(dict(
     hints=[("rust", "Matching on `&self` binds `v` as `&T` (match ergonomics), so `as_ref` is the same two-arm `match` as `map`."),
            ("rust", "In `get_or_insert_with`, first write `*self = MyOption::Some(f())` if it's `None`, then `match self` and return the `&mut` from the `Some` arm."),
            ("edge case", "`insert` always overwrites; only `get_or_insert_with` keeps an existing value. `inspect` hands the closure a reference and returns `self` unchanged.")],
-    notes=("`as_ref` and `as_mut` are why most combinators can take `self` by value: borrow first, then consume the borrowed option. `get_or_insert_with` fills the slot before borrowing it, because returning a borrow from one arm while assigning in the other is a case today's borrow checker rejects. API reminder: `insert(v)` overwrites, `get_or_insert(v)` / `get_or_insert_with(f)` keep what's there; `copied()` / `cloned()` turn `Option<&T>` into `Option<T>`; `flatten()` removes one level of `Option<Option<T>>`; `inspect(|v| log(v))` peeks without consuming (`Result` has `inspect` and `inspect_err`).", "O(1) each", "O(1)"),
+    notes=("`as_ref` and `as_mut` are why most combinators can take `self` by value: borrow first, then consume the borrowed option. `get_or_insert_with` fills the slot before borrowing it. The other order, returning early from `if let MyOption::Some(v) = self.as_mut()` and assigning after it, is sound but today's borrow checker rejects it (E0506). One `match self` that assigns inside the `None` arm is accepted. API reminder: `insert(v)` overwrites, `get_or_insert(v)` / `get_or_insert_with(f)` keep what's there; `copied()` / `cloned()` turn `Option<&T>` into `Option<T>`; `flatten()` removes one level of `Option<Option<T>>`; `inspect(|v| log(v))` peeks without consuming (`Result` has `inspect` and `inspect_err`).", "O(1) each", "O(1)"),
     follow_up="Why does std's `get_or_insert_with` use `unreachable_unchecked` (or an equivalent) for the `None` arm, and is `unreachable!()` good enough here?",
     related=["L2", "L6"],
 ))
@@ -2856,6 +2856,259 @@ P.append(dict(
 ))
 
 STAGES = [("use-it", "Use it", "easy"), ("understand-it", "Understand it", "medium"), ("build-it", "Build it", "hard")]
+
+# Review of 2026-11-28 (group B). The folders were edited by hand; these lines bring the same edits
+# back so regenerating reproduces them. FORMATTED holds the starter and solution as rustfmt left them
+# (commit 37f80727) for the problems the review touched; the rest are the tests, wrong solutions and
+# [perf] keys the review added.
+FORMATTED = {
+    'collect-into-result': (
+        r'''
+/// Every item as an `i32`, or the error for the first bad one.
+pub fn parse_all(items: &[&str]) -> Result<Vec<i32>, String> {
+    todo!()
+}
+
+/// The sum of every item as an `i64`, or the error for the first bad one. No intermediate `Vec`.
+pub fn sum_all(items: &[&str]) -> Result<i64, String> {
+    todo!()
+}
+
+/// Every item, or every error in order.
+pub fn parse_every_error(items: &[&str]) -> Result<Vec<i32>, Vec<String>> {
+    todo!()
+}
+
+/// Runs `check` on each item in order and stops at the first error.
+pub fn validate(
+    items: &[&str],
+    mut check: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    todo!()
+}
+''',
+        r'''
+fn parse(s: &str) -> Result<i32, String> {
+    s.parse().map_err(|_| format!("bad number: {s}"))
+}
+
+/// Every item as an `i32`, or the error for the first bad one.
+pub fn parse_all(items: &[&str]) -> Result<Vec<i32>, String> {
+    items.iter().map(|s| parse(s)).collect()
+}
+
+/// The sum of every item as an `i64`, or the error for the first bad one. No intermediate `Vec`.
+pub fn sum_all(items: &[&str]) -> Result<i64, String> {
+    items.iter().map(|s| parse(s).map(i64::from)).sum()
+}
+
+/// Every item, or every error in order.
+pub fn parse_every_error(items: &[&str]) -> Result<Vec<i32>, Vec<String>> {
+    let (good, bad): (Vec<_>, Vec<_>) = items.iter().map(|s| parse(s)).partition(Result::is_ok);
+    if bad.is_empty() {
+        Ok(good.into_iter().flatten().collect())
+    } else {
+        Err(bad.into_iter().filter_map(Result::err).collect())
+    }
+}
+
+/// Runs `check` on each item in order and stops at the first error.
+pub fn validate(
+    items: &[&str],
+    mut check: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    items.iter().map(|s| check(s)).collect()
+}
+''',
+    ),
+    'my-option-borrowing': (
+        r'''
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum MyOption<T> {
+    Some(T),
+    None,
+}
+
+impl<T> MyOption<T> {
+    pub fn as_ref(&self) -> MyOption<&T> {
+        todo!()
+    }
+    pub fn as_mut(&mut self) -> MyOption<&mut T> {
+        todo!()
+    }
+    pub fn insert(&mut self, value: T) -> &mut T {
+        todo!()
+    }
+    pub fn replace(&mut self, value: T) -> MyOption<T> {
+        todo!()
+    }
+    pub fn get_or_insert_with(&mut self, f: impl FnOnce() -> T) -> &mut T {
+        todo!()
+    }
+    pub fn zip<U>(self, other: MyOption<U>) -> MyOption<(T, U)> {
+        todo!()
+    }
+    pub fn inspect(self, f: impl FnOnce(&T)) -> MyOption<T> {
+        todo!()
+    }
+    pub fn map_or_else<U>(self, default: impl FnOnce() -> U, f: impl FnOnce(T) -> U) -> U {
+        todo!()
+    }
+}
+
+impl<T> MyOption<MyOption<T>> {
+    pub fn flatten(self) -> MyOption<T> {
+        todo!()
+    }
+}
+
+impl<T: Copy> MyOption<&T> {
+    pub fn copied(self) -> MyOption<T> {
+        todo!()
+    }
+}
+''',
+        r'''
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum MyOption<T> {
+    Some(T),
+    None,
+}
+
+impl<T> MyOption<T> {
+    pub fn as_ref(&self) -> MyOption<&T> {
+        match self {
+            MyOption::Some(v) => MyOption::Some(v),
+            MyOption::None => MyOption::None,
+        }
+    }
+    pub fn as_mut(&mut self) -> MyOption<&mut T> {
+        match self {
+            MyOption::Some(v) => MyOption::Some(v),
+            MyOption::None => MyOption::None,
+        }
+    }
+    pub fn insert(&mut self, value: T) -> &mut T {
+        *self = MyOption::Some(value);
+        match self {
+            MyOption::Some(v) => v,
+            MyOption::None => unreachable!(),
+        }
+    }
+    pub fn replace(&mut self, value: T) -> MyOption<T> {
+        std::mem::replace(self, MyOption::Some(value))
+    }
+    pub fn get_or_insert_with(&mut self, f: impl FnOnce() -> T) -> &mut T {
+        if let MyOption::None = self {
+            *self = MyOption::Some(f());
+        }
+        match self {
+            MyOption::Some(v) => v,
+            MyOption::None => unreachable!(),
+        }
+    }
+    pub fn zip<U>(self, other: MyOption<U>) -> MyOption<(T, U)> {
+        match (self, other) {
+            (MyOption::Some(a), MyOption::Some(b)) => MyOption::Some((a, b)),
+            _ => MyOption::None,
+        }
+    }
+    pub fn inspect(self, f: impl FnOnce(&T)) -> MyOption<T> {
+        if let MyOption::Some(v) = &self {
+            f(v);
+        }
+        self
+    }
+    pub fn map_or_else<U>(self, default: impl FnOnce() -> U, f: impl FnOnce(T) -> U) -> U {
+        match self {
+            MyOption::Some(v) => f(v),
+            MyOption::None => default(),
+        }
+    }
+}
+
+impl<T> MyOption<MyOption<T>> {
+    pub fn flatten(self) -> MyOption<T> {
+        match self {
+            MyOption::Some(inner) => inner,
+            MyOption::None => MyOption::None,
+        }
+    }
+}
+
+impl<T: Copy> MyOption<&T> {
+    pub fn copied(self) -> MyOption<T> {
+        match self {
+            MyOption::Some(&v) => MyOption::Some(v),
+            MyOption::None => MyOption::None,
+        }
+    }
+}
+''',
+    ),
+}
+ADDED_HIDDEN = {
+    'collect-into-result': [r'''
+#[test]
+fn sum_all_builds_no_vec() {
+    let items: Vec<String> = (0..10_000).map(|i: i32| i.to_string()).collect();
+    let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+    let (got, used) = anneal_prelude::allocs(|| sum_all(&refs));
+    check!("10000 good items: the sum", got, Ok(49_995_000));
+    check!(format!("sum_all allocated {} bytes in {} allocations, at most 1024", used.bytes, used.count), used.bytes <= 1024, true);
+}
+'''],
+}
+ADDED_WRONG = {
+    'collect-into-result': {
+        'sum_builds_a_vec': r'''
+fn parse(s: &str) -> Result<i32, String> {
+    s.parse().map_err(|_| format!("bad number: {s}"))
+}
+
+/// Every item as an `i32`, or the error for the first bad one.
+pub fn parse_all(items: &[&str]) -> Result<Vec<i32>, String> {
+    items.iter().map(|s| parse(s)).collect()
+}
+
+/// The sum of every item as an `i64`, or the error for the first bad one. No intermediate `Vec`.
+pub fn sum_all(items: &[&str]) -> Result<i64, String> {
+    // Builds the whole Vec first, which the statement rules out.
+    Ok(parse_all(items)?.into_iter().map(i64::from).sum())
+}
+
+/// Every item, or every error in order.
+pub fn parse_every_error(items: &[&str]) -> Result<Vec<i32>, Vec<String>> {
+    let (good, bad): (Vec<_>, Vec<_>) = items.iter().map(|s| parse(s)).partition(Result::is_ok);
+    if bad.is_empty() {
+        Ok(good.into_iter().flatten().collect())
+    } else {
+        Err(bad.into_iter().filter_map(Result::err).collect())
+    }
+}
+
+/// Runs `check` on each item in order and stops at the first error.
+pub fn validate(
+    items: &[&str],
+    mut check: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    items.iter().map(|s| check(s)).collect()
+}
+''',
+    },
+}
+ADDED_PERF = {'collect-into-result': {'allocs': True}}
+for p in P:
+    s = p["slug"]
+    if s in FORMATTED:
+        p["starter"], p["solution"] = FORMATTED[s]
+    if s in ADDED_HIDDEN:
+        p["hidden"] = list(p["hidden"]) + ADDED_HIDDEN[s]
+    if s in ADDED_WRONG:
+        p["wrong"] = {**(p.get("wrong") or {}), **ADDED_WRONG[s]}
+    if s in ADDED_PERF:
+        p["perf"] = ADDED_PERF[s]
+
 
 if __name__ == "__main__":
     n = write_track("s1-option-result", "S1", "Option & Result", "S", "core", 1,

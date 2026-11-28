@@ -69,3 +69,9 @@ fn scale_200k_words() {
     let text = "Go gO go stop ".repeat(50_000);
     check!("text = \"Go gO go stop …\" (200000 words), word = \"GO\"", count_word(&text, "GO"), 150_000);
 }
+
+#[test]
+fn no_allocations() {
+    let (got, seen) = anneal_prelude::allocs(|| (is_command("  QUIT \n", "quit"), count_word("The cat saw the THE", "the")));
+    check!(r#"is_command("  QUIT \n", "quit") and count_word("The cat saw the THE", "the"): (results, heap allocations)"#, (got, seen.count), ((true, 3), 0));
+}

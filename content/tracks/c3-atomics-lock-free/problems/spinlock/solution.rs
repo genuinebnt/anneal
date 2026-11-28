@@ -14,6 +14,11 @@ pub struct Guard<'a, T> {
     lock: &'a SpinLock<T>,
 }
 
+// Without this line the compiler derives `Guard: Sync` from `&SpinLock<T>: Sync`, i.e. from `T: Send`. But `&Guard`
+// derefs to `&T`, so sharing a guard between threads shares `&T`: that needs `T: Sync`. An explicit impl replaces the
+// derived one (`std::sync::MutexGuard` does the same).
+unsafe impl<T: Sync> Sync for Guard<'_, T> {}
+
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
         SpinLock {

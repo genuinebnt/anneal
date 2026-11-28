@@ -62,11 +62,12 @@ fn within<T: Send + 'static>(ms: u64, f: impl FnOnce() -> T + Send + 'static) ->
             let ok = within(5000, || {
                 let text = "a".repeat(3000);
                 let nested = Regex::new("(a*)*b").unwrap();
-                let alt = Regex::new("(a|aa)+$").unwrap();
-                let many = Regex::new("(a?){30}a{30}").unwrap();
-                (nested.is_match(&text), alt.is_match(&text), many.is_match(&text), Regex::new("(x+x+)+y").unwrap().is_match(&"x".repeat(3000)))
+                let alt = Regex::new("(a|aa)+b").unwrap();
+                // a? thirty times, then a thirty times, against thirty a's: the classic case from Russ Cox
+                let many = Regex::new(&("a?".repeat(30) + &"a".repeat(30))).unwrap();
+                (nested.is_match(&text), alt.is_match(&text), many.is_match(&"a".repeat(30)), Regex::new("(x+x+)+y").unwrap().is_match(&"x".repeat(3000)))
             });
-            check!("finishes, and the answers are right", ok, Some((false, false, false, false)));
+            check!("finishes, and the answers are right", ok, Some((false, false, true, false)));
         }
 
         #[test]

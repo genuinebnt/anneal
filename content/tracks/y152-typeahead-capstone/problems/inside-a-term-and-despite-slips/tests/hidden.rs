@@ -230,3 +230,13 @@ fn agrees_with_judging_every_term_and_asks_only_about_possible_ones() {
         }
     }
 }
+
+#[test]
+fn equal_scores_among_the_other_matches_go_by_key() {
+    // same counts at the same time tie, as in step 1, and ties are ordered by key within one dist too
+    let mut i = Index::new();
+    i.add(&[("zprint", 2), ("yprint", 2), ("xprint", 2), ("prinw", 2), ("prinq", 2)], 0);
+    let got: Vec<(String, u8)> = i.search("print", 9, 0).into_iter().map(|s| (s.term, s.dist)).collect();
+    let want = [("xprint", 0), ("yprint", 0), ("zprint", 0), ("prinq", 1), ("prinw", 1)];
+    check!("print", got, want.iter().map(|&(t, d)| (t.to_string(), d)).collect::<Vec<_>>());
+}

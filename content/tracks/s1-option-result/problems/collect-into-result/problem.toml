@@ -38,3 +38,6 @@ text = "Two `i32::MAX` items overflow an `i32` sum: convert each value to `i64` 
 explanation = "The short-circuiting impls are `impl<A, E, V: FromIterator<A>> FromIterator<Result<A, E>> for Result<V, E>` and `impl<T: Sum<U>, U, E> Sum<Result<U, E>> for Result<T, E>`: they pull items until the first `Err` and drop the rest of the iterator, so later items are never produced (which `validate`'s call count shows). `()` implements `FromIterator<()>`, which is why `collect::<Result<(), _>>()` works; `try_for_each` is the same thing spelled as a loop. Collecting all errors can't short-circuit by definition. Syntax to remember: `collect::<Result<Vec<_>, _>>()`, `sum::<Result<i64, _>>()`, `collect::<Option<Vec<_>>>()`, `partition(Result::is_ok)`, `results.into_iter().flatten()` (the `Ok` values), `filter_map(Result::err)`."
 time = "O(n)"
 space = "O(n) for the Vec results, O(1) for sum_all and validate"
+
+[perf]
+count_allocs = true

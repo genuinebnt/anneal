@@ -4,10 +4,10 @@
 
 **Pieces.** Any strict prefix of an acceptable request is `Incomplete`. Once some bytes are `Bad`, every longer buffer starting with them is `Bad` with the same error. `expect_continue` is true only when the head is complete, it has `Expect: 100-continue` (any case) and the body is not all there.
 
-**Limits** (`Limits`; reaching one is fine, passing it is not), enforced even when the end has not arrived:
+**Limits** (`Limits`; reaching one is fine, passing it is not). The request line and head size are enforced even when the end has not arrived; the header count and a `Content-Length` may wait until the head is complete:
 - request line, without CRLF: `max_request_line`, else `UriTooLong`;
 - the whole head including the blank line: `max_header_bytes`, else `HeaderTooLarge`; also more than `max_headers` header lines;
-- body: `max_body`, else `BodyTooLarge`, as soon as its size is announced. A length too large to fit a number is also `BodyTooLarge`.
+- body: `max_body`, else `BodyTooLarge`, as soon as its size is announced (for a chunk, before its data arrives). A length too large to fit a number is also `BodyTooLarge`.
 
 **Strictness** (all `BadRequest`): a header line starting with a space or tab; a `Content-Length` that is not only ASCII digits; two `Content-Length` headers that differ (equal ones are fine); more than one `Transfer-Encoding`, one that is not exactly `chunked` (any case), one on HTTP/1.0, or one together with `Content-Length`.
 

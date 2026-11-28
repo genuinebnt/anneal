@@ -13,6 +13,7 @@ Write `interpret(program, fuel)`. It returns what was printed, and the runtime e
 - `+` adds two numbers or joins two strings. Otherwise: `Operands must be two numbers or two strings.`
 - `- * / % < <= > >=` need two numbers: `Operands must be numbers.`
 - `/` and `%` by zero are errors: `Division by zero.`
+- `%` is Rust's `%` on `f64`: the result has the sign of the left side, so `-7 % 3` is `-1`.
 - Prefix `-` needs a number: `Operand must be a number.` Prefix `!` gives a boolean.
 - `and` and `or` evaluate the right side only if needed, and give one of the two **operands**, not a boolean.
 - The operands of an operator are evaluated **left to right**, both before the operator checks them.

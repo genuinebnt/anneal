@@ -491,3 +491,30 @@ fn any_pile_of_tokens_ends_with_a_tree_or_with_mistakes() {
         }
     }
 }
+
+#[test]
+fn skipping_stops_before_return() {
+    // The broken `var` is skipped up to `return`, which starts a new statement.
+    let src = "fun f() { var = 1 return 2; } print(f);";
+    let (program, diags) = parse_tokens(scan(src).0);
+    let messages: Vec<String> = diags.iter().map(|d| d.short(src)).collect();
+    check!(
+        src,
+        (dump(&program), messages),
+        (
+            "(fun f () (return 2))\n(expr (call print f))".to_string(),
+            vec!["[line 1:15] Error at '=': Expect variable name.".to_string()]
+        )
+    );
+}
+
+#[test]
+fn more_than_256_is_still_one_mistake() {
+    let names: Vec<String> = (0..300).map(|i| format!("p{i}")).collect();
+    let params = format!("fun f({}) {{}}", names.join(","));
+    let got = parse(&params).map(|_| ()).map_err(|e| e.len());
+    check!("300 parameters", got, Err(1));
+    let args = format!("f({});", names.join(","));
+    let got = parse(&args).map(|_| ()).map_err(|e| e.len());
+    check!("300 arguments", got, Err(1));
+}

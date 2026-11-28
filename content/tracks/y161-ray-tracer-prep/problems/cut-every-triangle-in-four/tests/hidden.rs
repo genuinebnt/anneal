@@ -218,3 +218,17 @@ fn unused_points_are_left_alone() {
         true
     );
 }
+
+#[test]
+fn the_very_last_number_is_used() {
+    // The three new points get the numbers usize::MAX - 2, usize::MAX - 1 and usize::MAX. All of them fit.
+    let got = cut_in_four(usize::MAX - 2, &[[0, 1, 2]]);
+    check!(
+        "three new points, the last one numbered usize::MAX",
+        got.as_ref().map(|c| (
+            c.halfway.len(),
+            c.triangles.iter().flatten().copied().max()
+        )),
+        Some((3, Some(usize::MAX)))
+    );
+}

@@ -640,7 +640,10 @@ impl Drop for Counter {
 OH_STARTER = OH_TYPES + """
 /// Creates a counter named `name` (a C string), starting at 0. A null `name` means the default name "counter".
 /// Returns null if the name is not valid UTF-8. The caller owns the result and must pass it to `counter_free`.
-pub extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
+///
+/// # Safety
+/// `name` is null or points to a NUL-terminated string that stays valid for the call.
+pub unsafe extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
     todo!()
 }
 
@@ -681,7 +684,9 @@ pub unsafe extern "C" fn counter_free(c: *mut Counter) {
 """
 
 OH = OH_TYPES + """
-pub extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
+/// # Safety
+/// `name` is null or points to a NUL-terminated string that stays valid for the call.
+pub unsafe extern "C" fn counter_new(name: *const c_char) -> *mut Counter {
     let name = if name.is_null() {
         "counter".to_string()
     } else {
@@ -754,6 +759,9 @@ P.append(dict(
 
         Every function must tolerate null handles (returning `ERR_NULL`) instead of crashing. A `drops()` counter is provided so the
         tests can check that every handle is dropped exactly once.
+
+        `counter_new` is an `unsafe fn` like the others: it reads through a pointer that C hands it, and safe Rust could pass it
+        a dangling one. (Clippy's `not_unsafe_ptr_arg_deref` rejects a safe `fn` that does this.)
     """,
     starter=OH_STARTER,
     solution=OH,
@@ -768,7 +776,7 @@ P.append(dict(
         T("truncation_is_snprintf_style", "cap 4 for a 5-byte name", "unsafe { let name = std::ffi::CString::new(\"hello\").unwrap(); let c = counter_new(name.as_ptr()); let mut buf = [0x7Fu8; 8]; let n = counter_name(c, buf.as_mut_ptr() as *mut std::ffi::c_char, 4); counter_free(c); (n, buf.to_vec()) }", "(5, vec![b'h', b'e', b'l', 0, 0x7F, 0x7F, 0x7F, 0x7F])"),
         T("capacity_zero_writes_nothing", "size query", "unsafe { let name = std::ffi::CString::new(\"hello\").unwrap(); let c = counter_new(name.as_ptr()); let mut buf = [0x7Fu8; 4]; let n = counter_name(c, buf.as_mut_ptr() as *mut std::ffi::c_char, 0); let m = counter_name(c, std::ptr::null_mut(), 0); counter_free(c); (n, m, buf.to_vec()) }", "(5, 5, vec![0x7F; 4])"),
         T("exact_fit_and_one_short", "cap = len + 1 and cap = len", "unsafe { let name = std::ffi::CString::new(\"abc\").unwrap(); let c = counter_new(name.as_ptr()); let mut a = [0x7Fu8; 4]; let mut b = [0x7Fu8; 4]; counter_name(c, a.as_mut_ptr() as *mut std::ffi::c_char, 4); counter_name(c, b.as_mut_ptr() as *mut std::ffi::c_char, 3); counter_free(c); (a.to_vec(), b.to_vec()) }", "(vec![b'a', b'b', b'c', 0], vec![b'a', b'b', 0, 0x7F])"),
-        T("invalid_utf8_name_gives_null", "0xFF is not UTF-8", "{ let name = std::ffi::CString::new(vec![0xFFu8, b'x']).unwrap(); counter_new(name.as_ptr()).is_null() }", "true"),
+        T("invalid_utf8_name_gives_null", "0xFF is not UTF-8", "{ let name = std::ffi::CString::new(vec![0xFFu8, b'x']).unwrap(); unsafe { counter_new(name.as_ptr()) }.is_null() }", "true"),
         T("unicode_names_survive", "multi-byte name", "unsafe { let name = std::ffi::CString::new(\"caf\\u{e9}\").unwrap(); let c = counter_new(name.as_ptr()); let mut buf = [0u8; 16]; let n = counter_name(c, buf.as_mut_ptr() as *mut std::ffi::c_char, buf.len()); counter_free(c); (n, buf[..6].to_vec()) }", "(5, \"caf\\u{e9}\\0\".as_bytes().to_vec())"),
         T("negative_overflow_too", "i64::MIN - 1", "unsafe { let c = counter_new(std::ptr::null()); counter_add(c, i64::MIN); let st = counter_add(c, -1); let mut out = 0i64; counter_get(c, &mut out); counter_free(c); (st, out) }", "(ERR_OVERFLOW, i64::MIN)"),
         T("null_out_pointer", "get with nowhere to write", "unsafe { let c = counter_new(std::ptr::null()); let st = counter_get(c, std::ptr::null_mut()); counter_free(c); st }", "ERR_NULL"),

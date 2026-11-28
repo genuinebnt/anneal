@@ -8,7 +8,7 @@ status = "ready"
 tags = ["enum", "borrowing", "impl blocks"]
 teaches = [
   "`as_ref` / `as_mut` turn `&MyOption<T>` into `MyOption<&T>` by matching on a reference.",
-  "`get_or_insert_with` must fill the slot first and borrow second, or the borrow checker objects.",
+  "`get_or_insert_with` fills the slot first and borrows second. Returning early from `if let Some(v) = self.as_mut()` and then assigning is rejected (E0506), although it is sound.",
   "`flatten` and `copied` exist only for some `T`, so they live in `impl` blocks for `MyOption<MyOption<T>>` and `MyOption<&T>`.",
 ]
 follow_up = "Why does std's `get_or_insert_with` use `unreachable_unchecked` (or an equivalent) for the `None` arm, and is `unreachable!()` good enough here?"
@@ -27,6 +27,6 @@ kind = "edge case"
 text = "`insert` always overwrites; only `get_or_insert_with` keeps an existing value. `inspect` hands the closure a reference and returns `self` unchanged."
 
 [solution]
-explanation = "`as_ref` and `as_mut` are why most combinators can take `self` by value: borrow first, then consume the borrowed option. `get_or_insert_with` fills the slot before borrowing it, because returning a borrow from one arm while assigning in the other is a case today's borrow checker rejects. API reminder: `insert(v)` overwrites, `get_or_insert(v)` / `get_or_insert_with(f)` keep what's there; `copied()` / `cloned()` turn `Option<&T>` into `Option<T>`; `flatten()` removes one level of `Option<Option<T>>`; `inspect(|v| log(v))` peeks without consuming (`Result` has `inspect` and `inspect_err`)."
+explanation = "`as_ref` and `as_mut` are why most combinators can take `self` by value: borrow first, then consume the borrowed option. `get_or_insert_with` fills the slot before borrowing it. The other order, returning early from `if let MyOption::Some(v) = self.as_mut()` and assigning after it, is sound but today's borrow checker rejects it (E0506). One `match self` that assigns inside the `None` arm is accepted. API reminder: `insert(v)` overwrites, `get_or_insert(v)` / `get_or_insert_with(f)` keep what's there; `copied()` / `cloned()` turn `Option<&T>` into `Option<T>`; `flatten()` removes one level of `Option<Option<T>>`; `inspect(|v| log(v))` peeks without consuming (`Result` has `inspect` and `inspect_err`)."
 time = "O(1) each"
 space = "O(1)"

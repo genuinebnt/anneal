@@ -24,6 +24,6 @@ The `Expr` type in the starter describes each kind of node. A value is a **numbe
 | `NotANumber` | a function where a number is needed: `Add`, `Less`, the test of `If`, or the final result. `Add` and `Less` evaluate **both** operands before checking either |
 | `NotAFunction` | calling a number. Checked after all arguments have been evaluated |
 | `WrongCount` | the wrong number of arguments; checked after `NotAFunction` |
-| `TooDeep` | a call that would be the 201st active at once (`MAX_CALLS` is 200) |
+| `TooDeep` | a call that would be the 201st active at once (`MAX_CALLS` is 200); checked after `WrongCount` |
 
 `Add` wraps on overflow. The tests run `run` on a thread with a 64 MB stack.

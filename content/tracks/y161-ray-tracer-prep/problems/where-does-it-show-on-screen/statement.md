@@ -22,4 +22,4 @@ Also return `None` when the viewer cannot see:
 - the sine of the angle between `up` and the view is `1e-9` or less;
 - a number is NaN.
 
-Tests allow an error of `1e-6` pixels.
+Tests allow an error of `1e-7` in each of `across`, `down` and `depth`.

@@ -149,7 +149,7 @@ stage = "data"
 status = "existing"
 minutes = 30
 blurb = "Ask an ordered map for a stretch of its keys (a shorter part than usual)"
-new_idea = "BTreeMap::range with inclusive and exclusive bounds"
+new_idea = "BTreeMap::range over an inclusive range, and the panic on inverted bounds"
 reuses = "nothing"
 required = []
 helpful = []
@@ -201,7 +201,7 @@ new_idea = "One waiting record in several indexes, removed through one door"
 reuses = "an ordered map as in part 7"
 required = []
 helpful = [
-    { id = "s4-btreemap-ranges", why = "first and last of an ordered map", reveals_method = false, hidden = true },
+    { id = "s4-btreemap-ranges", why = "walking an ordered map in key order; its follow-up asks for the last key at or before a value", reveals_method = false, hidden = true },
 ]
 used_again = ["y32-blocking-pops"]
 real_uses = "Blocking queue pops, long polling, lock wait queues, connection pools."
@@ -439,7 +439,7 @@ step = 2
 id = "y32-values-and-commands"
 title = "Values and commands"
 minutes = 120
-blurb = "Run commands on keys that hold five kinds of thing"
+blurb = "Run commands on keys that hold four kinds of thing"
 new_idea = "One keyspace of typed values, with one door for the wrong kind"
 prepared_by = ["s4-btreemap-ranges"]
 required = ["y32-speak-the-protocol"]
@@ -673,6 +673,7 @@ group = "Keyspace"
 concept = "BTreeMap::range with Bound, to continue after a key"
 parts = ["s4-btreemap-ranges"]
 steps = [4]
+note = "s4-btreemap-ranges only uses an inclusive range; Bound::Excluded is new in step 4."
 
 [[readiness]]
 group = "Keyspace"

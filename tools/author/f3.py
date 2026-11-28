@@ -454,6 +454,9 @@ impl<T> Arena<T> {
         Arena { chunks: RefCell::new(Vec::new()) }
     }
 
+    // `&self` in, `&mut T` out is what clippy's `mut_from_ref` (an error) flags, because it is usually a bug. Here it is
+    // the point: each call hands out a different value, so no two `&mut` alias. `typed_arena` and `bumpalo` do the same.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc(&self, value: T) -> &mut T {
         let mut chunks = self.chunks.borrow_mut();
         let full = match chunks.last() {
@@ -465,11 +468,13 @@ impl<T> Arena<T> {
             chunks.push(Vec::with_capacity(cap));
         }
         let chunk = chunks.last_mut().unwrap();
+        let i = chunk.len();
         chunk.push(value);
-        let ptr: *mut T = chunk.last_mut().unwrap();
-        // SAFETY: the chunk's buffer never reallocates (we only push while len < capacity) and is only freed when the
-        // arena drops, which the returned lifetime (tied to `&self`) prevents from happening first.
-        unsafe { &mut *ptr }
+        // SAFETY: slot `i` holds the value just pushed. The chunk's buffer never reallocates (we only push while
+        // len < capacity) and is only freed when the arena drops, which the returned lifetime (tied to `&self`)
+        // prevents from happening first. `as_mut_ptr` reaches the slot without a `&mut [T]` over the whole chunk:
+        // `chunk.last_mut()` would make one, and that unique borrow invalidates every reference handed out before.
+        unsafe { &mut *chunk.as_mut_ptr().add(i) }
     }
 
     /// Values allocated so far.
@@ -501,6 +506,9 @@ impl<T> Arena<T> {
         todo!()
     }
 
+    // Clippy's `mut_from_ref` (an error) flags `&self` in, `&mut T` out, because that is usually a bug. Here each call
+    // returns a different value, so no two `&mut` alias: that is why the lint is allowed.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc(&self, value: T) -> &mut T {
         todo!()
     }
@@ -535,7 +543,11 @@ P.append(dict(
         into the last chunk while it has room, else start a new chunk with **double** the previous capacity (the first holds 4).
         `len` counts values, `chunk_count` the chunks. Dropping the arena drops every value exactly once and not before.
 
-        Write the `unsafe` block with a `// SAFETY:` comment that states the invariant it relies on.
+        Write the `unsafe` block with a `// SAFETY:` comment that states the invariant it relies on. The starter allows
+        clippy's `mut_from_ref` on `alloc`: `&self` in and `&mut T` out is usually a bug, and here it is the whole point.
+
+        The tests cannot see every aliasing mistake: a reference can be invalid under Rust's rules and still read the right
+        value on real hardware. Run your solution under Miri (`cargo +nightly miri test`) as well.
     """,
     starter=ARENA_STARTER,
     solution=ARENA,
@@ -609,12 +621,12 @@ P.append(dict(
         """,
     ],
     wrong=dict(
-        leaks_values=sub(ARENA, "let ptr: *mut T = chunk.last_mut().unwrap();", "let ptr: *mut T = Box::leak(Box::new(chunk.pop().unwrap()));\n        chunk.reserve(0);\n        let _ = &chunk;"),
+        leaks_values=sub(ARENA, "        unsafe { &mut *chunk.as_mut_ptr().add(i) }", "        let _ = i;\n        Box::leak(Box::new(chunk.pop().unwrap()))"),
         fixed_size_chunks=sub(ARENA, "chunks.last().map_or(4, |c| c.capacity() * 2)", "4"),
         len_counts_chunks=sub(ARENA, "self.chunks.borrow().iter().map(|c| c.len()).sum()", "self.chunks.borrow().len()"),
     ),
     hints=[("approach", "`RefCell<Vec<Vec<T>>>`. To allocate: if the last chunk is full (or there is none) push a `Vec::with_capacity(previous * 2)` (4 the first time); then `push` the value into the last chunk and take a raw pointer to it."),
-           ("rust", "`let ptr: *mut T = chunk.last_mut().unwrap();` then `unsafe { &mut *ptr }` detaches the reference from the `RefCell` borrow. It is sound because pushing into a chunk with spare capacity never reallocates, and the outer `Vec<Vec<T>>` only moves the chunk headers, not their heap buffers."),
+           ("rust", "Remember `i = chunk.len()`, push, then `unsafe { &mut *chunk.as_mut_ptr().add(i) }` detaches the reference from the `RefCell` borrow. It is sound because pushing into a chunk with spare capacity never reallocates, and the outer `Vec<Vec<T>>` only moves the chunk headers, not their heap buffers. Do not take the pointer from `chunk.last_mut()`: that borrows the whole chunk uniquely and invalidates every reference handed out before (Miri reports it)."),
            ("edge", "Do not implement `Drop` yourself: the field's own drop glue drops every value once, which keeps the cyclic-graph test compiling (a `Drop` impl would demand `T` outlive the arena). Compare `len() == capacity()` to decide when a chunk is full, never `len() >= some constant`.")],
     notes=("`typed-arena` is exactly this (plus `iter_mut` and `alloc_extend`); `bumpalo` generalises it to mixed types by handing out bytes from one bump pointer. Arenas win when many objects share one lifetime: an AST per compilation, a request's scratch data, a graph. Allocation is a pointer bump, deallocation is free, locality is good, and `&'a` references make cyclic structures expressible in safe code.", "O(1) amortised per alloc", "O(n) plus up to 2x slack in the last chunk"),
     follow_up="1) Why must `alloc` take `&self`, and what stops you from calling `arena.alloc(...)` while holding the `RefCell` borrow on re-entry (e.g. a `T::clone` that allocates)? 2) Show the use-after-free that a single `Vec<T>` would cause with a test under Miri. 3) `typed-arena` needs a nightly `#[may_dangle]` to allow cycles with `Drop` types: explain dropck. 4) Make a `Bump` that allocates mixed types from one buffer with correct alignment (`Layout::pad_to_align`). 5) Why is `Arena<T>` not `Sync`, and what would a sharded per-thread arena look like?",
@@ -753,7 +765,7 @@ P.append(dict(
         T("cascading_merge", "merge climbs several orders", "{ let mut b = Buddy::new(4); let v: Vec<usize> = (0..16).map(|_| b.alloc(1).unwrap()).collect(); for o in v { b.free(o, 1); } (b.largest_free(), b.alloc(16)) }", "(16, Some(0))"),
         T("fragmentation_is_visible", "free every other unit", "{ let mut b = Buddy::new(3); let v: Vec<usize> = (0..8).map(|_| b.alloc(1).unwrap()).collect(); for o in v.iter().step_by(2) { b.free(*o, 1); } (b.free_units(), b.largest_free(), b.alloc(2)) }", "(4, 1, None)"),
         T("lowest_address_first", "two free blocks of the same order", "{ let mut b = Buddy::new(3); let v: Vec<usize> = (0..4).map(|_| b.alloc(2).unwrap()).collect(); b.free(v[2], 2); b.free(v[0], 2); (b.alloc(2), b.alloc(2), b.alloc(2)) }", "(Some(0), Some(4), None)"),
-        T("alignment", "an order-k block is k-aligned", "{ let mut b = Buddy::new(6); let a = b.alloc(1).unwrap(); let c = b.alloc(8).unwrap(); let d = b.alloc(4).unwrap(); let e = b.alloc(16).unwrap(); (a % 1, c % 8, d % 4, e % 16) }", "(0, 0, 0, 0)"),
+        T("alignment", "an order-k block is 2^k-aligned (and the first block is the lowest, 0)", "{ let mut b = Buddy::new(6); let a = b.alloc(1).unwrap(); let c = b.alloc(8).unwrap(); let d = b.alloc(4).unwrap(); let e = b.alloc(16).unwrap(); (a, c % 8, d % 4, e % 16) }", "(0, 0, 0, 0)"),
         """
         #[test]
         fn random_vs_a_unit_bitmap() {

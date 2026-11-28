@@ -1152,7 +1152,7 @@ P.append(dict(
 
 P.append(dict(
     slug="predict-reallocations", title="Predict the allocation count", level="medium", stage="understand-it", tags=["capacity", "growth"],
-    teaches=["`Vec` grows geometrically: amortised O(1) push.", "Its first allocation holds 4 small elements, not 1."],
+    teaches=["`Vec` grows geometrically: amortised O(1) push.", "Its first allocation holds 4 elements of a type like `u32` (8 for 1-byte types), not 1."],
     statement="""
         Don't run anything yet. Pushing the numbers `0..100` one at a time into `Vec::<u32>::new()`:
         how many times does the capacity change, and what is it at the end? Fill in the constants.
@@ -1287,7 +1287,7 @@ P.append(dict(
         """,
     ),
     hints=[("rust", "Capacity doubles when full. What's the first non-zero capacity for a small element type?")],
-    notes=("std's minimum non-zero capacity is 4 for elements up to 1 KiB, then it doubles, so 100 pushes cost 6 allocations and copy fewer than 128 elements in total.", "O(1) amortised per push", "O(n)"),
+    notes=("std's minimum non-zero capacity is 8 for 1-byte elements, 4 for elements up to 1 KiB (like `u32`) and 1 above that; then it doubles, so 100 pushes cost 6 allocations and copy fewer than 128 elements in total.", "O(1) amortised per push", "O(n)"),
     follow_up="Why does doubling give amortised O(1) push, while growing by a constant doesn't?",
     related=["Y1", "Y4"],
 ))
@@ -1523,7 +1523,7 @@ P.append(dict(
 P.append(dict(
     slug="split-at-mut", title="split_at_mut for two halves", level="medium", stage="understand-it", tags=["split_at_mut", "E0499"],
     teaches=["`split_at_mut` gives two non-overlapping `&mut` into one slice.", "Why `&mut v[..m]` and `&mut v[m..]` at once doesn't compile."],
-    statement="Add each value in the first half of `v` to the matching value in the second half: `v[mid + i] += v[i]` for `i < len / 2`.",
+    statement="Add each value in the first half of `v` to the matching value in the second half: `v[mid + i] += v[i]` for `i < mid`, where `mid = len / 2`. With an odd length, the last value is untouched.",
     examples=[("v = [1, 2, 10, 20]", "[1, 2, 11, 22]")],
     starter="""
         pub fn add_halves(v: &mut [i32]) {
@@ -2062,10 +2062,152 @@ P.append(dict(
             check!("push 0..200000, then pop everything", (sum, v.len(), v.capacity()), (19_999_900_000, 0, 262_144));
         }
         """,
+        """
+            /// Counts the heap bytes this thread holds, so a test can see whether `Drop` freed the buffer.
+            mod live_bytes {
+                use std::alloc::{GlobalAlloc, Layout, System};
+                use std::cell::Cell;
+
+                thread_local! {
+                    static LIVE: Cell<i64> = const { Cell::new(0) };
+                }
+
+                fn add(n: i64) {
+                    let _ = LIVE.try_with(|c| c.set(c.get() + n));
+                }
+
+                pub fn now() -> i64 {
+                    LIVE.with(|c| c.get())
+                }
+
+                struct Tracking;
+
+                unsafe impl GlobalAlloc for Tracking {
+                    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+                        add(layout.size() as i64);
+                        unsafe { System.alloc(layout) }
+                    }
+                    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+                        add(-(layout.size() as i64));
+                        unsafe { System.dealloc(ptr, layout) }
+                    }
+                    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+                        add(new_size as i64 - layout.size() as i64);
+                        unsafe { System.realloc(ptr, layout, new_size) }
+                    }
+                }
+
+                #[global_allocator]
+                static GLOBAL: Tracking = Tracking;
+            }
+
+            #[test]
+            fn drop_frees_the_buffer() {
+                let before = live_bytes::now();
+                {
+                    let mut v = MiniVec::new();
+                    for i in 0..100u64 {
+                        v.push(i);
+                    }
+                }
+                check!("push 0..100 into a MiniVec<u64>, then drop it: heap bytes still held", live_bytes::now() - before, 0);
+            }
+        """,
     ],
     wrong=dict(
         grows_by_four=sub(MINIVEC, ("self.cap * 2", "self.cap + 4")),
         leaks_elements=sub(MINIVEC, ("        while self.pop().is_some() {}\n", "")),
+        leaks_buffer="""
+            use std::alloc::{self, Layout};
+            use std::marker::PhantomData;
+            use std::ptr::{self, NonNull};
+
+            /// A growable array on a raw allocation. Zero-sized `T` isn't supported.
+            pub struct MiniVec<T> {
+                ptr: NonNull<T>,
+                cap: usize,
+                len: usize,
+                _owns: PhantomData<T>,
+            }
+
+            impl<T> MiniVec<T> {
+                pub fn new() -> Self {
+                    assert!(
+                        std::mem::size_of::<T>() != 0,
+                        "zero-sized types aren't supported"
+                    );
+                    MiniVec {
+                        ptr: NonNull::dangling(),
+                        cap: 0,
+                        len: 0,
+                        _owns: PhantomData,
+                    }
+                }
+
+                pub fn len(&self) -> usize {
+                    self.len
+                }
+
+                pub fn is_empty(&self) -> bool {
+                    self.len == 0
+                }
+
+                pub fn capacity(&self) -> usize {
+                    self.cap
+                }
+
+                pub fn push(&mut self, value: T) {
+                    if self.len == self.cap {
+                        self.grow();
+                    }
+                    // SAFETY: len < cap, so the slot is inside the allocation and not yet initialised.
+                    unsafe { ptr::write(self.ptr.as_ptr().add(self.len), value) };
+                    self.len += 1;
+                }
+
+                pub fn pop(&mut self) -> Option<T> {
+                    if self.len == 0 {
+                        return None;
+                    }
+                    self.len -= 1;
+                    // SAFETY: the slot was initialised and is now past len, so it's read exactly once.
+                    Some(unsafe { ptr::read(self.ptr.as_ptr().add(self.len)) })
+                }
+
+                pub fn get(&self, i: usize) -> Option<&T> {
+                    // SAFETY: i < len, so the slot is initialised and inside the allocation.
+                    (i < self.len).then(|| unsafe { &*self.ptr.as_ptr().add(i) })
+                }
+
+                fn grow(&mut self) {
+                    let new_cap = if self.cap == 0 { 4 } else { self.cap * 2 };
+                    let new_layout = Layout::array::<T>(new_cap).expect("capacity overflow");
+                    let raw = if self.cap == 0 {
+                        // SAFETY: new_layout has a non-zero size because T isn't zero-sized.
+                        unsafe { alloc::alloc(new_layout) }
+                    } else {
+                        let old_layout = Layout::array::<T>(self.cap).expect("existing layout");
+                        // SAFETY: ptr was allocated with old_layout by this allocator.
+                        unsafe { alloc::realloc(self.ptr.as_ptr().cast(), old_layout, new_layout.size()) }
+                    };
+                    self.ptr =
+                        NonNull::new(raw.cast()).unwrap_or_else(|| alloc::handle_alloc_error(new_layout));
+                    self.cap = new_cap;
+                }
+            }
+
+            impl<T> Default for MiniVec<T> {
+                fn default() -> Self {
+                    Self::new()
+                }
+            }
+
+            impl<T> Drop for MiniVec<T> {
+                fn drop(&mut self) {
+                    while self.pop().is_some() {}
+                }
+            }
+        """,
     ),
     hints=[("approach", "`new` uses `NonNull::dangling()` and capacity 0; allocate on the first push."),
            ("rust", "`Layout::array::<T>(cap)` describes the buffer; `alloc`, `realloc` and `dealloc` must all get the same layout for the same block."),

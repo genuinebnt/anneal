@@ -223,3 +223,14 @@ fn random_chunkings_of_a_body_decode_to_the_same_bytes() {
         assert!(matches!(parse(&bytes[..cut]), Parsed::Incomplete { .. }), "cut at {cut}");
     }
 }
+
+#[test]
+fn a_whole_trailer_section_obeys_the_limit_too() {
+    let lim = small();
+    let head = "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n";
+    // one trailer line and the empty line: exactly 200 bytes together
+    let at = format!("{head}T: {}\r\n\r\n", "x".repeat(200 - 7));
+    every_prefix_waits(at.as_bytes(), &lim);
+    let over = format!("{head}T: {}\r\n\r\n", "x".repeat(200 - 6));
+    check!("a complete trailer section of 201 bytes, limit 200", parse_request(over.as_bytes(), &lim), Parsed::Bad(HttpError::HeaderTooLarge));
+}

@@ -181,3 +181,10 @@ fn random_patterns_agree_with_the_tree() {
     }
     check!(format!("you may give up only rarely: {compared} of 24000 answered, {yes} matches"), compared > 23_000 && yes > 500, true);
 }
+
+#[test]
+fn the_question_mark_tries_the_item_first() {
+    // Taking the `x` leads straight to `bb*`. Skipping it first sends `(b*)*c` over thirty b's, which never ends in time.
+    let text = format!("x{}", "b".repeat(30));
+    check!("x?(x(b*)*c|bb*) on x and 30 b's", bm("x?(x(b*)*c|bb*)", &text, 1_000_000), Ok(true));
+}

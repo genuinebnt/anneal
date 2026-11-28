@@ -174,3 +174,12 @@ fn random_appends_match_a_plain_list() {
         }
     }
 }
+
+#[test]
+fn a_line_with_wrong_places_and_a_bad_payload_is_out_of_sequence() {
+    let mut store = MemStore::new();
+    store.admit(vec![placed(0, "a", 1, opened_json())]).unwrap();
+    check!("wrong position, unreadable", store.admit(vec![placed(5, "a", 2, json!(7))]), Err(BadBatch::OutOfSequence { pos: 5 }));
+    check!("wrong version, unreadable", store.admit(vec![placed(1, "a", 9, json!(7))]), Err(BadBatch::OutOfSequence { pos: 1 }));
+    check!("unchanged", store.read_all(0).len(), 1);
+}

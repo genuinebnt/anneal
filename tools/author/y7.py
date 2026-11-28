@@ -299,8 +299,15 @@ P.append(dict(
         T("append_after_a_truncation_continues", "term 2 suffix of three", "{ let mut n = " + AN(1, "None", [1, 1, 1, 1], 0) + "; let r = n.handle_append(&" + AR(2, 1, 1, [2, 2, 2], 0) + "); (r.match_index, " + terms_of("n") + ") }", "(4, vec![1, 2, 2, 2])"),
         T("match_index_is_what_the_request_covered", "the follower has more", "{ let mut n = " + AN(1, "None", [1, 1, 1, 1], 0) + "; n.handle_append(&" + AR(1, 1, 1, [1], 0) + ").match_index }", "2"),
         T("resending_the_same_request_is_idempotent", "twice, same result", "{ let mut n = Node::default(); let q = " + AR(1, 0, 0, [1, 2], 2) + "; let a = n.handle_append(&q); let b = n.handle_append(&q); (a == b, " + terms_of("n") + ", n.commit_index) }", "(true, vec![1, 2], 2)"),
+        """
+        #[test]
+        fn a_failed_check_still_adopts_a_newer_term() {
+            check!(r#"term 3 leader, prev entry missing, we voted in term 2"#, { let mut n = Node { term: 2, voted_for: Some(4), log: vec![Entry { term: 1, cmd: 1 }], commit_index: 0 }; let r = n.handle_append(&AppendRequest { term: 3, leader: 1, prev_log_index: 4, prev_log_term: 3, entries: vec![Entry { term: 3, cmd: 100 }], leader_commit: 0 }); (r, n.term, n.voted_for, n.log.len()) }, (AppendReply { term: 3, success: false, match_index: 0 }, 3, None, 1));
+        }
+        """,
     ],
     wrong=dict(
+        a_failed_check_keeps_the_old_term=sub(sub(APP, "        if req.term > self.term {\n            self.term = req.term;\n            self.voted_for = None;\n        }\n        let p = req.prev_log_index;\n", "        let p = req.prev_log_index;\n"), "        for (k, e) in req.entries.iter().enumerate() {\n", "        if req.term > self.term {\n            self.term = req.term;\n            self.voted_for = None;\n        }\n        for (k, e) in req.entries.iter().enumerate() {\n"),
         stale_term_accepted=sub(APP, "        if req.term < self.term {\n            return AppendReply { term: self.term, success: false, match_index: 0 };\n        }\n", ""),
         skips_the_prev_term_check=sub(APP, "Some(e) if e.term == req.prev_log_term => {}", "Some(_) => {}"),
         truncates_on_every_append=sub(APP, """        for (k, e) in req.entries.iter().enumerate() {

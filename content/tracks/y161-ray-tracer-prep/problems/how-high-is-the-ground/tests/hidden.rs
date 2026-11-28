@@ -224,3 +224,22 @@ fn rolling_hills() {
         }
     }
 }
+
+#[test]
+fn nearly_in_a_line_is_still_flat() {
+    // Corners on one straight line, written in decimals. Rounding leaves a tiny area, far below the limit.
+    for corners in [
+        [(0.1, 0.3), (0.2, 0.6), (0.3, 0.9)],
+        [(0.1, 0.7), (0.3, 2.1), (0.7, 4.9)],
+        [(1.1, 3.3), (2.2, 6.6), (3.3, 9.9)],
+    ] {
+        let p: Vec<[f64; 3]> = corners.iter().map(|&(x, z)| [x, 1.0, z]).collect();
+        for &(x, z) in &corners {
+            expect(
+                &format!("{corners:?} at ({x}, {z})"),
+                height_at(&p, &[[0, 1, 2]], x, z),
+                None,
+            );
+        }
+    }
+}

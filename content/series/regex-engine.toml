@@ -77,7 +77,7 @@ helpful = [
 used_again = ["y16-sets-and-escapes"]
 real_uses = "tr, regex classes, Unicode tables, firewall port lists."
 cookbook = [
-    { level = "similar", page = "regex-nfa-engine", note = "Its class parser and Class type. It has bugs with escapes inside brackets.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+    { level = "similar", page = "regex-nfa-engine", note = "Its class parser and Class type, escapes inside brackets included.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
 ]
 
 [[part]]
@@ -208,7 +208,7 @@ new_idea = "Three levels of binding turned into a tree, with positioned errors a
 prepared_by = ["y15-expand-the-braces", "y15-print-it-so-it-reads-back"]
 required = []
 cookbook = [
-    { level = "similar", page = "regex-nfa-engine", note = "Its parser has no depth limit, so deep or long patterns overflow the stack.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+    { level = "similar", page = "regex-nfa-engine", note = "Its parser caps nesting at 250 levels. This step uses other limits: 100 open groups and 3 stacked quantifiers.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
 ]
 helpful = [
     { id = "y14-pratt-parser", why = "another way to handle operator strengths", reveals_method = false, hidden = true },
@@ -224,7 +224,7 @@ new_idea = "A second grammar inside brackets"
 prepared_by = ["y15-characters-in-a-few-keystrokes"]
 required = ["y16-read-a-pattern"]
 cookbook = [
-    { level = "similar", page = "regex-nfa-engine", note = "It reads \\s and \\t as the letters s and t, and shorthands inside brackets wrongly. Do not copy those parts.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+    { level = "similar", page = "regex-nfa-engine", note = "Nearly the same rules for escapes and sets. One difference: it has no \\r, so there `\\r` is an error.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
 ]
 
 [[capstone]]
@@ -289,7 +289,7 @@ new_idea = "Differential testing with generated patterns"
 prepared_by = ["y15-print-it-so-it-reads-back", "y5-catch-the-broken-queue"]
 required = ["y16-find-inside-a-text"]
 cookbook = [
-    { level = "similar", page = "regex-nfa-engine", note = "gen_regex and the comparison loop. Its generator makes no escapes, so it missed the file's escape bugs.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+    { level = "similar", page = "regex-nfa-engine", note = "gen_regex and the comparison loop. Its generator makes no escapes, so it missed the escape bugs the file used to have.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
 ]
 helpful = [
     { id = "y5-shrink-failing-input", why = "making a failing input small, once you have one", reveals_method = false, hidden = true },

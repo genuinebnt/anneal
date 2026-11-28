@@ -2197,7 +2197,7 @@ P.append(fix(
      }
      """],
     [("approach", "The compiler lists two reasons: a generic method (`put`) and a method returning `impl Trait` (`keys`). Both mean one method per concrete type, which a vtable can't hold."),
-     ("rust", "Take the value as `&dyn Display`, and return `Box<dyn Iterator<Item = &str> + '_>`. The `'_` ties the iterator to `&self`; in `Prefixed`, the closure borrows `self.prefix`, so it needs `move` to capture `self` by reference."),
+     ("rust", "Take the value as `&dyn Display`, and return `Box<dyn Iterator<Item = &str> + '_>`. The `'_` ties the iterator to `&self`. In `Prefixed`, the closure borrows `self.prefix` for as long as that `&self` lives, which the `'_` allows; with edition 2021 closure captures it compiles with or without `move`."),
      ("edge case", "`where Self: Sized` would make the trait compile, but then `put` and `keys` couldn't be called on `Box<dyn Store>` at all.")],
     ("""Every method of a dyn-compatible trait needs exactly one vtable entry. A generic method has one instantiation per type argument, and `-> impl Trait` in a trait (RPITIT) has one hidden type per impl, so neither fits. Type-erase them: generic arguments become `&dyn Trait`, returned `impl Trait` becomes `Box<dyn Trait + '_>`. The cost is a heap allocation per `keys` call and a vtable call per item.
 
@@ -2382,7 +2382,7 @@ P.append(fix(
      """],
     [("approach", "Split the trait: the object-safe methods that return `Box<dyn Shape>` (`clone_box`, `scaled_box`) go in a helper supertrait with one blanket impl for every `T: Shape + Clone + 'static`. Then `impl Clone for Box<dyn Shape>` calls `clone_box`."),
      ("rust", "`scaled` returns `Self`, so it needs `where Self: Sized`. Implementors may leave that clause off in their impls."),
-     ("edge case", "In `impl Clone for Box<dyn Shape>`, call `(**self).clone_box()`: on the Box itself, method lookup could pick `Box`'s own `clone` and recurse.")],
+     ("edge case", "In `impl Clone for Box<dyn Shape>`, call `clone_box` on the shape inside: `(**self).clone_box()`. Writing `self.clone()` there calls this same `clone` again and recurses for ever.")],
     ("""`Clone` returns `Self`, so it can't be called on `dyn Shape`, and a supertrait `Clone` makes the whole trait dyn-incompatible. The standard fix (what the `dyn-clone` crate does) is a helper trait with a `clone_box(&self) -> Box<dyn Shape>` method, implemented once by a blanket impl for every clonable shape, plus `impl Clone for Box<dyn Shape>`. Methods that return `Self` stay available on concrete types with `where Self: Sized`.
 
 Syntax: `trait Shape: DynShape { fn scaled(&self, k: f64) -> Self where Self: Sized; }` · `impl<T: Shape + Clone + 'static> DynShape for T { fn clone_box(&self) -> Box<dyn Shape> { Box::new(self.clone()) } }` · `impl Clone for Box<dyn Shape> { fn clone(&self) -> Self { (**self).clone_box() } }`.""", "O(n) to clone a scene", "O(n)"),
@@ -2520,7 +2520,7 @@ P.append(fix(
     [T("total_empty", "total(&[])", "total(&[])", "Vec2 { x: 0, y: 0 }"),
      T("add_assign", "p += (5, -5) twice", "p", "Vec2 { x: 11, y: -9 }", setup="let mut p = Vec2 { x: 1, y: 1 };\np += Vec2 { x: 5, y: -5 };\np += Vec2 { x: 5, y: -5 };"),
      T("perpendicular_dot", "(3, 4) * (-4, 3)", "Vec2 { x: 3, y: 4 } * Vec2 { x: -4, y: 3 }", "0"),
-     T("scale_by_zero", "0 * (7, 8)", "0 * Vec2 { x: 7, y: 8 }", "Vec2 { x: 0, y: 0 }"),
+     T("scale_by_zero", "0 * (7, 8)", "std::hint::black_box(0) * Vec2 { x: 7, y: 8 }", "Vec2 { x: 0, y: 0 }"),
      T("scale_by_negative", "(7, -8) * -2", "Vec2 { x: 7, y: -8 } * -2", "Vec2 { x: -14, y: 16 }"),
      T("double_negation", "-(-(5, 6))", "-(-Vec2 { x: 5, y: 6 })", "Vec2 { x: 5, y: 6 }"),
      T("walk_backwards", "walk [((2, 1), -3)]", "walk(&[(Vec2 { x: 2, y: 1 }, -3)])", "Vec2 { x: -6, y: -3 }"),
@@ -4061,6 +4061,527 @@ for p in P:
         p.pop("rules", None)
     if p.get("wrong") is None:
         p.pop("wrong", None)
+
+# Review of 2026-11-28 (group B). The folders were edited by hand; these lines bring the same edits
+# back so regenerating reproduces them. FORMATTED holds the starter and solution as rustfmt left them
+# (commit 37f80727) for the problems the review touched; the rest are the tests, wrong solutions and
+# [perf] keys the review added.
+FORMATTED = {
+    'fix-add-for-references': (
+        r'''
+use std::ops::{Add, AddAssign};
+
+/// Coefficients from the constant term up: Poly(vec![1, 0, 3]) is 1 + 3x².
+/// No trailing zeros: the zero polynomial is Poly(vec![]).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Poly(pub Vec<i64>);
+
+impl Add for Poly {
+    type Output = Poly;
+
+    fn add(self, rhs: Poly) -> Poly {
+        let (mut long, short) = if self.0.len() >= rhs.0.len() {
+            (self.0, rhs.0)
+        } else {
+            (rhs.0, self.0)
+        };
+        for (i, c) in short.into_iter().enumerate() {
+            long[i] += c;
+        }
+        while long.last() == Some(&0) {
+            long.pop();
+        }
+        Poly(long)
+    }
+}
+
+/// The sum of all the polynomials.
+pub fn sum_all(ps: &[Poly]) -> Poly {
+    ps.iter().fold(Poly(vec![]), |acc, p| acc + p)
+}
+''',
+        r'''
+use std::ops::{Add, AddAssign};
+
+/// Coefficients from the constant term up: Poly(vec![1, 0, 3]) is 1 + 3x².
+/// No trailing zeros: the zero polynomial is Poly(vec![]).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Poly(pub Vec<i64>);
+
+impl Add for Poly {
+    type Output = Poly;
+
+    fn add(self, rhs: Poly) -> Poly {
+        let (mut long, short) = if self.0.len() >= rhs.0.len() {
+            (self.0, rhs.0)
+        } else {
+            (rhs.0, self.0)
+        };
+        for (i, c) in short.into_iter().enumerate() {
+            long[i] += c;
+        }
+        while long.last() == Some(&0) {
+            long.pop();
+        }
+        Poly(long)
+    }
+}
+
+impl AddAssign<&Poly> for Poly {
+    fn add_assign(&mut self, rhs: &Poly) {
+        if self.0.len() < rhs.0.len() {
+            self.0.resize(rhs.0.len(), 0);
+        }
+        for (a, b) in self.0.iter_mut().zip(&rhs.0) {
+            *a += b;
+        }
+        while self.0.last() == Some(&0) {
+            self.0.pop();
+        }
+    }
+}
+
+/// Reuses the left side's buffer.
+impl Add<&Poly> for Poly {
+    type Output = Poly;
+
+    fn add(mut self, rhs: &Poly) -> Poly {
+        self += rhs;
+        self
+    }
+}
+
+impl Add<&Poly> for &Poly {
+    type Output = Poly;
+
+    fn add(self, rhs: &Poly) -> Poly {
+        Poly(Vec::with_capacity(self.0.len().max(rhs.0.len()))) + self + rhs
+    }
+}
+
+/// The sum of all the polynomials.
+pub fn sum_all(ps: &[Poly]) -> Poly {
+    ps.iter().fold(Poly(vec![]), |acc, p| acc + p)
+}
+''',
+    ),
+    'fix-generic-method-dyn': (
+        r'''
+use std::collections::BTreeMap;
+use std::fmt::Display;
+
+pub trait Store {
+    fn get(&self, key: &str) -> Option<String>;
+    /// Stores `value` formatted with Display.
+    fn put<V: Display>(&mut self, key: &str, value: V);
+    /// The keys in sorted order.
+    fn keys(&self) -> impl Iterator<Item = &str>;
+}
+
+#[derive(Default)]
+pub struct MemStore {
+    map: BTreeMap<String, String>,
+}
+
+impl Store for MemStore {
+    fn get(&self, key: &str) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    fn put<V: Display>(&mut self, key: &str, value: V) {
+        self.map.insert(key.to_string(), value.to_string());
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &str> {
+        self.map.keys().map(String::as_str)
+    }
+}
+
+/// Stores values uppercased.
+#[derive(Default)]
+pub struct UpperStore {
+    map: BTreeMap<String, String>,
+}
+
+impl Store for UpperStore {
+    fn get(&self, key: &str) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    fn put<V: Display>(&mut self, key: &str, value: V) {
+        self.map
+            .insert(key.to_string(), value.to_string().to_uppercase());
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &str> {
+        self.map.keys().map(String::as_str)
+    }
+}
+
+/// A view of `inner` under a key prefix: key "k" here is "<prefix>k" in `inner`.
+pub struct Prefixed {
+    pub prefix: String,
+    pub inner: Box<dyn Store>,
+}
+
+impl Store for Prefixed {
+    fn get(&self, key: &str) -> Option<String> {
+        self.inner.get(&format!("{}{}", self.prefix, key))
+    }
+
+    fn put<V: Display>(&mut self, key: &str, value: V) {
+        self.inner.put(&format!("{}{}", self.prefix, key), value);
+    }
+
+    /// Only the inner keys under the prefix, with the prefix removed.
+    fn keys(&self) -> impl Iterator<Item = &str> {
+        self.inner
+            .keys()
+            .filter_map(|k| k.strip_prefix(self.prefix.as_str()))
+    }
+}
+
+/// One of each basic store.
+pub fn all_stores() -> Vec<Box<dyn Store>> {
+    vec![
+        Box::new(MemStore::default()),
+        Box::new(UpperStore::default()),
+    ]
+}
+''',
+        r'''
+use std::collections::BTreeMap;
+use std::fmt::Display;
+
+pub trait Store {
+    fn get(&self, key: &str) -> Option<String>;
+    /// Stores `value` formatted with Display.
+    fn put(&mut self, key: &str, value: &dyn Display);
+    /// The keys in sorted order.
+    fn keys(&self) -> Box<dyn Iterator<Item = &str> + '_>;
+}
+
+#[derive(Default)]
+pub struct MemStore {
+    map: BTreeMap<String, String>,
+}
+
+impl Store for MemStore {
+    fn get(&self, key: &str) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    fn put(&mut self, key: &str, value: &dyn Display) {
+        self.map.insert(key.to_string(), value.to_string());
+    }
+
+    fn keys(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(self.map.keys().map(String::as_str))
+    }
+}
+
+/// Stores values uppercased.
+#[derive(Default)]
+pub struct UpperStore {
+    map: BTreeMap<String, String>,
+}
+
+impl Store for UpperStore {
+    fn get(&self, key: &str) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    fn put(&mut self, key: &str, value: &dyn Display) {
+        self.map
+            .insert(key.to_string(), value.to_string().to_uppercase());
+    }
+
+    fn keys(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(self.map.keys().map(String::as_str))
+    }
+}
+
+/// A view of `inner` under a key prefix: key "k" here is "<prefix>k" in `inner`.
+pub struct Prefixed {
+    pub prefix: String,
+    pub inner: Box<dyn Store>,
+}
+
+impl Store for Prefixed {
+    fn get(&self, key: &str) -> Option<String> {
+        self.inner.get(&format!("{}{}", self.prefix, key))
+    }
+
+    fn put(&mut self, key: &str, value: &dyn Display) {
+        self.inner.put(&format!("{}{}", self.prefix, key), value);
+    }
+
+    /// Only the inner keys under the prefix, with the prefix removed.
+    fn keys(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(
+            self.inner
+                .keys()
+                .filter_map(move |k| k.strip_prefix(self.prefix.as_str())),
+        )
+    }
+}
+
+/// One of each basic store.
+pub fn all_stores() -> Vec<Box<dyn Store>> {
+    vec![
+        Box::new(MemStore::default()),
+        Box::new(UpperStore::default()),
+    ]
+}
+''',
+    ),
+    'where-self-sized': (
+        r'''
+pub trait Shape: Clone {
+    fn area(&self) -> f64;
+    fn name(&self) -> String;
+
+    /// A copy scaled by `k` (every length times k).
+    fn scaled(&self, k: f64) -> Self;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Circle {
+    pub r: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rect {
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.r * self.r
+    }
+
+    fn name(&self) -> String {
+        format!("circle({})", self.r)
+    }
+
+    fn scaled(&self, k: f64) -> Self {
+        Circle { r: self.r * k }
+    }
+}
+
+impl Shape for Rect {
+    fn area(&self) -> f64 {
+        self.w * self.h
+    }
+
+    fn name(&self) -> String {
+        format!("rect({}x{})", self.w, self.h)
+    }
+
+    fn scaled(&self, k: f64) -> Self {
+        Rect {
+            w: self.w * k,
+            h: self.h * k,
+        }
+    }
+}
+
+/// A copy of the scene that later edits to `scene` don't affect.
+pub fn snapshot(scene: &Vec<Box<dyn Shape>>) -> Vec<Box<dyn Shape>> {
+    scene.clone()
+}
+
+/// Every shape scaled by `k`.
+pub fn scale_all(scene: &[Box<dyn Shape>], k: f64) -> Vec<Box<dyn Shape>> {
+    scene.iter().map(|s| s.scaled_box(k)).collect()
+}
+''',
+        r'''
+pub trait Shape: DynShape {
+    fn area(&self) -> f64;
+    fn name(&self) -> String;
+
+    /// A copy scaled by `k` (every length times k).
+    fn scaled(&self, k: f64) -> Self
+    where
+        Self: Sized;
+}
+
+/// The dyn-compatible half, written once for every `Clone` shape by the blanket impl below.
+pub trait DynShape {
+    fn clone_box(&self) -> Box<dyn Shape>;
+    fn scaled_box(&self, k: f64) -> Box<dyn Shape>;
+}
+
+impl<T: Shape + Clone + 'static> DynShape for T {
+    fn clone_box(&self) -> Box<dyn Shape> {
+        Box::new(self.clone())
+    }
+
+    fn scaled_box(&self, k: f64) -> Box<dyn Shape> {
+        Box::new(self.scaled(k))
+    }
+}
+
+impl Clone for Box<dyn Shape> {
+    fn clone(&self) -> Self {
+        (**self).clone_box()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Circle {
+    pub r: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rect {
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.r * self.r
+    }
+
+    fn name(&self) -> String {
+        format!("circle({})", self.r)
+    }
+
+    fn scaled(&self, k: f64) -> Self {
+        Circle { r: self.r * k }
+    }
+}
+
+impl Shape for Rect {
+    fn area(&self) -> f64 {
+        self.w * self.h
+    }
+
+    fn name(&self) -> String {
+        format!("rect({}x{})", self.w, self.h)
+    }
+
+    fn scaled(&self, k: f64) -> Self {
+        Rect {
+            w: self.w * k,
+            h: self.h * k,
+        }
+    }
+}
+
+/// A copy of the scene that later edits to `scene` don't affect.
+pub fn snapshot(scene: &Vec<Box<dyn Shape>>) -> Vec<Box<dyn Shape>> {
+    scene.clone()
+}
+
+/// Every shape scaled by `k`.
+pub fn scale_all(scene: &[Box<dyn Shape>], k: f64) -> Vec<Box<dyn Shape>> {
+    scene.iter().map(|s| s.scaled_box(k)).collect()
+}
+''',
+    ),
+}
+ADDED_HIDDEN = {
+    'fix-add-for-references': [r'''
+#[test]
+fn owned_plus_ref_reuses_the_buffer() {
+    let p = Poly(vec![1, 2, 3]);
+    let before = p.0.as_ptr();
+    let sum = p + &Poly(vec![1, 1]);
+    check!(r#"[1, 2, 3] + &[1, 1]: same buffer as the left side"#, (sum.0.as_ptr() == before, sum), (true, Poly(vec![2, 3, 3])));
+}
+'''],
+}
+ADDED_WRONG = {
+    'fix-add-for-references': {
+        'copies_the_left_side': r'''
+use std::ops::{Add, AddAssign};
+
+/// Coefficients from the constant term up: Poly(vec![1, 0, 3]) is 1 + 3x².
+/// No trailing zeros: the zero polynomial is Poly(vec![]).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Poly(pub Vec<i64>);
+
+impl Add for Poly {
+    type Output = Poly;
+
+    fn add(self, rhs: Poly) -> Poly {
+        let (mut long, short) = if self.0.len() >= rhs.0.len() {
+            (self.0, rhs.0)
+        } else {
+            (rhs.0, self.0)
+        };
+        for (i, c) in short.into_iter().enumerate() {
+            long[i] += c;
+        }
+        while long.last() == Some(&0) {
+            long.pop();
+        }
+        Poly(long)
+    }
+}
+
+impl AddAssign<&Poly> for Poly {
+    fn add_assign(&mut self, rhs: &Poly) {
+        if self.0.len() < rhs.0.len() {
+            self.0.resize(rhs.0.len(), 0);
+        }
+        for (a, b) in self.0.iter_mut().zip(&rhs.0) {
+            *a += b;
+        }
+        while self.0.last() == Some(&0) {
+            self.0.pop();
+        }
+    }
+}
+
+impl Add<&Poly> for Poly {
+    type Output = Poly;
+
+    // Correct sums, but every `poly + &other` copies into a new buffer.
+    fn add(self, rhs: &Poly) -> Poly {
+        &self + rhs
+    }
+}
+
+impl Add<&Poly> for &Poly {
+    type Output = Poly;
+
+    fn add(self, rhs: &Poly) -> Poly {
+        let mut sum: Vec<i64> = self.0.iter().copied().collect();
+        sum.resize(sum.len().max(rhs.0.len()), 0);
+        for (a, b) in sum.iter_mut().zip(&rhs.0) {
+            *a += b;
+        }
+        while sum.last() == Some(&0) {
+            sum.pop();
+        }
+        Poly(sum)
+    }
+}
+
+/// The sum of all the polynomials.
+pub fn sum_all(ps: &[Poly]) -> Poly {
+    ps.iter().fold(Poly(vec![]), |acc, p| acc + p)
+}
+''',
+    },
+}
+ADDED_PERF = {}
+for p in P:
+    s = p["slug"]
+    if s in FORMATTED:
+        p["starter"], p["solution"] = FORMATTED[s]
+    if s in ADDED_HIDDEN:
+        p["hidden"] = list(p["hidden"]) + ADDED_HIDDEN[s]
+    if s in ADDED_WRONG:
+        p["wrong"] = {**(p.get("wrong") or {}), **ADDED_WRONG[s]}
+    if s in ADDED_PERF:
+        p["perf"] = ADDED_PERF[s]
+
 
 if __name__ == "__main__":
     n = write_track("l4-traits-dispatch", "L4", "Traits & dispatch", "L", "core", 4,

@@ -5,6 +5,8 @@ Three exported macros work in the author's own examples and misbehave in other p
 non-`Copy` types such as `String`).
 - Every argument is evaluated **exactly once**, left to right.
 - Among equal largest values the **first** wins. A value is "larger" only if `>` says so.
+- Values that do not compare (a NaN) have no largest. Only two arguments are fixed then: `max_of!(1.0, f64::NAN)` is
+  `1.0` and `max_of!(f64::NAN, 1.0)` is NaN. With more arguments the tests leave the result open.
 - A trailing comma is allowed.
 
 **`map!{k1 => v1, k2 => v2, ...}`** is a `std::collections::HashMap`.
