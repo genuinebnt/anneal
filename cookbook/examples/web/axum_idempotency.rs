@@ -1,6 +1,6 @@
 //! RECIPE 31 (axum): idempotency keys for POST.
 //! LEVEL: intermediate
-//! Use in: REST API stage ("idempotency keys for execution creation").   Run: cargo run --release --example axum_idempotency
+//! Use in: any POST that clients retry ("create this once, however often it is sent").   Run: cargo run --release --example axum_idempotency
 //! COMMON USES: payments, order creation, job submission: safe client retries without duplicates (Stripe-style idempotency).
 //!
 //! Pattern: the client sends `Idempotency-Key: <uuid>`. First time: do the work, remember key -> result,
@@ -113,4 +113,19 @@ async fn main() {
     assert!(c.1.contains(r#""execution_id":2"#));
     let empty = send(&app, Some("")).await;
     assert_eq!(empty.0, StatusCode::BAD_REQUEST, "an empty key is no key");
+
+    // 64 copies of one request at the same time, on every worker thread: exactly one creates.
+    let mut copies = tokio::task::JoinSet::new();
+    for _ in 0..64 {
+        let app = app.clone();
+        copies.spawn(async move { send(&app, Some("key-3")).await });
+    }
+    let (mut created, mut ids) = (0, std::collections::HashSet::new());
+    while let Some(r) = copies.join_next().await {
+        let (status, body) = r.unwrap();
+        created += usize::from(status == StatusCode::CREATED);
+        ids.insert(body.replace(r#","replayed":true"#, "").replace(r#","replayed":false"#, ""));
+    }
+    assert_eq!((created, ids.len()), (1, 1), "racing copies of one key create once");
+    assert!(ids.contains(r#"{"execution_id":3}"#), "{ids:?}");
 }

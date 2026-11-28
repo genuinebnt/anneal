@@ -1,6 +1,6 @@
 //! RECIPE 29 (axum): Server-Sent Events with `Last-Event-ID` replay.
 //! LEVEL: intermediate
-//! Use in: SSE / execution event stream stage.   Run: cargo run --release --example axum_sse_replay
+//! Use in: a live event feed that a client can leave and rejoin.   Run: cargo run --release --example axum_sse_replay
 //! COMMON USES: live progress feeds: build logs, job status, notifications; reconnect-safe via Last-Event-ID.
 //!
 //! Pattern: persist events with increasing ids. When a client reconnects it sends `Last-Event-ID: N`; the
@@ -78,4 +78,8 @@ async fn main() {
     println!("--- reconnect with Last-Event-ID: 2 ---\n{resumed}");
     assert!(!resumed.contains("id: 1") && !resumed.contains("id: 2"));
     assert!(resumed.contains("id: 3") && resumed.contains("id: 4"));
+
+    // a header that is not a number counts as 0: everything is sent again
+    let garbled = fetch(&app, Some("abc")).await;
+    assert_eq!(garbled, full, "an unreadable Last-Event-ID replays the whole log");
 }

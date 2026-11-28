@@ -1,6 +1,6 @@
 //! RECIPE 30 (axum): middleware with `from_fn`: correlation ids on every request and response.
 //! LEVEL: intermediate
-//! Use in: REST API stage ("correlation IDs propagated across services").   Run: cargo run --release --example axum_middleware
+//! Use in: any HTTP service ("correlation ids carried across services").   Run: cargo run --release --example axum_middleware
 //! COMMON USES: request ids/correlation ids across microservices; the same layer shape hosts auth, metrics, tracing.
 //!
 //! Pattern: a middleware is `async fn(Request, Next) -> Response`. It can inspect/modify the request before

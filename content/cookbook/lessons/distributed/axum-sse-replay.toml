@@ -1,0 +1,120 @@
+title = "Server-Sent Events with `Last-Event-ID` replay"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 514
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/axum_sse_replay.rs"]
+code_spoils = ["/p/b22-follow-a-job"]
+lede = "A client that reconnects says which event it saw last, and the server sends only what came after."
+summary = """A quick lookup for Server-Sent Events in axum. The response stays open and carries events, each with an `id`. When the connection drops, the browser reconnects and sends `Last-Event-ID` with the last id it saw. The server replays the stored events after that id. This example replays a fixed log and then ends. It shows the replay, not the live part."""
+
+[[sections]]
+heading = "What does an event stream look like?"
+body = """
+Server-Sent Events (SSE) is a plain-text format on an ordinary HTTP response, with the content type `text/event-stream`. Each event is a few `name: value` lines and ends with a blank line. The example's first connection receives this, shortened to two events:
+
+```text
+id: 1
+event: workflow.started
+data: {"execution_id":"ex-123"}
+
+id: 2
+event: task.started
+data: {"task_id":"upload"}
+```
+
+`event` names the kind of event, and `data` carries the payload. The `id` is what makes a reconnect safe.
+"""
+
+[[sections]]
+heading = "How does a reconnect pick up where it left off?"
+body = """
+The browser's `EventSource` remembers the last `id` it received. When the connection drops, it reconnects and sends that id in the `Last-Event-ID` header. It does this by itself.
+
+The handler reads the header as a number and sends only events with a larger id. In the example, a reconnect with `Last-Event-ID: 2` gets events 3 and 4 only. A header that is missing or not a number, such as `abc`, counts as 0, so the client gets everything again.
+
+`Sse::new(stream).keep_alive(KeepAlive::default())` builds the response. The keep-alive sends an empty comment line after 15 seconds without events, so proxies do not close a quiet connection.
+"""
+
+[[sections]]
+heading = "What does the example not do?"
+body = """
+**It does not follow new events.** The stream is a fixed list, so the body ends after the replay. A browser then reconnects, because `EventSource` treats a finished body as a lost connection. A server that wants it to stop answers 204 No Content.
+
+**Replay needs stored events with increasing ids.** Ids must be unique and ordered within one stream, or "after this id" means nothing.
+
+A live feed must send the stored events and then the new ones, missing none in between. That is the hard part, and this page does not show it.
+
+:::deeper Walk through the code (gives away part of "Watch a job as it happens")
+```walkthrough
+file = "examples/web/axum_sse_replay.rs"
+[[step]]
+title = "A stored log with increasing ids"
+lines = "24-33"
+text = "It stands in for events kept in a database."
+[[step]]
+title = "Read the header, replay what is newer"
+lines = "35-47"
+text = "A missing or unreadable header becomes 0. Each event gets its `id`, `event` and `data`."
+[[step]]
+title = "Read the body as text"
+lines = "49-68"
+text = "The stream is finite, so the whole body can be collected."
+[[step]]
+title = "Three connections"
+lines = "71-85"
+text = "No header, `2`, and `abc`. The last must equal the first."
+```
+:::
+"""
+
+[[connections]]
+kind = "before"
+title = "Axum router state"
+link = "/cookbook/p/axum-router-state"
+why = "How handlers and extractors work in axum."
+
+[[connections]]
+kind = "practise"
+title = "A progress feed you can leave and rejoin"
+link = "/p/b21-leave-and-rejoin"
+level = "similar"
+why = "Replay from a position, then keep following, without missing an entry."
+
+[[connections]]
+kind = "practise"
+title = "Live prices in the browser"
+link = "/p/b21-prices-in-the-browser"
+level = "similar"
+why = "A live SSE stream with axum, keep-alive and a slow client."
+
+[[connections]]
+kind = "practise"
+title = "Watch a job as it happens"
+link = "/p/b22-follow-a-job"
+level = "similar"
+why = "Replay after `Last-Event-ID`, then follow the job until it ends."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its clients watch jobs as Server-Sent Events."
+
+[[sources]]
+title = "HTML Standard: server-sent events"
+url = "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+note = "The format, the reconnect rules and the `Last-Event-ID` header."
+
+[[sources]]
+title = "MDN: using server-sent events"
+url = "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"
+note = "The browser side, with `EventSource` and named events."
+
+[[sources]]
+title = "axum: the sse module"
+url = "https://docs.rs/axum/0.8/axum/response/sse/index.html"
+note = "`Sse`, `Event` and `KeepAlive`, with an example stream."

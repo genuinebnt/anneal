@@ -1,0 +1,254 @@
+title = "Tracing: events, spans and layers"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 128
+kind = "lesson"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/tracing_spans_subscriber_layers.rs"]
+lede = "The `tracing` crate records events inside spans, so every log line knows which request or job it belongs to."
+summary = """`tracing` records **events** (a moment, with fields) inside **spans** (a period, with fields). An event inherits the fields of the spans around it, so you log a request id once and see it on every line. A **subscriber**, installed once by the program, decides what is kept and where it goes. In async code, attach a span to a future with `.instrument(span)`. Never hold `span.enter()` across an `.await`."""
+
+[[sections]]
+heading = "Why are plain log lines not enough?"
+body = """
+A server handles hundreds of requests at once, and their log lines interleave. A customer says one checkout failed. With plain text lines you cannot tell which lines belong to that checkout.
+
+Thread ids do not help in async code. One thread runs many tasks in turns, and one task can move between threads.
+
+`tracing` solves this with context. You open a span for the request, with its id as a field. Every event logged while the span is active carries that id.
+"""
+
+[[sections]]
+heading = "What do events, spans and subscribers do?"
+body = """
+An **event** is one thing that happened, like a log line, but with typed fields. A **span** is a named period of work with its own fields. A **subscriber** receives both and decides what to do with them: print text, write JSON, count, or drop.
+
+Libraries only emit events and spans. The program installs one subscriber at start-up. If none is installed, nothing is recorded.
+
+`#[instrument]` opens a span for each call of a function. Its arguments become fields, unless you `skip` them:
+
+```rust
+use tracing::{info, instrument, warn};
+
+#[instrument(skip(password), fields(outcome = tracing::field::Empty))]
+fn log_in(user: &str, password: &str) -> bool {
+    let ok = password == "hunter2";
+    tracing::Span::current().record("outcome", if ok { "ok" } else { "refused" });
+    if ok {
+        info!("welcome");
+    } else {
+        warn!(attempts = 3, "wrong password");
+    }
+    ok
+}
+
+fn main() {
+    tracing_subscriber::fmt().without_time().with_target(false).init();
+    log_in("ada", "hunter2");
+    log_in("bob", "guess");
+}
+```
+
+It prints:
+
+```text
+ INFO log_in{user="ada" outcome="ok"}: welcome
+ WARN log_in{user="bob" outcome="refused"}: wrong password attempts=3
+```
+
+The password never appears. The field `outcome` is declared `Empty` and filled in later with `record`.
+
+A span field is computed before the function body runs. So a field like "the last 4 digits" must not panic on short or odd input. The example's `last4` returns `?` for anything shorter than 12 bytes or not split at a character boundary.
+"""
+
+[[sections]]
+heading = "How do spans work across an `.await`?"
+body = """
+`span.enter()` returns a guard, and the span stays active on this thread until the guard is dropped. That is fine in ordinary code. In async code, a task can pause at an `.await` while its guard is still alive. Another task then runs on the same thread inside the wrong span.
+
+Both programs run two requests as tasks on one thread. Each logs, yields, and logs again.
+
+```compare
+takeaway = "In async code, give the span to the future with `.instrument(span)`. It enters the span each time the future runs and leaves it each time the future pauses."
+[wrong]
+title = "A guard held across .await"
+code = '''
+use tracing::{info, info_span};
+
+async fn handle(id: u32) {
+    let span = info_span!("request", id);
+    let _entered = span.enter(); // still entered while this task waits
+    info!("start {id}");
+    tokio::task::yield_now().await; // the other request runs here
+    info!("end {id}");
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    tracing_subscriber::fmt().without_time().with_target(false).init();
+    let one = tokio::spawn(handle(1));
+    let two = tokio::spawn(handle(2));
+    one.await.unwrap();
+    two.await.unwrap();
+}
+'''
+result = "Request 2's lines say `request{id=1}:request{id=2}: start 2`. Its span was opened while request 1's was still active, so it became a child of request 1."
+[fixed]
+title = ".instrument(span)"
+code = '''
+use tracing::{Instrument, info, info_span};
+
+async fn handle(id: u32) {
+    info!("start {id}");
+    tokio::task::yield_now().await; // the other request runs here
+    info!("end {id}");
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    tracing_subscriber::fmt().without_time().with_target(false).init();
+    let one = tokio::spawn(handle(1).instrument(info_span!("request", id = 1)));
+    let two = tokio::spawn(handle(2).instrument(info_span!("request", id = 2)));
+    one.await.unwrap();
+    two.await.unwrap();
+}
+'''
+result = "Every line carries only its own request: `request{id=2}: start 2`, `request{id=1}: end 1`, and so on."
+```
+
+A spawned task does not inherit the caller's span either. The example shows a plain `tokio::spawn` logging with no span at all. Write `tokio::spawn(fut.in_current_span())` to carry the span over.
+"""
+
+[[sections]]
+heading = "How do you choose what is recorded?"
+body = """
+An `EnvFilter` reads directives such as `RUST_LOG` values. The example runs one set of events through several filters:
+
+| Directive | Effect |
+|---|---|
+| `warn` | WARN and ERROR only |
+| `info` | INFO and above, from every module |
+| `warn,app::db=trace` | WARN in general, everything from `app::db`. The most specific directive wins |
+| `off,app=info` | Nothing, except INFO and above from `app` and the modules under it |
+| `warn,[request{id=r2}]=debug` | WARN in general, and DEBUG inside the span `request` whose `id` is `r2` |
+
+**Spans have levels too.** At `warn`, an INFO span is disabled. Warnings inside it are still logged, but they lose the span and its request id. Give request spans a level your filter keeps.
+
+**Where you attach a filter matters.** Added with `.with(filter)`, it filters for every layer. Attached to one layer with `.with_filter(filter)`, it filters only that layer. So you can send everything to a file and only errors to an alert.
+
+A filter can also be changed while the program runs. Wrap it in `reload::Layer` and keep the handle, as the last section of the example does.
+"""
+
+[[sections]]
+heading = "How do you write your own layer?"
+body = """
+A subscriber is usually built from **layers**: `registry().with(a).with(b)`. The registry stores the spans, and each layer gets a call when something happens. The example's `Capture` layer stores every event with its fields and the path of spans around it, so the tests can assert on them.
+
+```walkthrough
+file = "crates/cb-crate-tour/examples/tracing_spans_subscriber_layers.rs"
+[[step]]
+title = "What a captured event holds"
+lines = "72-84"
+text = "Level, target, fields, and the names and fields of the spans around the event. The lists sit behind `Arc<Mutex<..>>` so a test can read them after the run."
+[[step]]
+title = "Read fields with a visitor"
+lines = "85-95"
+text = "Fields arrive as typed values through the `Visit` trait. Only `record_debug` is required; `record_str` keeps strings unquoted."
+[[step]]
+title = "Keep span fields yourself"
+lines = "96-115"
+text = "The registry does not keep span fields for you. `on_new_span` stores them in the span's extensions."
+[[step]]
+title = "Fields filled in later"
+lines = "116-132"
+text = "`span.record(..)` arrives in `on_record`, which adds the value to the stored fields."
+[[step]]
+title = "An event and its spans"
+lines = "133-155"
+text = "`event_scope` walks from the event's span up to the root. `from_root` reverses it, so the outermost span comes first."
+[[step]]
+title = "Lifecycle calls"
+lines = "156-173"
+text = "A span is entered and left on every poll, but closed only once. The tests check that children close before their parents."
+[[step]]
+title = "Install it for one closure"
+lines = "176-182"
+text = "`with_default` sets the subscriber for this thread while the closure runs. Tests stay apart and never touch a global subscriber."
+```
+
+A layer that only counts events by level makes a simple metric. For real metrics, use a metrics library or an OpenTelemetry layer.
+"""
+
+[[sections]]
+heading = "What else does the example cover?"
+body = """
+| Feature | What it is for |
+|---|---|
+| `fmt().json().flatten_event(true)` | One JSON object per line, for log collectors |
+| `with_span_events(FmtSpan::CLOSE)` | A line when a span closes, with its busy and idle time |
+| `info_span!(parent: None, ..)` | A span with no parent, whatever is active |
+| `span.follows_from(id)` | Marks "caused by" without making one span contain the other |
+| `tracing::enabled!(Level::DEBUG)` | Skips expensive work for a level nobody records |
+| `Option<Layer>` | A layer switched on or off by configuration |
+
+One more fact the example checks: the fields of a disabled event are not even evaluated, so they cost nothing.
+"""
+
+[[connections]]
+kind = "before"
+title = "Structured logging with `tracing`"
+link = "/cookbook/p/tracing-logs"
+why = "A shorter first look at events, spans and fields."
+
+[[connections]]
+kind = "practise"
+title = "A log line for every request"
+link = "/p/b21-line-per-request"
+level = "related"
+why = "A span for every request in an axum service, including requests the client gives up on."
+
+[[connections]]
+kind = "practise"
+title = "Name every request and log it"
+link = "/p/b22-name-every-request"
+level = "related"
+why = "A request id and a span in one middleware."
+
+[[connections]]
+kind = "returns"
+title = "Middleware with `from_fn`"
+link = "/cookbook/p/axum-middleware"
+why = "The place in a web service where each request's span is opened."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its last parts log every request under its own id."
+
+[[sources]]
+title = "tracing: crate documentation"
+url = "https://docs.rs/tracing/0.1/tracing/"
+note = "Spans, events, `#[instrument]` and the rules for libraries and programs."
+
+[[sources]]
+title = "tracing: spans in asynchronous code"
+url = "https://docs.rs/tracing/latest/tracing/span/struct.Span.html#in-asynchronous-code"
+note = "Why holding `enter()` across an `.await` gives wrong results."
+
+[[sources]]
+title = "tracing-subscriber: crate documentation"
+url = "https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/"
+note = "The registry, layers, per-layer filters and the fmt subscriber."
+
+[[sources]]
+title = "tracing-subscriber: EnvFilter"
+url = "https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/filter/struct.EnvFilter.html"
+note = "The full directive syntax, including span and field filters."
+
+[[sources]]
+title = "Tokio: getting started with tracing"
+url = "https://tokio.rs/tokio/topics/tracing"
+note = "Setting up a subscriber in a Tokio program, step by step."

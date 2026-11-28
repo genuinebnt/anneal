@@ -1,11 +1,11 @@
 //! RECIPE 28 (axum): one error type -> consistent HTTP error responses.
 //! LEVEL: intermediate
-//! Use in: REST API stage ("consistent error format and meaningful status codes").   Run: cargo run --release --example axum_errors
+//! Use in: any JSON API ("one error format and meaningful status codes").   Run: cargo run --release --example axum_errors
 //! COMMON USES: public APIs that need one stable error shape and no leaked internals.
 //!
 //! Pattern: handlers return `Result<T, AppError>`. `AppError` implements `IntoResponse`, mapping each variant
 //! to a status code and ONE JSON shape `{"error":{"code":..,"message":..}}`. Internal errors are logged but their
-//! details are never leaked to the client. Same idea as your CLI's error enum: errors are values.
+//! details are never leaked to the client. Errors are values, as with any error enum.
 //! LIMIT: the shape covers only what a handler returns as `AppError`. axum's own rejections keep their own bodies: an
 //! unmatched route (404) and a wrong method (405) have empty ones, and a path that is not UTF-8 gets a plain-text 400. For
 //! one shape everywhere add fallbacks and wrap the extractors. This demo logs with `eprintln!` and sends the variant's

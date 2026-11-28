@@ -1,0 +1,236 @@
+title = "Doing things once"
+module = "Distributed systems"
+module_order = 10
+chapter = "Microservice patterns"
+chapter_order = 5
+order = 507
+kind = "lesson"
+level = "advanced"
+code = ["examples/microservices/idempotency_dedup_leader_fencing_store.rs"]
+code_spoils = ["/p/b21-charge-once"]
+lede = "Idempotency keys, duplicate filters for consumers, and leader election with fencing tokens, each tested under random failures."
+summary = """Networks repeat things. A client retries, a queue delivers a message twice, and a paused server wakes up still thinking it leads. This page covers one tool for each: idempotency keys for requests, sequence windows and time windows for consumers, and fencing tokens for leaders. Each tool narrows the problem but leaves a gap. The example measures every gap in seeded simulations, so you can see what each tool does not stop."""
+
+[[sections]]
+heading = "Where does duplicate work come from?"
+body = """
+Three common cases:
+
+- A client sends a request, the answer is lost, and the client sends it again.
+- A message queue promises **at-least-once** delivery, so a consumer can see the same message twice.
+- Two servers both believe they hold a lease, because one was paused and its lease ran out.
+
+The example has one section for each. Three other pages go further: the [axum page](/cookbook/p/axum-idempotency) shows keys over HTTP, and the [lease simulation](/cookbook/p/lease-fencing-sim) shows why a lease alone fails. The [outbox page](/cookbook/p/transactional-outbox-inbox-sqlite) makes "record the key" and "do the work" one transaction.
+"""
+
+[[sections]]
+heading = "What does an idempotency key remember?"
+body = """
+For each key, the store keeps one of two states.
+
+- **In flight**: an attempt number, a **fingerprint** (a hash of the request body), and a time when the lock expires.
+- **Done**: the stored response, the fingerprint, and a time when the entry may be forgotten.
+
+When a request arrives with a key the store knows, the state decides the answer. A different fingerprint is a client bug, so it is refused, never replayed. A copy that arrives while the first is in flight is told so, for example with HTTP 409. A done key replays its response.
+
+A handler can die and leave its lock behind. When the lock expires, the next request takes over with a **new attempt number**. If the old handler wakes up, it can no longer complete, because the key now belongs to the newer attempt.
+"""
+
+[[sections]]
+heading = "What can a key not prevent?"
+body = """
+Suppose the handler does the work in another system, such as a bank, and then crashes before it records "done". The lock expires, the retry runs, and the work happens twice. No key can see work it was never told about.
+
+The example measures this. Across 1,000 random schedules with crashes, 1,970 keys ran their work twice or more when the work was committed separately. When the work and the "done" record were one atomic step, no key ran twice.
+
+So either put the work in the same database transaction as the key, or make the work itself keyed, for example by passing your key on to the bank.
+"""
+
+[[sections]]
+heading = "How does a consumer drop repeated messages?"
+body = """
+A consumer cannot remember every message forever. The example shows three ways to forget safely.
+
+**A time window.** The consumer remembers ids in two generations of a fixed span. An id stays known for at least one span and at most two. A repeat that arrives later is accepted as new. That is a choice you make, not a bug.
+
+**A sequence window.** When each producer numbers its messages, the consumer keeps the highest number seen and a 64-bit map of which numbers below it arrived. That is 16 bytes per producer. Anything older than the window is refused.
+
+The picture uses a window of 4 numbers instead of 64:
+
+```stepper
+caption = "A sequence window of 4 numbers"
+[[frame]]
+title = "The window covers 7 to 10"
+text = "The highest number seen is 10. Numbers 10 and 8 arrived, 9 and 7 did not."
+lanes = [ { name = "Arrives", items = ["nothing yet"] }, { name = "Window", items = ["10 seen", "9", "8 seen", "7"], slots = 4 } ]
+[[frame]]
+title = "9 arrives late"
+text = "It is inside the window and its mark is not set, so it is new. The window marks it."
+lanes = [ { name = "Arrives", items = ["9: new"] }, { name = "Window", items = ["10 seen", "9 seen", "8 seen", "7"], slots = 4 } ]
+[[frame]]
+title = "9 arrives again"
+text = "Its mark is set, so this copy is a duplicate and is dropped."
+lanes = [ { name = "Arrives", items = ["9: duplicate"] }, { name = "Window", items = ["10 seen", "9 seen", "8 seen", "7"], slots = 4 } ]
+[[frame]]
+title = "12 arrives"
+text = "It is the new highest. The window slides up by two and now covers 9 to 12. The marks for 8 and 7 fall out."
+lanes = [ { name = "Arrives", items = ["12: new"] }, { name = "Window", items = ["12 seen", "11", "10 seen", "9 seen"], slots = 4 } ]
+[[frame]]
+title = "8 arrives"
+text = "It is 4 below the highest, outside the window. It is refused as too old, whether or not it came before."
+lanes = [ { name = "Arrives", items = ["8: too old"] }, { name = "Window", items = ["12 seen", "11", "10 seen", "9 seen"], slots = 4 } ]
+```
+
+The example checks the real 64-number window against a set that never forgets, on 600,000 random arrivals. They agree on every one.
+
+**A Bloom filter in front.** A Bloom filter answers "definitely new" or "maybe seen". "Definitely new" can skip the expensive exact lookup. "Maybe seen" must still do that lookup. In the example, a filter that is never cleared answered "maybe" for 33,281 messages that were in fact new. Dropping on a "maybe" would have lost them all.
+"""
+
+[[sections]]
+heading = "How does compare-and-set elect one leader?"
+body = """
+The lease lives in a store with two operations: `read`, and **compare-and-set**, which writes only if the record's revision is still the one you read. The record holds the holder, the expiry time and a **token**. Each new leader gets the previous token plus one.
+
+Two nodes that read the same revision cannot both win: the first write changes the revision, so the second fails. In the example, 8 threads race for 200 terms, and every term has exactly one winner, with tokens 1 to 200.
+
+Expiry is judged by the store's clock. Each node also measures its lease by its own clock, which may run fast or slow, and it may be paused at any moment.
+"""
+
+[[sections]]
+heading = "Why is checking the token on writes not enough?"
+body = """
+The resource being written refuses a token lower than the highest it has seen. It checks and writes in one atomic step.
+
+That stops writes from leaders older than one the resource **has seen**. But a new leader that has not written yet is unknown to it. An old leader's delayed write still gets in, possibly after the new leader read the value it will overwrite. The new leader then writes over it, and one update is lost.
+
+The fix is to **fence first**: the new leader shows its token to the resource, and only then reads. Here are the totals over 2,000 random schedules per row, with pauses, skewed clocks and delayed messages. A harmed run has at least one stale write or lost update.
+
+| Resource | Stale writes | Lost updates | Harmed runs |
+|---|---|---|---|
+| No token check | 1,200 | 2,817 | 1,163 |
+| Token check on write | 0 | 1,807 | 988 |
+| Fence, then read | 0 | 0 | 0 |
+"""
+
+[[sections]]
+heading = "What is not covered?"
+body = """
+**The lease store does not fail.** Keeping it alive is consensus, which the [Raft](/cookbook/p/raft) pages cover. Nodes are also assumed honest: none forges a token.
+
+**No message is delivered twice.** A token check accepts a repeated write from the current leader, which can undo its later write. That needs a sequence number or a version check as well.
+
+**The key store never evicts.** An expired key stays until the same key is used again. A key left in flight by a crash stays tied to its first request body.
+
+**The sequence window trusts its input.** `Window::accept` panics on sequence number 0. One forged huge number moves the window past every real one, so authenticate messages first.
+
+:::deeper Walk through the code (gives away much of "Charge the card once")
+```walkthrough
+file = "examples/microservices/idempotency_dedup_leader_fencing_store.rs"
+[[step]]
+title = "Begin: one step per request"
+lines = "96-136"
+text = "Replay, refuse, report in flight, or start a new attempt. In SQL this is one insert plus a conditional update."
+[[step]]
+title = "Only the owner may finish"
+lines = "137-163"
+text = "`complete` and `fail` check the attempt number, so a handler that lost its lock changes nothing."
+[[step]]
+title = "Crashes in the gap"
+lines = "193-241"
+text = "Random clients and crashes. With `atomic`, the work counts only inside `complete`."
+[[step]]
+title = "The sequence window"
+lines = "305-335"
+text = "A new highest number shifts the map. Anything 64 or more below it is too old."
+[[step]]
+title = "Two generations, a Bloom filter in front"
+lines = "399-437"
+text = "Time moves the generations along. A Bloom hit only leads to the exact lookup."
+[[step]]
+title = "Election by compare-and-set"
+lines = "522-539"
+text = "A live lease is left alone. Otherwise the next token is written only if the revision has not moved."
+[[step]]
+title = "The resource under each kind of fencing"
+lines = "645-685"
+text = "Messages arrive late and out of order. The tally counts stale writes and lost updates for each mode."
+```
+:::
+"""
+
+[[connections]]
+kind = "before"
+title = "Idempotency keys for POST"
+link = "/cookbook/p/axum-idempotency"
+why = "The HTTP side of keys, in a smaller example."
+
+[[connections]]
+kind = "practise"
+title = "Charge the card once"
+link = "/p/b21-charge-once"
+level = "similar"
+why = "Keys that are in flight or done, with async work outside the lock."
+
+[[connections]]
+kind = "practise"
+title = "Capstone 1: one holder at a time"
+link = "/p/y42-one-holder-at-a-time"
+level = "related"
+why = "A lease service with numbered grants and a clock that never goes back."
+
+[[connections]]
+kind = "practise"
+title = "Capstone 2: the disk and its judge"
+link = "/p/y42-the-disk-and-the-judge"
+level = "related"
+why = "A store that checks tokens, and a check that finds the harm from outside."
+
+[[connections]]
+kind = "returns"
+title = "Deterministic simulation of leases, pauses and fencing tokens"
+link = "/cookbook/p/lease-fencing-sim"
+why = "Why a lease without tokens fails, step by step."
+
+[[connections]]
+kind = "returns"
+title = "Transactional outbox and inbox on SQLite"
+link = "/cookbook/p/transactional-outbox-inbox-sqlite"
+why = "Recording the key and doing the work in one transaction."
+
+[[connections]]
+kind = "returns"
+title = "Bloom filter"
+link = "/cookbook/p/bloom-filter"
+why = "How the filter works, and how to size it."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its service accepts each job once."
+
+[[connections]]
+kind = "project"
+title = "Build a lease simulator"
+link = "/rust/series/lease-simulator"
+why = "Leases, a fenced disk and a search for the run that corrupts data."
+
+[[sources]]
+title = "Stripe: designing robust and predictable APIs with idempotency"
+url = "https://stripe.com/blog/idempotency"
+note = "Idempotency keys explained with retries of payments."
+
+[[sources]]
+title = "Martin Kleppmann: how to do distributed locking"
+url = "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+note = "Why a lock needs fencing tokens, with a timeline of a paused client."
+
+[[sources]]
+title = "etcd: API guarantees and revisions"
+url = "https://etcd.io/docs/v3.5/learning/api/"
+note = "A real store with revisions and compare-and-set transactions."
+
+[[sources]]
+title = "RFC 4303, section 3.4.3: sequence number verification"
+url = "https://www.rfc-editor.org/rfc/rfc4303#section-3.4.3"
+note = "The IPsec anti-replay window that the sequence window follows."

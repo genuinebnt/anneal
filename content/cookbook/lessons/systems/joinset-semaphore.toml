@@ -1,0 +1,145 @@
+title = "At most N tasks at once with JoinSet and a semaphore"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 245
+kind = "lesson"
+level = "intermediate"
+code = ["examples/concurrency/joinset_semaphore.rs"]
+code_spoils = ["/p/b21-memory-budget", "/p/b22-run-the-jobs"]
+lede = "Spawn every task, let each wait for a permit before it works, and count how many really ran at once."
+summary = """A `JoinSet` holds spawned tasks and hands back their results as they finish. A `Semaphore` with 3 permits lets at most 3 of them do their work at a time: each task waits for a permit first. The example also checks that limit while it runs, with two atomic counters. The limit caps work in progress, not the number of tasks: all 12 exist from the start."""
+
+[[sections]]
+heading = "How do the two pieces share the job?"
+body = """
+Say you must call an API for 12 inputs, and the API allows 3 calls at a time. You want the calls to overlap, but never more than 3.
+
+A **`JoinSet`** is a collection of spawned tasks. `join_next().await` returns the next one to finish, in the order they finish. If you drop the set, it aborts every task still in it.
+
+A **`Semaphore`** holds a number of **permits**. `acquire_owned().await` waits until one is free, and returns a permit object. Dropping that object gives the permit back. Tokio's semaphore is fair: waiters get permits in the order they asked.
+
+The example spawns 12 tasks into one `JoinSet`. Each task first waits for a permit, works for 20 ms, and finishes. Since the permit lives until the task ends, at most 3 tasks are past that first line.
+"""
+
+[[sections]]
+heading = "How does the example check the limit?"
+body = """
+Each task counts itself in and out, and remembers the highest count seen:
+
+```rust
+let now = in_flight.fetch_add(1, SeqCst) + 1; // after the permit is granted
+max_seen.fetch_max(now, SeqCst);
+// ... the work ...
+in_flight.fetch_sub(1, SeqCst);
+```
+
+At the end, `main` asserts `max_seen <= limit`. A typical run prints `max in flight: 3 (limit 3)`, after the jobs finish in an order such as 3, 0, 1, 5.
+
+This is a check of an **invariant**, a rule that must hold at every moment. A failing run proves a bug. A passing run proves only that this schedule was fine, so the check is most useful run often, under different loads.
+
+:::deeper Walk through the code (gives away much of "Background jobs within a memory budget" and "Run the jobs, a few at a time")
+```walkthrough
+file = "examples/concurrency/joinset_semaphore.rs"
+[[step]]
+title = "Three permits and two counters"
+lines = "20-24"
+text = "The semaphore and the counters sit behind `Arc`, because every task needs its own handle."
+[[step]]
+title = "Spawn all twelve"
+lines = "26-36"
+text = "Each task waits for a permit first. `_permit` keeps it until the task ends."
+[[step]]
+title = "Collect in finish order"
+lines = "37-39"
+text = "`join_next` returns `Err` if a task panicked, and `expect` turns that into a failure here."
+[[step]]
+title = "Check the limit"
+lines = "40-42"
+text = "The highest count seen must not pass the limit."
+```
+:::
+"""
+
+[[sections]]
+heading = "What if the permit is dropped too soon?"
+body = """
+In Rust, `let _ = value;` drops the value at once, while `let _permit = value;` keeps it to the end of the scope. Changing that one line in the example gives this:
+
+```rust
+let _ = permits.acquire_owned().await.expect("semaphore closed"); // dropped here
+```
+
+The run prints `max in flight: 12 (limit 3)` and fails with `limit violated!`. Each task waited for a permit, then gave it back before doing any work. The counters caught a bug that the compiler cannot see.
+"""
+
+[[sections]]
+heading = "What does this shape cost?"
+body = """
+**Every task exists from the start.** All 12 are spawned at once and 9 of them wait. With 12 inputs that is fine. With a million, a million waiting tasks hold memory, and so does every input captured in them.
+
+When the inputs are many, start a task only when a slot is free instead. The worker pool and stream pages below show two ways.
+
+**The order of work is not the order of input.** Results come back as tasks finish, so keep an index with each result if order matters.
+"""
+
+[[connections]]
+kind = "before"
+title = "Tokio essentials on a paused clock"
+link = "/cookbook/p/tokio-runtime-tasks-channels-timers"
+why = "Spawning, joining and awaiting tasks, if they are still new."
+
+[[connections]]
+kind = "practise"
+title = "Background jobs within a memory budget"
+link = "/p/b21-memory-budget"
+level = "similar"
+why = "A semaphore as a budget, where each job asks for its own number of permits."
+
+[[connections]]
+kind = "practise"
+title = "At most N in flight"
+link = "/p/c4-bounded-fan-out"
+level = "related"
+why = "A limit on running calls where tasks start only when a slot is free, which this page does not do."
+
+[[connections]]
+kind = "practise"
+title = "Run the jobs, a few at a time"
+link = "/p/b22-run-the-jobs"
+level = "similar"
+why = "One task per job behind a semaphore, inside a job service."
+
+[[connections]]
+kind = "returns"
+title = "A generic async worker pool"
+link = "/cookbook/p/worker-pool"
+why = "A pool whose waiting jobs sit in a bounded queue, not in spawned tasks."
+
+[[connections]]
+kind = "returns"
+title = "Bounded concurrency with Streams"
+link = "/cookbook/p/async-streams-concurrency"
+why = "The same limit with `buffer_unordered`, which starts futures only as slots free up."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its service runs only a few jobs at a time."
+
+[[sources]]
+title = "Tokio: JoinSet"
+url = "https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html"
+note = "Spawning into a set, joining in finish order, and aborting on drop."
+
+[[sources]]
+title = "Tokio: Semaphore"
+url = "https://docs.rs/tokio/latest/tokio/sync/struct.Semaphore.html"
+note = "Fairness, owned permits, and examples that limit open files and requests."
+
+[[sources]]
+title = "Tokio source: the sync module"
+url = "https://github.com/tokio-rs/tokio/tree/master/tokio/src/sync"
+note = "How the semaphore and the other primitives are built."

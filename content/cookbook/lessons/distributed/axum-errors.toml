@@ -1,0 +1,139 @@
+title = "One error type for every HTTP error"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 510
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/axum_errors.rs"]
+code_spoils = ["/p/b1-api-error-response", "/p/b22-refuse-bad-jobs"]
+lede = "Handlers return one error enum, and that enum alone decides the status code and the JSON body."
+summary = """A quick lookup for axum error responses. Every handler returns `Result<T, AppError>`, and `AppError` implements `IntoResponse`. Each variant picks a status code and fills one JSON shape, so clients parse every failure the same way. Internal errors are logged and replaced by a plain message. The shape covers only what your handlers return: axum's own rejections still send their own bodies."""
+
+[[sections]]
+heading = "What does a handler return?"
+body = """
+A handler returns either its value or an `AppError`. You write no status codes inside handlers.
+
+```rust
+async fn show(Path(id): Path<String>) -> Result<Json<Value>, AppError> {
+    match id.as_str() {
+        "video" => Ok(Json(json!({ "id": "video" }))),
+        other => Err(AppError::NotFound(other.to_string())),
+    }
+}
+```
+
+axum accepts this return type because `Result<T, E>` is a response when both `T` and `E` are. So the whole job sits in one `impl IntoResponse for AppError`. That impl maps each variant to a status and a `code` string, and builds the body. Its message comes from `thiserror`'s `#[error(...)]` text, and `Internal` says only "internal error", so its cause never reaches the client.
+
+:::deeper Walk through the code (gives away much of "One error shape for the whole API")
+```walkthrough
+file = "examples/web/axum_errors.rs"
+[[step]]
+title = "One enum for every failure"
+lines = "26-34"
+text = "`thiserror` writes `Display` from the `#[error]` text. `Internal` keeps its `io::Error` as a source, for the log."
+[[step]]
+title = "A status and a code per variant"
+lines = "36-45"
+text = "The match decides the status, the `code` string and the details. `Internal` is logged here and replaced by a plain message."
+[[step]]
+title = "One body for all of them"
+lines = "46-53"
+text = "The message comes from `Display`. Every error ends as the same JSON object under `error`."
+[[step]]
+title = "Handlers only return Err"
+lines = "55-66"
+text = "No handler builds a response for an error itself."
+[[step]]
+title = "Check the status and that nothing leaks"
+lines = "68-94"
+text = "Four requests through `oneshot`, with no network. The test fails if the secret path appears in any body."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does the client see?"
+body = """
+These are the example's four requests, as it prints them:
+
+| Request | Status | Body |
+|---|---|---|
+| `/v1/workflows/video` | 200 | `{"id":"video"}` |
+| `/v1/workflows/nope` | 404 | `code` is `not_found`, and the message names the id |
+| `/v1/workflows/bad` | 422 | `code` is `invalid`, and `details` lists one problem |
+| `/v1/workflows/boom` | 500 | `{"error":{"code":"internal","details":[],"message":"internal error"}}` |
+
+The 500 response does not contain the disk path from the `io::Error`. The example checks that, and the path appears only in the server's log line.
+"""
+
+[[sections]]
+heading = "Which errors does it not cover?"
+body = """
+Some requests never reach your handler. axum answers them itself, so they do not get your shape. A small test router showed this:
+
+| Request | Status | Body |
+|---|---|---|
+| An unknown path | 404 | empty |
+| A known path with another method | 405 | empty |
+| `Path<u64>` given `abc` | 400 | plain text starting `Invalid URL: Cannot parse` |
+| `Json` without a JSON content type | 415 | plain text naming the expected content type |
+
+To give these the same shape, you need a fallback for unknown routes and your own handling of extractor rejections. The axum documentation linked below covers both.
+
+Two more limits. The example logs with `eprintln!`, not a logging library. And a variant's message is sent as written, so never put a secret in one that clients see.
+"""
+
+[[connections]]
+kind = "before"
+title = "Axum router state"
+link = "/cookbook/p/axum-router-state"
+why = "How routes, handlers and extractors fit together."
+
+[[connections]]
+kind = "practise"
+title = "One error shape for the whole API"
+link = "/p/b1-api-error-response"
+level = "exact"
+why = "The same pattern, including the rejections and fallbacks this page leaves out."
+
+[[connections]]
+kind = "practise"
+title = "Refuse a bad job and say why"
+link = "/p/b22-refuse-bad-jobs"
+level = "similar"
+why = "One error type with a list of details, as the first step of a job service."
+
+[[connections]]
+kind = "returns"
+title = "Request parsing and validation"
+link = "/cookbook/p/backend-request-validation-extractors"
+why = "Where the list of validation problems comes from."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its first parts give a whole API one error shape."
+
+[[sources]]
+title = "axum: error handling"
+url = "https://docs.rs/axum/0.8/axum/error_handling/index.html"
+note = "Why a handler's error is still a response, and what happens to errors from middleware."
+
+[[sources]]
+title = "axum: customizing extractor responses"
+url = "https://docs.rs/axum/0.8/axum/extract/index.html#customizing-extractor-responses"
+note = "Ways to send your own body when an extractor such as `Json` or `Path` refuses a request."
+
+[[sources]]
+title = "axum: Router::fallback"
+url = "https://docs.rs/axum/0.8/axum/struct.Router.html#method.fallback"
+note = "The handler that answers requests no route matches."
+
+[[sources]]
+title = "axum: IntoResponse"
+url = "https://docs.rs/axum/0.8/axum/response/trait.IntoResponse.html"
+note = "The trait your error type implements, with an example of a custom error."

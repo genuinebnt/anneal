@@ -1,0 +1,144 @@
+title = "Middleware with `from_fn`"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 512
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/axum_middleware.rs"]
+code_spoils = ["/p/b22-name-every-request"]
+lede = "An async function that runs around every request, before and after the handler."
+summary = """A quick lookup for axum middleware. With `middleware::from_fn`, an ordinary `async fn(Request, Next) -> Response` can change the request, call `next.run(req)`, and then change the response. The example gives each request a correlation id, so the log lines of one request can be found across services. A layer wraps only the routes added before it."""
+
+[[sections]]
+heading = "What does a middleware function look like?"
+body = """
+It takes the request and `Next`, the rest of the stack. Whatever comes before `next.run(req).await` sees the request. Whatever comes after sees the response.
+
+This one marks every response as not cacheable:
+
+```rust
+use axum::{extract::Request, http::{header, HeaderValue}, middleware::{self, Next}, response::Response};
+
+async fn no_store(req: Request, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
+}
+
+// let app = Router::new().route(...).layer(middleware::from_fn(no_store));
+```
+
+The same shape hosts logging, metrics and checks of credentials. Return a response without calling `next` to stop a request early.
+"""
+
+[[sections]]
+heading = "Which requests does a layer wrap?"
+body = """
+Order matters. A test router had `/before`, then the layer, then `/after`. It answered like this:
+
+| Request | `.layer(...)` | `.route_layer(...)` |
+|---|---|---|
+| `GET /before` | wrapped | wrapped |
+| `GET /after`, added after the layer | not wrapped | not wrapped |
+| An unknown path (404) | wrapped | not wrapped |
+| `POST /before`, a wrong method (405) | wrapped | wrapped |
+| `POST /after`, a wrong method (405) | not wrapped | not wrapped |
+
+So add every route first, then the layer. Use `route_layer` when the middleware should run only for paths that exist, such as a check that would otherwise turn a 404 into a 401.
+"""
+
+[[sections]]
+heading = "What does the example do with request ids?"
+body = """
+It reuses the caller's `x-request-id`, or makes one when there is none. It puts the id on the request, so handlers can read it, and on the response. The example prints:
+
+```text
+supplied None -> response x-request-id = req-1
+supplied None -> response x-request-id = req-2
+supplied Some("trace-abc") -> response x-request-id = trace-abc
+```
+
+**The caller's id is copied as it comes.** It can be any length the server accepts for a header. Check or replace it before you trust it in logs, and never use it for access control.
+
+**The new ids come from a counter.** They repeat after a restart and between servers. To join logs across services, use a random or time-based id, such as a UUID. The `tower-http` crate has a ready-made request id layer.
+
+:::deeper Walk through the code (gives away much of "Name every request and log it")
+```walkthrough
+file = "examples/web/axum_middleware.rs"
+[[step]]
+title = "A counter and a header name"
+lines = "25-26"
+text = "`from_static` is a `const fn`, so a bad header name here stops the build."
+[[step]]
+title = "Reuse the caller's id or make one"
+lines = "28-34"
+text = "A missing header gets `req-` and the next number."
+[[step]]
+title = "Put it on the request and the response"
+lines = "35-39"
+text = "The handler can read the id from the request. The response gets it after `next.run` returns."
+[[step]]
+title = "Wrap the routes"
+lines = "47-49"
+text = "The layer comes after the route, so it wraps it."
+[[step]]
+title = "Check three requests"
+lines = "51-68"
+text = "Each response must carry its own id, and a supplied id must come back unchanged."
+```
+:::
+"""
+
+[[connections]]
+kind = "before"
+title = "Tower service layer"
+link = "/cookbook/p/tower-service-layer"
+why = "What a layer is underneath: one service wrapped in another."
+
+[[connections]]
+kind = "practise"
+title = "A log line for every request"
+link = "/p/b21-line-per-request"
+level = "similar"
+why = "A middleware that opens a tracing span for each request."
+
+[[connections]]
+kind = "practise"
+title = "Name every request and log it"
+link = "/p/b22-name-every-request"
+level = "similar"
+why = "A request id and a span in one middleware, for a whole service."
+
+[[connections]]
+kind = "returns"
+title = "Tracing"
+link = "/cookbook/p/tracing-spans-subscriber-layers"
+why = "Put the request id into a span, so every log line of the request carries it."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its last parts name and log every request."
+
+[[sources]]
+title = "axum: middleware"
+url = "https://docs.rs/axum/0.8/axum/middleware/index.html"
+note = "The ways to write middleware, and the order in which layers run."
+
+[[sources]]
+title = "axum: from_fn"
+url = "https://docs.rs/axum/0.8/axum/middleware/fn.from_fn.html"
+note = "The function signature, and how to use extractors and state in middleware."
+
+[[sources]]
+title = "axum: Router::route_layer"
+url = "https://docs.rs/axum/0.8/axum/struct.Router.html#method.route_layer"
+note = "How it differs from `layer` for requests that match no route."
+
+[[sources]]
+title = "tower-http: request id"
+url = "https://docs.rs/tower-http/latest/tower_http/request_id/index.html"
+note = "A maintained layer that sets and passes on request ids."

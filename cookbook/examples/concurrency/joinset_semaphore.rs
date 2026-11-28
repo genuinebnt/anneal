@@ -1,6 +1,6 @@
 //! RECIPE 07 (concurrency): bounded concurrency with JoinSet + Semaphore, and CHECKING the bound.
 //! LEVEL: intermediate
-//! Use in: concurrent executor stage (later).   Run: cargo run --example joinset_semaphore
+//! Use in: running many async jobs with at most N at a time.   Run: cargo run --example joinset_semaphore
 //! COMMON USES: bounded concurrency in crawlers, batch processors and API clients: Semaphore + JoinSet with a limit that each run checks.
 //!
 //! Pattern: spawn everything into a `JoinSet`, but each task must hold a semaphore permit to run.

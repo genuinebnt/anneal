@@ -296,9 +296,10 @@ impl Scope {
                 Some(d) => match timeout_at(d, self.set.join_next_with_id()).await {
                     Ok(n) => n,
                     Err(_) => {
-                        forced = self.set.len();
                         self.set.abort_all();
                         while let Some(r) = self.set.join_next_with_id().await {
+                            // Abort only asks. A task busy in blocking code finishes normally and is not counted.
+                            forced += matches!(&r, Err(e) if e.is_cancelled()) as usize;
                             first_err = first_err.or(self.record(r)); // aborted tasks end quickly at their next await
                         }
                         break;
@@ -588,8 +589,23 @@ async fn test_deadline_force_abort() {
         "join waited out the grace period before aborting: {took:?}"
     );
     live.wait_zero().await;
+
+    // A task blocked in synchronous code cannot be aborted: it runs to its end, and is not counted as forced.
+    let mut scope = Scope::new(ms(20));
+    let t = Instant::now();
+    let (started, has_started) = tokio::sync::oneshot::channel();
+    scope.spawn("blocking", |_| async {
+        started.send(()).unwrap();
+        std::thread::sleep(ms(150)); // no .await: abort has nowhere to take effect
+        Ok(())
+    });
+    has_started.await.unwrap(); // so the abort below cannot land before the task's first poll
+    scope.token().cancel();
+    let stats = scope.join().await.unwrap();
+    assert!(t.elapsed() >= ms(150), "join waited for the blocking task");
+    assert_eq!(stats.forced, 0, "the blocking task finished by itself");
     println!(
-        "5. deadline: stuck task ignored cancel, aborted after the 60 ms grace (join took {took:?})"
+        "5. deadline: stuck task ignored cancel, aborted after the 60 ms grace (join took {took:?}); a blocking task could not be aborted"
     );
 }
 

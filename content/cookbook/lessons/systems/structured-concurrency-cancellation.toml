@@ -1,0 +1,252 @@
+title = "Structured concurrency on Tokio"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 268
+kind = "lesson"
+level = "advanced"
+code = ["examples/concurrency/structured_concurrency_cancellation.rs"]
+code_spoils = ["/p/c4-bounded-fan-out", "/p/b21-one-piece-of-work", "/p/c4-drain-with-deadline"]
+lede = "Tasks that belong to a scope: they can be cancelled together, and the scope ends only when they are gone."
+summary = """A task started with `tokio::spawn` runs on its own, even after the code that started it has returned or failed. Structured concurrency ties tasks to an owner. The example builds three small pieces by hand: a cancellation token that forms a tree, a tracker that counts live tasks, and a scope whose first failure cancels the rest. Cancellation only asks. A task stops at its next `.await`, and after a grace period the scope aborts it."""
+
+[[sections]]
+heading = "Why is a plain spawn not enough?"
+body = """
+Say a request handler starts three lookups as tasks, and the first one fails. The handler returns an error. The other two lookups keep running, and nobody waits for them or reads their results.
+
+`tokio::spawn` gives you a task with no owner. Dropping its `JoinHandle` does not stop it. It only means you can no longer wait for it. So tasks can leak, keep using resources after a failure, and outlive a shutdown.
+
+**Structured concurrency** says a task belongs to a scope. The scope waits for every task it started before it ends. A failure in one task can cancel its siblings. And when the scope has returned, you know none of its tasks is still running.
+"""
+
+[[sections]]
+heading = "What are the three pieces?"
+body = """
+The example writes each piece from scratch, so you can read how it works. In real code, use the versions in Tokio and `tokio-util`.
+
+**`CancellationToken`** is a flag that tasks can wait on. `child()` makes a token that is cancelled with its parent, while cancelling the child leaves the parent alone. The production version is `tokio_util::sync::CancellationToken`.
+
+**`TaskTracker`** counts live tasks. After `close()`, its `wait()` returns once no tracked task is left. The production version is `tokio_util::task::TaskTracker`.
+
+**`Scope`** spawns into a `JoinSet` and hands each task its token. The first error or panic cancels the token, so the siblings stop. In production, combine a `JoinSet` with a token.
+
+The tracker counts through a guard that lives inside each task's future. So the count drops however the task ends: it finishes, panics, is aborted, or is dropped before it ever ran.
+
+A token's drop guard cancels the token when the guard is dropped. An early `return`, a `?` or a panic then still tells the other tasks to stop.
+"""
+
+[[sections]]
+heading = "How does a task notice it was cancelled?"
+body = """
+Cancelling a token only sets a flag and wakes the waiters. A task stops because it looks: it waits on `token.cancelled()` in a `select!`, or checks `is_cancelled()` in a loop.
+
+If a task ignores the token, the scope waits for a grace period after the cancel. Then it aborts what is left. An abort also only takes effect when the task reaches an `.await`.
+
+So code that keeps the thread busy without awaiting cannot be stopped. Both programs below run 30 slices of 10 ms of CPU work inside a 10 ms timeout.
+
+```compare
+takeaway = "A timeout, a cancel and an abort all need the task to reach an `.await`. In a long CPU loop, add one now and then, or move the work to `spawn_blocking`."
+[wrong]
+title = "No .await in the loop"
+code = '''
+use std::time::{Duration, Instant};
+use tokio::time::timeout;
+
+fn busy(d: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < d {} // CPU work, no .await
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let start = Instant::now();
+    let result = timeout(Duration::from_millis(10), async {
+        for _ in 0..30 {
+            busy(Duration::from_millis(10));
+        }
+    })
+    .await;
+    println!("finished: {}, after {} ms", result.is_ok(), start.elapsed().as_millis());
+}
+'''
+result = "It printed `finished: true` after about 300 ms, more under load. The whole loop ran in one poll, so the timer never got a turn, and the late work counts as finished."
+[fixed]
+title = "A yield after each slice"
+code = '''
+use std::time::{Duration, Instant};
+use tokio::time::timeout;
+
+fn busy(d: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < d {} // CPU work, no .await
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let start = Instant::now();
+    let result = timeout(Duration::from_millis(10), async {
+        for _ in 0..30 {
+            busy(Duration::from_millis(10));
+            tokio::task::yield_now().await; // a point where it can be stopped
+        }
+    })
+    .await;
+    println!("finished: {}, after {} ms", result.is_ok(), start.elapsed().as_millis());
+}
+'''
+result = "It printed `finished: false` after about 30 ms in our runs. The exact time varies. The timer got a turn at a yield a few slices in, and the rest of the work never ran."
+```
+
+The example shows the same thing from the other side. A task blocked in `std::thread::sleep` for 150 ms is aborted after a 20 ms grace, but it still runs to its end. The scope reports that no task needed the abort.
+"""
+
+[[sections]]
+heading = "In what order should a server shut down?"
+body = """
+1. **Stop accepting new work.** Otherwise new requests arrive while you drain.
+2. **Cancel the work in flight.** Each task gets the chance to finish cleanly or save its state.
+3. **Wait, with a deadline.** Well-behaved tasks end in this time.
+4. **Abort whatever is still running.** Otherwise one stuck task keeps the process alive for ever.
+
+The example's server model records the steps it took. With 20 quick connections it ends with "drained". With one stuck connection among 10, the drain times out after 100 ms, the stuck one is aborted, and the other 9 have finished.
+
+`Drop` cannot be async, so do async cleanup in the branch that sees the cancel, before returning. Keep a plain drop guard as a backstop for an abort or a panic. The example counts both.
+"""
+
+[[sections]]
+heading = "Which waits are safe to drop?"
+body = """
+A wait is **cancel-safe** if dropping it before it finishes loses nothing. Every wait in a `select!` branch that can lose must be like that.
+
+| Wait | Safe to drop? |
+|---|---|
+| `Notify::notified()` | Yes. The example creates it before it checks the flag, so a wake-up in between is not missed. |
+| `JoinSet::join_next()` | Yes. A finished task is returned by the next call. |
+| `mpsc::Receiver::recv()` | Yes. |
+| `sleep`, `timeout_at` | Yes. A timeout drops the future inside it, which is the point. |
+| An `async fn` with several awaits | Not if what it has read so far lives only in its local variables. |
+
+Dropping a `JoinHandle` is different: the task goes on running, detached.
+"""
+
+[[sections]]
+heading = "What are the limits of the hand-written pieces?"
+body = """
+**The tracker still accepts tasks after `close()`.** A task spawned after `wait()` has returned is not waited for.
+
+**Cancelling recurses** through child tokens, and `child()` scans the parent's live children. A very deep or very wide tree is slow.
+
+**Two cancels at once** can let the second return before every descendant is marked.
+
+**A grace period near `Duration::MAX`** overflows the deadline and panics.
+
+The tests run 1,000 seeded random cancel timings, with nested scopes and tasks that spin, sleep or ignore the token. None leaks a task or deadlocks.
+
+:::deeper Walk through the code (gives away much of "At most N in flight", "Run one piece of work and say how it ended" and "Shut down without losing work")
+```walkthrough
+file = "examples/concurrency/structured_concurrency_cancellation.rs"
+[[step]]
+title = "Cancel a token and its children"
+lines = "89-115"
+text = "Parents hold children weakly, and a new child checks the parent's flag after it registers, so no cancel is lost."
+[[step]]
+title = "Wait without missing a wake-up"
+lines = "117-126"
+text = "The `Notify` future is made before the flag is read, so a cancel in between still wakes it."
+[[step]]
+title = "Count tasks with a guard inside them"
+lines = "161-191"
+text = "The count goes up before the spawn and down when the guard drops, however the task ends."
+[[step]]
+title = "Wait until closed and empty"
+lines = "199-208"
+text = "The same pattern as `cancelled`: make the waiter, check, then wait."
+[[step]]
+title = "Join with fail-fast and one deadline"
+lines = "289-332"
+text = "The first error cancels the token and starts the grace clock. At the deadline, the rest are aborted and only real aborts are counted."
+[[step]]
+title = "A blocking task is not aborted"
+lines = "593-606"
+text = "The task sleeps on the thread, so the abort never takes effect. `join` waits for it, and `forced` stays 0."
+[[step]]
+title = "Shut a server down in order"
+lines = "724-744"
+text = "Stop the acceptor, close the tracker, cancel, wait 100 ms, then abort what is left."
+```
+:::
+"""
+
+[[connections]]
+kind = "before"
+title = "Cancellation with `select!`, and timeouts"
+link = "/cookbook/p/select-cancel"
+why = "What happens to the branches that lose a `select!`."
+
+[[connections]]
+kind = "before"
+title = "Cancellation safety"
+link = "/cookbook/p/async-cancel-safety"
+why = "Why some futures lose data when they are dropped."
+
+[[connections]]
+kind = "practise"
+title = "At most N in flight"
+link = "/p/c4-bounded-fan-out"
+level = "similar"
+why = "The first error cancels the other tasks, which must be gone before you return."
+
+[[connections]]
+kind = "practise"
+title = "Run one piece of work and say how it ended"
+link = "/p/b21-one-piece-of-work"
+level = "similar"
+why = "Cancel, time out and survive a panic, with nothing left running."
+
+[[connections]]
+kind = "practise"
+title = "Shut down without losing work"
+link = "/p/c4-drain-with-deadline"
+level = "similar"
+why = "One deadline for a whole drain."
+
+[[connections]]
+kind = "practise"
+title = "Close the door, then wait for everyone to leave"
+link = "/p/b21-closing-time"
+level = "related"
+why = "Closing and counting without the gap this page's tracker has."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "Stopping a server and draining a channel, without a deadline."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its service cancels jobs and shuts down without losing one."
+
+[[sources]]
+title = "Nathaniel J. Smith: notes on structured concurrency"
+url = "https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/"
+note = "The essay that named the idea, and why a task without an owner is like a goto."
+
+[[sources]]
+title = "tokio-util: CancellationToken"
+url = "https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html"
+note = "The production token, with child tokens and drop guards."
+
+[[sources]]
+title = "tokio-util: TaskTracker"
+url = "https://docs.rs/tokio-util/latest/tokio_util/task/task_tracker/struct.TaskTracker.html"
+note = "The production tracker, and how it differs from a JoinSet."
+
+[[sources]]
+title = "Tokio: graceful shutdown"
+url = "https://tokio.rs/tokio/topics/shutdown"
+note = "Finding out when to shut down, telling every task, and waiting for them."

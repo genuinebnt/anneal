@@ -1,6 +1,6 @@
 //! RECIPE 27 (axum): routes, shared state, JSON in/out, path params, and testing a router WITHOUT a socket.
 //! LEVEL: intermediate
-//! Use in: REST API stage.   Run: cargo run --release --example axum_router_state
+//! Use in: any JSON service over HTTP.   Run: cargo run --release --example axum_router_state
 //! COMMON USES: every REST service in Rust: routes, shared state, JSON extractors; handlers tested without sockets.
 //!
 //! Pattern: `Router::new().route(path, method(handler)).with_state(state)`. Handlers are plain async fns

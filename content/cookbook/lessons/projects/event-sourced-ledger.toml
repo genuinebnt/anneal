@@ -1,0 +1,260 @@
+title = "An event-sourced bank ledger"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 647
+kind = "lesson"
+level = "capstone"
+code = ["examples/capstones/event_sourced_ledger.rs"]
+code_spoils = ["/rust/series/event-ledger"]
+lede = "A bank ledger that never stores a balance. It stores what happened, and works out everything else from that."
+summary = """In **event sourcing**, facts are the data: deposits, withdrawals, transfers and corrections, appended to a log and never changed. A balance is computed by replaying them. This project builds the whole system in one file, from accounts and a crash-safe file to read models, transfers and an outbox. A full history costs more moving parts, and a seeded simulation checks that they agree."""
+
+[[sections]]
+heading = "Why store events instead of a balance?"
+body = """
+A balance column says what an account holds now, but not how it got there. If a bug overwrites it, the old value is gone.
+
+An event log keeps every fact in order. The balance is a **fold** over the account's events: start empty and apply each event in turn. Replay up to any point to see the past, or from the start to rebuild a report.
+
+The price is extra work. Replays cost time, old events must stay readable for ever, and several views must keep up with one log.
+"""
+
+[[sections]]
+heading = "How does a request become an event?"
+body = """
+Two pure functions split the job. `decide(state, command)` looks at the current state and returns new events, or a refusal. `evolve(state, event)` applies one event and never refuses, because an event is a fact that already happened.
+
+Here is the shape in a small to-do list, a domain far from banking. `Event` is `Added` or `Done`, and a `List` holds the next id and the open items:
+
+```rust
+fn decide(list: &List, cmd: &Command) -> Result<Vec<Event>, String> {
+    match cmd {
+        Command::Add { text } if text.trim().is_empty() => Err("empty item".into()),
+        Command::Add { text } => Ok(vec![Event::Added { id: list.next_id, text: text.clone() }]),
+        Command::Finish { id } if !list.open.contains(id) => Err(format!("no open item {id}")),
+        Command::Finish { id } => Ok(vec![Event::Done { id: *id }]),
+    }
+}
+
+fn evolve(mut list: List, e: &Event) -> List {
+    match e {
+        Event::Added { id, .. } => {
+            list.open.push(*id);
+            list.next_id = id + 1;
+        }
+        Event::Done { id } => list.open.retain(|x| x != id),
+    }
+    list
+}
+
+// state = log.iter().fold(List::default(), evolve)
+```
+
+Given "add milk", "add a call", "finish 0" and "finish 0" again, it keeps 3 events and refuses the last command with `no open item 0`.
+
+The ledger's accounts work the same way, with commands to open, deposit, withdraw, transfer and reverse. Neither function reads a file or a clock, so both are easy to test.
+"""
+
+[[sections]]
+heading = "How do two writers avoid overwriting each other?"
+body = """
+Each account is a **stream** with a version: the number of events in it. An append names the version its writer read. If the stream has moved on, the store refuses the whole batch with a conflict. This is **optimistic concurrency**: no locks, and a retry when you lose.
+
+```stepper
+caption = "Two writers, one account"
+[[frame]]
+title = "Both load version 2"
+text = "Writer A wants to withdraw 60, writer B wants 50. Each decides on its own copy, and both decisions say yes."
+lanes = [ { name = "Writer A", items = ["v2, balance 100"] }, { name = "Log", items = ["v1 Opened", "v2 Deposited 100"], slots = 4 }, { name = "Writer B", items = ["v2, balance 100"] } ]
+[[frame]]
+title = "A appends first"
+text = "A's append expects version 2, and the stream is at 2. The event becomes version 3."
+lanes = [ { name = "Writer A", items = ["done"] }, { name = "Log", items = ["v1 Opened", "v2 Deposited 100", "v3 Withdrawn 60"], slots = 4 }, { name = "Writer B", items = ["v2, balance 100"] } ]
+[[frame]]
+title = "B's append is refused"
+text = "B also expects version 2, but the stream is at 3. The store writes nothing and returns a conflict."
+lanes = [ { name = "Writer A", items = ["done"] }, { name = "Log", items = ["v1 Opened", "v2 Deposited 100", "v3 Withdrawn 60"], slots = 4 }, { name = "Writer B", items = ["conflict"] } ]
+[[frame]]
+title = "B loads again"
+text = "Now B sees a balance of 40, and decide refuses the withdrawal. This state is current, so the refusal is the real answer."
+lanes = [ { name = "Writer A", items = ["done"] }, { name = "Log", items = ["v1 Opened", "v2 Deposited 100", "v3 Withdrawn 60"], slots = 4 }, { name = "Writer B", items = ["refused: 40 < 50"] } ]
+```
+
+The reverse case matters as much. A refusal made on old state may be wrong, so it is reported as a conflict, and the writer loads again.
+
+Every command also carries an id, which the account remembers with a fingerprint of the command. A retry with the same id changes nothing. A different command under a used id is refused.
+"""
+
+[[sections]]
+heading = "How does the log survive a crash?"
+body = """
+The file store writes one **frame** per batch of events, so a crash loses a whole batch, never half of one:
+
+| Field | Size | Purpose |
+|---|---|---|
+| length | 4 bytes | how many payload bytes follow |
+| check of the length | 4 bytes | CRC-32 of the length, so a damaged length is never used |
+| check of the payload | 4 bytes | CRC-32 of the payload |
+| payload | length bytes | the batch, as JSON |
+
+On opening, an incomplete last frame, or a bad frame with only zeros after it, is a **torn** write. It is cut off. A bad frame with real data after it is **damage**: opening fails and the file is left alone, because cutting there could throw away saved batches. After a failed write or sync, the store refuses further writes until it is reopened.
+
+The example cuts 5 bytes off a real log and reopens it: `crash: 727 of 728 events survive, tail was Torn`. A flipped bit in the first frame makes opening fail, and every byte stays.
+"""
+
+[[sections]]
+heading = "What else reads the log?"
+body = """
+**Read models.** Balances, daily totals and top spenders are views of the whole log, each with a **checkpoint**: the position it has read up to. A rebuild from scratch must equal the views kept up to date step by step. Keeping such views apart from the command side is called **CQRS**.
+
+**Snapshots.** Every few events (8 in the simulation), an account's state is kept in memory. The next load replays only the events after it. A snapshot is only a shortcut: snapshot plus tail must equal a full replay, and the example asserts that.
+
+**Old event shapes.** Old events stay on disk as written and are **upcast** to the current format when read. A version 1 withdrawal `{"amt":250}` is read as `Withdrawn { amount: 250, reason: "legacy" }`.
+
+**Corrections.** A mistake is undone by a new `Reversed` event, never by deleting. In the demo the balance at versions 1 to 4 is `[0, 100, 70, 100]`, and both the withdrawal of 30 and its reversal stay in the history.
+"""
+
+[[sections]]
+heading = "How does money move between two accounts?"
+body = """
+An append covers one stream, so a transfer takes two steps. The source records `TransferredOut`, and a **reactor** reads the log later and sends a receive command to the target.
+
+That command's id is made from the log position of the event it answers. A reactor that crashes and reads the event again sends the same id, and the target ignores the repeat. If the target cannot take the money, because it was never opened or would overflow, the money goes back to the source.
+
+The rule checked throughout: the sum of balances, plus money in flight, equals what came into the bank minus what left it.
+
+The **outbox** does the same for the outside world. Events to publish are part of the log, and a relay sends them at least once. In one run, 1,450 events went out as 2,434 deliveries, and the consumer applied each once.
+"""
+
+[[sections]]
+heading = "How does the example check itself?"
+body = """
+A seeded simulation runs several writers whose load and commit are separate steps, so other writers act in between. The main run has 655 conflicts, beside 2,117 applied and 231 refused commands. The reactor sometimes crashes before saving its checkpoint, and the outbox loses acknowledgements.
+
+The money rule and the read models are checked every 700 steps, and every invariant at the end. The same seed gives the same log, and 25 more seeds vary the writers and accounts. Hand-made cases cover the edges, such as a stale refusal, a reused id, every cut of a log and every flipped bit of its first frame.
+"""
+
+[[sections]]
+heading = "What does it leave out?"
+body = """
+- Snapshots, checkpoints, acknowledgements and seen ids live in memory. A restart rebuilds them and sends everything publishable again.
+- An account keeps every command id for ever. A real system expires old ids.
+- Damage to the data of the very last frame looks like a torn write, so it is cut off, even if that batch was acknowledged.
+- After a failed sync, the batch may still be there on reopen, so the caller must retry with the same command id.
+- Nothing locks the file against a second process, and the tests cannot cut the power.
+
+:::deeper Walk through the code (gives away much of "From a stock book to a bank ledger")
+```walkthrough
+file = "examples/capstones/event_sourced_ledger.rs"
+[[step]]
+title = "decide"
+lines = "228-298"
+text = "Each command is checked against the state. Amounts must be positive, balances must fit, and a reversal needs a known, unreversed change."
+[[step]]
+title = "evolve"
+lines = "300-322"
+text = "Applies a fact without checks. It saturates instead of panicking, for facts that `decide` did not make."
+[[step]]
+title = "Upcast old events on read"
+lines = "360-390"
+text = "One step per schema version, on a JSON value. The stored bytes stay as they were."
+[[step]]
+title = "Check the expected version"
+lines = "453-487"
+text = "A stale version is a conflict. Every event is decoded before anything is stored."
+[[step]]
+title = "Frames and the scan"
+lines = "562-611"
+text = "The length is trusted only after its own check passes. Only zeros after a bad frame mean a torn write. Anything else is damage."
+[[step]]
+title = "Write ahead, then remember"
+lines = "699-723"
+text = "The frame reaches the file before memory changes. A failed write or sync poisons the store."
+[[step]]
+title = "One commit attempt"
+lines = "801-849"
+text = "Known ids are answered first. A refusal on stale state becomes a conflict, and crossing a multiple of N keeps a snapshot."
+[[step]]
+title = "Deliver a transfer"
+lines = "1001-1040"
+text = "The receive uses the event's position as its id. If it is refused, the money goes back under a second id."
+[[step]]
+title = "No money appears or vanishes"
+lines = "1270-1309"
+text = "Balances plus money in flight must equal what entered minus what left."
+```
+:::
+"""
+
+[[connections]]
+kind = "before"
+title = "A write-ahead log"
+link = "/cookbook/p/wal-append-log"
+why = "Appending records with checksums, and what a crash can leave behind."
+
+[[connections]]
+kind = "before"
+title = "Doing things once"
+link = "/cookbook/p/idempotency-dedup-leader-fencing-store"
+why = "Why a command needs an id, and what retries do without one."
+
+[[connections]]
+kind = "practise"
+title = "The library desk's diary"
+link = "/p/y71-the-desk-diary"
+level = "related"
+why = "Decide and evolve for a library book, before any bank."
+
+[[connections]]
+kind = "practise"
+title = "Capstone 4: the journal on disk"
+link = "/p/y72-the-journal-on-disk"
+level = "similar"
+why = "The same frame format, with its own names and result types."
+
+[[connections]]
+kind = "practise"
+title = "Capstone 6: money on the way"
+link = "/p/y72-money-on-the-way"
+level = "similar"
+why = "A follower that sends the second half of a transfer, or sends the money back."
+
+[[connections]]
+kind = "returns"
+title = "Transactional outbox and inbox on SQLite"
+link = "/cookbook/p/transactional-outbox-inbox-sqlite"
+why = "The outbox idea over a real database."
+
+[[connections]]
+kind = "returns"
+title = "The saga pattern"
+link = "/cookbook/p/saga-orchestrator"
+why = "Work across several services, undone step by step when one fails."
+
+[[connections]]
+kind = "project"
+title = "From a stock book to a bank ledger"
+link = "/rust/series/event-ledger"
+why = "Build this ledger yourself, one part at a time."
+
+[[sources]]
+title = "Martin Fowler: Event Sourcing"
+url = "https://martinfowler.com/eaaDev/EventSourcing.html"
+note = "The pattern, with replays, rebuilds and how to handle outside systems."
+
+[[sources]]
+title = "Martin Fowler: CQRS"
+url = "https://martinfowler.com/bliki/CQRS.html"
+note = "Separate models for writing and reading, and when that is not worth it."
+
+[[sources]]
+title = "microservices.io: transactional outbox"
+url = "https://microservices.io/patterns/data/transactional-outbox.html"
+note = "Publishing events reliably from the same write as the change."
+
+[[sources]]
+title = "Martin Kleppmann: schema evolution in Avro, Protocol Buffers and Thrift"
+url = "https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html"
+note = "How formats let old and new data be read together, the problem upcasting solves."

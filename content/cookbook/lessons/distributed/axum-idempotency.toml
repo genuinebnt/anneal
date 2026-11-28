@@ -1,0 +1,128 @@
+title = "Idempotency keys for POST"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 511
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/axum_idempotency.rs"]
+code_spoils = ["/p/b22-accept-each-job-once"]
+lede = "A client sends the same key with every retry of one request, so the server creates the thing once."
+summary = """A quick lookup for idempotency keys in axum. The client makes up a key for one action and sends it in an `Idempotency-Key` header, on the first try and on every retry. The server remembers each key with its result. A retry gets the stored result back instead of a second execution. This example keeps keys in memory, so it shows the idea, not a production store."""
+
+[[sections]]
+heading = "Why does a POST need a key?"
+body = """
+A client sends `POST /executions`. The server starts the work, but the answer is lost on the way back. The client cannot tell whether anything happened, so it sends the request again.
+
+Without a key, that retry starts a second execution. With a key, the server sees that it already answered this request and sends the same answer again.
+"""
+
+[[sections]]
+heading = "What does the example answer?"
+body = """
+The example sends four requests to one route. Each answer is JSON with an `execution_id` and a `replayed` flag:
+
+| Request | Status | Id | Replayed |
+|---|---|---|---|
+| key `key-1` | 201 | 1 | false |
+| key `key-1` again | 200 | 1 | true |
+| key `key-2` | 201 | 2 | false |
+| no key | 400 | none | none |
+
+Without a key, the body is `{"error":"Idempotency-Key header required"}`. An empty key is refused too. Otherwise every client that sends an empty header would share one result.
+
+The check and the insert happen under one lock. The example sends 64 copies of a new key at once, and exactly one of them creates.
+
+:::deeper Walk through the code (gives away much of "Keep the jobs and accept each once")
+```walkthrough
+file = "examples/web/axum_idempotency.rs"
+[[step]]
+title = "One lock over the counter and the keys"
+lines = "30-33"
+text = "The last execution id and the map of keys sit in one `Mutex`, so they always change together."
+[[step]]
+title = "Refuse a missing or empty key"
+lines = "35-42"
+text = "A header that is not valid text counts as missing."
+[[step]]
+title = "Check, then insert, under the same guard"
+lines = "43-57"
+text = "A known key replays its id with 200. A new key takes the next id and answers 201."
+[[step]]
+title = "The four requests"
+lines = "87-115"
+text = "A first try, a retry, a new key and no key, then an empty key."
+[[step]]
+title = "64 copies at once"
+lines = "117-130"
+text = "Spawned on every worker thread. Exactly one answer is 201, and all carry the same id."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does it leave out?"
+body = """
+**The work runs under the lock.** Here the work is one counter. Real work, such as a call to a bank, takes time and must not hold a lock. Then you need a third state, "in flight", for a retry that arrives while the first try is still running.
+
+**The body is not compared.** A key reused for a different request silently gets the old result. The IETF draft on this header suggests 422 for that case, and 409 for a retry that arrives while the first is in flight.
+
+**Keys live in memory, for ever.** A restart forgets them, and nothing evicts them. Real services store the key in the same database transaction as the work, and drop keys after a day or so.
+
+**A replay says 200, not 201.** Stripe's v1 API instead replays the first status and body exactly, errors included. Either works if you document it.
+"""
+
+[[connections]]
+kind = "before"
+title = "Axum router state"
+link = "/cookbook/p/axum-router-state"
+why = "How the shared map reaches the handler as `State`."
+
+[[connections]]
+kind = "practise"
+title = "Charge the card once"
+link = "/p/b21-charge-once"
+level = "similar"
+why = "Idempotency with slow async work, so a retry can arrive while the first try is still running."
+
+[[connections]]
+kind = "practise"
+title = "Keep the jobs and accept each once"
+link = "/p/b22-accept-each-job-once"
+level = "similar"
+why = "A store where racing submits with one key create exactly one job."
+
+[[connections]]
+kind = "returns"
+title = "Doing things once"
+link = "/cookbook/p/idempotency-dedup-leader-fencing-store"
+why = "Keys that are in flight or done, with a fingerprint of the request and locks that expire."
+
+[[connections]]
+kind = "returns"
+title = "Transactional outbox and inbox on SQLite"
+link = "/cookbook/p/transactional-outbox-inbox-sqlite"
+why = "Recording the key and doing the work in one transaction."
+
+[[connections]]
+kind = "project"
+title = "From one HTTP request to a job service"
+link = "/rust/series/job-service"
+why = "Its service accepts each job once, however often the client retries."
+
+[[sources]]
+title = "Stripe: designing robust and predictable APIs with idempotency"
+url = "https://stripe.com/blog/idempotency"
+note = "Why retries need keys, told with a payments example."
+
+[[sources]]
+title = "Stripe API: idempotent requests"
+url = "https://docs.stripe.com/api/idempotent_requests"
+note = "What a real API saves, how long it keeps keys, and what it does when parameters differ."
+
+[[sources]]
+title = "IETF draft: the Idempotency-Key HTTP header field"
+url = "https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/"
+note = "The proposed standard, with status codes for a missing key, a reused key and a request still in progress."
