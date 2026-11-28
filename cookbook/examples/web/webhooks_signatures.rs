@@ -5,15 +5,23 @@
 //! What: a SENDER that signs and delivers events, and a RECEIVER that must not trust the network.
 //!  * Signature (Stripe style): header `Webhook-Signature: t=<unix ts>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`.
 //!    Signing the timestamp INTO the MAC is what makes the replay window enforceable.
-//!  * Receiver: verify over the RAW BYTES (not parsed-and-reserialized JSON), compare in CONSTANT TIME, reject a
-//!    timestamp outside +/-300s (replay), DEDUPLICATE by event id (the sender is at-least-once), answer 2xx FAST and
-//!    process asynchronously from a queue, accept TWO active secrets so a secret can be ROTATED with no downtime.
-//!  * Statuses: 400 for a bad/old signature (permanent: do not retry), 408/429/5xx => the sender retries.
+//!  * Receiver: verify over the RAW BYTES (not parsed-and-reserialized JSON), compare without an early exit, reject
+//!    a timestamp outside +/-300s (limits replay), DEDUPLICATE by event id (the sender is at-least-once), answer 2xx
+//!    only after the event has been handed on, accept TWO active secrets so a secret can be ROTATED.
+//!  * NOT FOR PRODUCTION: SHA-256 and HMAC are hand-written here. `ct_eq` has no early exit in the source, but the
+//!    compiler gives no timing guarantee. Use your provider's library, or the `hmac` crate's `verify_slice`.
+//!    The queue and the set of seen ids live in memory, so a crash loses both. A real receiver stores them durably
+//!    BEFORE it answers 2xx.
+//!  * Statuses: 408/425/429/5xx and transport errors => the sender retries, up to its attempt limit. Any other
+//!    answer goes to the dead-letter list at once: a redirect, 409 (a known id with another body), and 400, also
+//!    the 400 that a genuine delivery gets when the two clocks differ by more than the window.
+//!  * Only the FIRST `Webhook-Signature` header is read.
 //!  * Sender: exponential backoff with jitter, an injectable clock/sleeper (no real sleeping: virtual time), a max
 //!    attempt budget and a DEAD-LETTER queue that can be re-driven. A fresh signature is made for every attempt.
 //!  * Attacks shown being rejected: modified body, replayed old timestamp, wrong secret, missing/garbled header, and
 //!    the classic bug of verifying a re-serialized JSON value.
-//! Delivery is at-least-once; at-least-once + idempotent receiver = effectively-once processing.
+//!
+//! Retries can deliver an event twice, so the receiver must ignore repeats.
 //! COMMON USES: payment providers (Stripe), Git hosts (GitHub X-Hub-Signature-256), chat/CRM/CI integrations,
 //! your own platform's outbound event notifications.
 //! Read: https://stripe.com/docs/webhooks , https://datatracker.ietf.org/doc/html/rfc9110 ,
@@ -24,13 +32,13 @@ use axum::{
     body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
-    response::Response,
+    response::{Redirect, Response},
     routing::post,
 };
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client, RequestBuilder, redirect};
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     net::SocketAddr,
     sync::{
         Arc, Mutex, RwLock,
@@ -290,30 +298,20 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
-/// Constant-time equality: no early exit, the loop always touches every byte.
+/// Equality with no early exit on the contents. The length is checked first: the expected length is public.
+/// `black_box` is only a hint, so this is NOT a promise of constant time in the compiled program.
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    let mut d = (a.len() ^ b.len()) as u8;
-    for i in 0..a.len().max(b.len()) {
-        d |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    if a.len() != b.len() {
+        return false;
     }
-    d == 0
-}
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-fn b64e(d: &[u8]) -> String {
-    let mut out = String::new();
-    for c in d.chunks(3) {
-        let n = (c[0] as u32) << 16
-            | (*c.get(1).unwrap_or(&0) as u32) << 8
-            | *c.get(2).unwrap_or(&0) as u32;
-        for i in 0..=c.len() {
-            out.push(B64[((n >> (18 - 6 * i)) & 63) as usize] as char);
-        }
-    }
-    out
+    let diff = a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y));
+    std::hint::black_box(diff) == 0
 }
 
 const T0: u64 = 1_700_000_000;
 const TOLERANCE: u64 = 300;
+const MAX_HEADER: usize = 1024;
+const MAX_SIGNATURES: usize = 4;
 
 // ---------------------------------------------------------------- signing / verification
 fn sign_header(secrets: &[&str], t: u64, body: &[u8]) -> String {
@@ -332,31 +330,47 @@ fn verify(
     raw: &[u8],
     now: u64,
 ) -> Result<(), &'static str> {
+    const BAD: &str = "malformed signature header";
     let header = header.ok_or("missing signature header")?;
+    if header.len() > MAX_HEADER {
+        return Err(BAD);
+    }
     let (mut t, mut sigs) = (None, vec![]);
     for part in header.split(',') {
         match part.trim().split_once('=') {
-            Some(("t", v)) => t = v.parse::<u64>().ok(),
-            Some(("v1", v)) => sigs.push(v.to_string()),
+            Some(("t", v)) => {
+                if t.replace(v).is_some() {
+                    return Err(BAD); // exactly one `t`
+                }
+            }
+            Some(("v1", v)) => sigs.push(v),
             _ => {}
         }
     }
-    let t = t.ok_or("malformed signature header")?;
-    if sigs.is_empty() {
-        return Err("malformed signature header");
+    let t_text = t.ok_or(BAD)?;
+    if sigs.is_empty() || sigs.len() > MAX_SIGNATURES {
+        return Err(BAD);
     }
-    let mut signed = format!("{t}.").into_bytes();
-    signed.extend_from_slice(raw); // the exact bytes that arrived on the wire
+    // digits only: `parse` alone would also accept "+17"
+    if !t_text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(BAD);
+    }
+    let t: u64 = t_text.parse().map_err(|_| BAD)?;
+    // the MAC covers the timestamp's text as sent, a dot, and the exact bytes of the body
+    let mut signed = format!("{t_text}.").into_bytes();
+    signed.extend_from_slice(raw);
     let mut ok = false;
-    for s in secrets {
+    // an empty secret is a configuration mistake: anyone can sign with it
+    for s in secrets.iter().filter(|s| !s.is_empty()) {
         let expected = hex(&hmac_sha256(s.as_bytes(), &signed));
         for got in &sigs {
-            ok |= ct_eq(expected.as_bytes(), got.as_bytes());
-        } // no `||` short-circuit, no `==`
+            ok |= ct_eq(expected.as_bytes(), got.as_bytes()); // `|=` does not short-circuit
+        }
     }
     if !ok {
         return Err("no matching signature");
     }
+    // both directions: too old, and too far in the future
     if now.abs_diff(t) > TOLERANCE {
         return Err("timestamp outside tolerance");
     }
@@ -367,7 +381,7 @@ fn verify(
 struct Rx {
     secrets: RwLock<Vec<String>>,
     clock: Arc<AtomicU64>,
-    seen: Mutex<HashSet<String>>,
+    seen: Mutex<HashMap<String, Bytes>>, // event id -> the body it was accepted with
     queue: mpsc::UnboundedSender<String>,
     hits: AtomicU32,
     fail_left: AtomicU32,
@@ -384,7 +398,18 @@ fn text(status: u16, msg: &str) -> Response {
 }
 
 fn accept(rx: &Rx, headers: &HeaderMap, body: &Bytes) -> (u16, &'static str) {
+    accept_with(rx, headers, body, |id| rx.queue.send(id).is_ok())
+}
+
+/// `hand_on` passes the id to whatever does the work, and says whether it took it. A check supplies its own.
+fn accept_with(
+    rx: &Rx,
+    headers: &HeaderMap,
+    body: &Bytes,
+    hand_on: impl FnOnce(String) -> bool,
+) -> (u16, &'static str) {
     let secrets = rx.secrets.read().unwrap().clone();
+    // `get` returns the first header of this name; any later one is ignored
     let sig = headers
         .get("webhook-signature")
         .and_then(|v| v.to_str().ok());
@@ -397,10 +422,18 @@ fn accept(rx: &Rx, headers: &HeaderMap, body: &Bytes) -> (u16, &'static str) {
     let Some(id) = v["id"].as_str() else {
         return (400, "missing event id");
     };
-    if !rx.seen.lock().unwrap().insert(id.to_string()) {
-        return (200, "duplicate ignored");
+    // one lock around "seen?", the hand-off and the mark, so a second copy cannot slip between them
+    let mut seen = rx.seen.lock().unwrap();
+    match seen.get(id) {
+        Some(first) if first == body => return (200, "duplicate ignored"),
+        // not a retry of what was accepted: keep the first, and let a person look
+        Some(_) => return (409, "known id with another body"),
+        None => {}
     }
-    let _ = rx.queue.send(id.to_string()); // hand off; do the slow work elsewhere
+    if !hand_on(id.to_string()) {
+        return (503, "could not hand the event on"); // not marked as seen: the retry must get through
+    }
+    seen.insert(id.to_string(), body.clone());
     (200, "accepted")
 }
 
@@ -486,7 +519,11 @@ impl Sender {
     }
     /// Exponential backoff with "equal jitter": delay in [ceiling/2, ceiling].
     fn backoff(&mut self, failed_attempt: u32) -> u64 {
-        let ceil = self.cap.min(self.base << (failed_attempt - 1));
+        // a plain shift would lose high bits (or panic) after many attempts
+        let doubled = 1u64
+            .checked_shl(failed_attempt.saturating_sub(1))
+            .and_then(|factor| self.base.checked_mul(factor));
+        let ceil = doubled.unwrap_or(self.cap).min(self.cap);
         ceil / 2 + self.next_rand() % (ceil / 2 + 1)
     }
     async fn post_once(&self, payload: &str) -> Result<u16, String> {
@@ -560,6 +597,239 @@ async fn wait_for(f: impl Fn() -> bool) {
     panic!("condition not reached in time");
 }
 
+// ---------------------------------------------------------------- checks without a network
+
+struct XorShift(u64);
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn bytes(&mut self, n: usize) -> Vec<u8> {
+        (0..n).map(|_| (self.next() >> 24) as u8).collect()
+    }
+}
+
+/// Compare with an independent implementation. The constants come from Python's `hmac` and `hashlib`:
+///
+/// ```text
+/// import hashlib, hmac
+/// x, M = 0x9E3779B97F4A7C15, (1 << 64) - 1
+/// def rand(n):
+///     global x
+///     out = bytearray()
+///     for _ in range(n):
+///         x ^= (x << 13) & M; x ^= x >> 7; x ^= (x << 17) & M
+///         out.append((x >> 24) & 255)
+///     return bytes(out)
+/// macs = bytearray()
+/// for k in [0, 1, 31, 32, 55, 56, 63, 64, 65, 100, 127, 128, 129, 200]:
+///     for m in range(301):
+///         key = rand(k); msg = rand(m)
+///         macs += hmac.new(key, msg, hashlib.sha256).digest()
+/// print(hashlib.sha256(macs).hexdigest())
+/// print(hmac.new(b"whsec_test", b'1700000000.{"id":"evt_1"}', hashlib.sha256).hexdigest())
+/// ```
+fn check_against_python() {
+    let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
+    let mut macs = Vec::new();
+    for k in [0, 1, 31, 32, 55, 56, 63, 64, 65, 100, 127, 128, 129, 200] {
+        for m in 0..=300 {
+            let key = rng.bytes(k);
+            let msg = rng.bytes(m);
+            macs.extend_from_slice(&hmac_sha256(&key, &msg));
+        }
+    }
+    assert_eq!(
+        hex(&sha256(&macs)),
+        "db448c612b22ea1d7d79ab5e98af4e736552bcb5112d87e443e30fd67ee0befb"
+    );
+    assert_eq!(
+        sign_header(&["whsec_test"], T0, br#"{"id":"evt_1"}"#),
+        "t=1700000000,v1=c89214b5b5da833daed6f0b8c5bb6bd58cea9022bd80ccc78230f3942d632925"
+    );
+}
+
+fn check_verifier() {
+    // a longer string that continues with 256 zero bytes is not equal
+    let long = [&b"a"[..], &[0u8; 256]].concat();
+    assert!(!ct_eq(b"a", &long) && !ct_eq(&long, b"a"));
+
+    let secrets = vec!["whsec_test".to_string()];
+    let body = br#"{"id":"evt_1"}"#;
+    let good = sign_header(&["whsec_test"], T0, body);
+    let mac = good.split_once("v1=").unwrap().1.to_string();
+    let check = |h: &str, now: u64| verify(&secrets, Some(h), body, now);
+    assert_eq!(check(&good, T0), Ok(()));
+    // The window includes its edges and has two sides. So a request stamped ahead of this clock, by no more than
+    // the tolerance, passes during twice the tolerance: here from T0 - 300 until T0 + 300.
+    for now in [T0 - TOLERANCE, T0 + TOLERANCE] {
+        assert_eq!(check(&good, now), Ok(()));
+    }
+    for now in [T0 - TOLERANCE - 1, T0 + TOLERANCE + 1, 0, u64::MAX] {
+        assert_eq!(check(&good, now), Err("timestamp outside tolerance"));
+    }
+    // the same number written another way is not what was signed
+    let plus = format!("t=+{T0},v1={mac}");
+    assert_eq!(check(&plus, T0), Err("malformed signature header"));
+    let zero = format!("t=0{T0},v1={mac}");
+    assert_eq!(check(&zero, T0), Err("no matching signature"));
+    let twice = format!("t=1,t={T0},v1={mac}");
+    assert_eq!(check(&twice, T0), Err("malformed signature header"));
+    // a second signature may be the one that matches
+    let two = format!("t={T0},v1={},v1={mac}", "0".repeat(64));
+    assert_eq!(check(&two, T0), Ok(()));
+    let many = format!("t={T0}{}", format!(",v1={mac}").repeat(MAX_SIGNATURES + 1));
+    assert_eq!(check(&many, T0), Err("malformed signature header"));
+    let huge = format!("{good},x={}", "a".repeat(MAX_HEADER));
+    assert_eq!(check(&huge, T0), Err("malformed signature header"));
+    // no prefix of the MAC passes, not even the empty one
+    for n in 0..mac.len() {
+        let short = format!("t={T0},v1={}", &mac[..n]);
+        assert_eq!(check(&short, T0), Err("no matching signature"));
+    }
+    // an empty secret never verifies anything
+    let forged = sign_header(&[""], T0, body);
+    let empty = vec![String::new()];
+    assert!(verify(&empty, Some(&forged), body, T0).is_err());
+    assert!(verify(&[], Some(&good), body, T0).is_err());
+
+    // seeded damage: whatever passes must still hold the signed `t` and the true MAC
+    let mut rng = XorShift(7);
+    let alphabet = [
+        't', 'v', '1', '=', ',', ' ', '+', '0', '7', 'a', 'F', '.', '\0', 'é', '€',
+    ];
+    let mut passed = 0;
+    for _ in 0..4_000 {
+        let mut chars: Vec<char> = good.chars().collect();
+        for _ in 0..1 + rng.next() % 3 {
+            let at = (rng.next() % chars.len() as u64) as usize;
+            let c = alphabet[(rng.next() % alphabet.len() as u64) as usize];
+            match rng.next() % 4 {
+                0 => chars[at] = c,
+                1 => chars.insert(at, c),
+                2 => drop(chars.remove(at)),
+                _ => chars.extend([',', c]),
+            }
+        }
+        let h: String = chars.into_iter().collect();
+        if check(&h, T0).is_ok() {
+            passed += 1;
+            let parts: Vec<&str> = h.split(',').map(str::trim).collect();
+            assert!(parts.contains(&format!("t={T0}").as_str()), "{h:?}");
+            assert!(parts.contains(&format!("v1={mac}").as_str()), "{h:?}");
+        }
+    }
+    assert!(passed > 0, "some damage is harmless, such as an added pair");
+}
+
+/// A receiver that cannot hand an event on must not say 2xx, and must accept the retry later.
+fn check_hand_off_failure() {
+    let (closed, gone) = mpsc::unbounded_channel::<String>();
+    drop(gone);
+    let mut rx = Rx {
+        secrets: RwLock::new(vec!["whsec_test".into()]),
+        clock: Arc::new(AtomicU64::new(T0)),
+        seen: Mutex::new(HashMap::new()),
+        queue: closed,
+        hits: AtomicU32::new(0),
+        fail_left: AtomicU32::new(0),
+        fail_status: AtomicU32::new(503),
+        fail_after_processing: AtomicBool::new(false),
+    };
+    let body = Bytes::from_static(br#"{"id":"evt_1"}"#);
+    let mut headers = HeaderMap::new();
+    let signature = sign_header(&["whsec_test"], T0, &body);
+    headers.insert("webhook-signature", signature.parse().unwrap());
+    assert_eq!(accept(&rx, &headers, &body).0, 503);
+    let (open, mut queued) = mpsc::unbounded_channel::<String>();
+    rx.queue = open;
+    assert_eq!(accept(&rx, &headers, &body), (200, "accepted"));
+    assert_eq!(queued.try_recv().ok().as_deref(), Some("evt_1"));
+    assert_eq!(accept(&rx, &headers, &body), (200, "duplicate ignored"));
+    assert!(queued.try_recv().is_err());
+
+    // a validly signed request that reuses the id for another body is not a duplicate
+    let changed = Bytes::from_static(br#"{"id":"evt_1","amount":9}"#);
+    let mut other = HeaderMap::new();
+    let signature = sign_header(&["whsec_test"], T0, &changed);
+    other.insert("webhook-signature", signature.parse().unwrap());
+    assert_eq!(accept(&rx, &other, &changed).0, 409);
+    assert!(queued.try_recv().is_err());
+
+    // only the first signature header counts
+    let mut two = HeaderMap::new();
+    two.append("webhook-signature", "t=0,v1=00".parse().unwrap());
+    two.append("webhook-signature", headers["webhook-signature"].clone());
+    assert_eq!(accept(&rx, &two, &body).0, 400);
+}
+
+/// The rule: no copy gets a 2xx for an id until a hand-off of that id has succeeded. `accept_with` keeps it
+/// by holding one lock from "seen?" through the hand-off to the mark.
+///
+/// This check catches ONE way to break it: ask, hand off WITHOUT the lock, then mark. The first hand-off pauses
+/// until a second copy reaches its own, or until 300 ms pass, so correct code does not fail here. (On a very
+/// busy machine the second thread could start too late, and that split would pass.)
+///
+/// NOT caught, and both wrong:
+///  * ask, unlock, then lock again to hand off and mark: both copies can pass "seen?" and both are handed on;
+///  * mark first, unlock, hand off, unmark on failure: the second copy gets 200 while the first can still
+///    fail, so the sender may stop retrying an event that was never handed on.
+fn check_two_copies_at_once() {
+    use std::sync::mpsc::channel;
+    let (queue, _unused) = mpsc::unbounded_channel::<String>();
+    let rx = Rx {
+        secrets: RwLock::new(vec!["whsec_test".into()]),
+        clock: Arc::new(AtomicU64::new(T0)),
+        seen: Mutex::new(HashMap::new()),
+        queue,
+        hits: AtomicU32::new(0),
+        fail_left: AtomicU32::new(0),
+        fail_status: AtomicU32::new(503),
+        fail_after_processing: AtomicBool::new(false),
+    };
+    let body = Bytes::from_static(br#"{"id":"evt_1"}"#);
+    let mut headers = HeaderMap::new();
+    let signature = sign_header(&["whsec_test"], T0, &body);
+    headers.insert("webhook-signature", signature.parse().unwrap());
+    let (first_inside, wait_for_first) = channel();
+    let (second_inside, wait_for_second) = channel();
+    let (rx, headers, body) = (&rx, &headers, &body);
+    let handed_on = &AtomicU32::new(0);
+    std::thread::scope(|s| {
+        let first = s.spawn(move || {
+            accept_with(rx, headers, body, |_| {
+                first_inside.send(()).unwrap();
+                let _ = wait_for_second.recv_timeout(Duration::from_millis(300));
+                handed_on.fetch_add(1, SeqCst);
+                true
+            })
+        });
+        wait_for_first.recv().unwrap();
+        let second = s.spawn(move || {
+            accept_with(rx, headers, body, |_| {
+                let _ = second_inside.send(());
+                handed_on.fetch_add(1, SeqCst);
+                true
+            })
+        });
+        assert_eq!(first.join().unwrap(), (200, "accepted"));
+        assert_eq!(second.join().unwrap(), (200, "duplicate ignored"));
+    });
+    assert_eq!(handed_on.load(SeqCst), 1, "handed on once");
+}
+
+fn check_backoff(c: &Client) {
+    let mut s = Sender::new(c, String::new(), &[], Arc::new(AtomicU64::new(T0)));
+    for attempt in 1..=200 {
+        let delay = s.backoff(attempt);
+        let low = if attempt >= 8 { s.cap / 2 } else { 15 };
+        assert!((low..=s.cap).contains(&delay), "attempt {attempt}: {delay}");
+    }
+}
+
 fn event(id: &str, amount: u32) -> String {
     json!({"id": id, "type": "invoice.paid", "amount": amount}).to_string()
 }
@@ -572,13 +842,17 @@ async fn main() {
         "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
     );
     assert!(ct_eq(b"abc", b"abc") && !ct_eq(b"abc", b"abd") && !ct_eq(b"abc", b"ab"));
+    check_against_python();
+    check_verifier();
+    check_hand_off_failure();
+    check_two_copies_at_once();
 
     let clock = Arc::new(AtomicU64::new(T0));
     let (qtx, mut qrx) = mpsc::unbounded_channel::<String>();
     let rx = Arc::new(Rx {
         secrets: RwLock::new(vec!["whsec_old_7f3a".into()]),
         clock: clock.clone(),
-        seen: Mutex::new(HashSet::new()),
+        seen: Mutex::new(HashMap::new()),
         queue: qtx,
         hits: AtomicU32::new(0),
         fail_left: AtomicU32::new(0),
@@ -601,14 +875,23 @@ async fn main() {
         Router::new()
             .route("/webhook", post(hook))
             .route("/webhook-naive", post(hook_naive))
+            .route("/moved", post(|| async { Redirect::temporary("/webhook") }))
             .with_state(rx.clone()),
     )
     .await;
     let c = Client::builder()
         .no_proxy()
+        .redirect(redirect::Policy::none()) // a signed body goes only to the address you chose
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap();
+    check_backoff(&c);
+    let mut moved = Sender::new(&c, srv.url("/moved"), &["whsec_old_7f3a"], clock.clone());
+    moved.deliver("evt_000", &event("evt_000", 0)).await;
+    assert_eq!(
+        moved.dlq[0].reason, "HTTP 307",
+        "redirects are not followed"
+    );
     let url = srv.url("/webhook");
     let mut tx = Sender::new(&c, url.clone(), &["whsec_old_7f3a"], clock.clone());
 
@@ -871,6 +1154,15 @@ async fn main() {
     }
     assert!(tx.dlq.is_empty());
     wait_for(|| processed.lock().unwrap().iter().any(|i| i == "evt_301")).await;
+
+    // a sender whose clock is off by more than the window gets 400, and 400 is not retried
+    let skewed = Arc::new(AtomicU64::new(clock.load(SeqCst) + TOLERANCE + 1));
+    let mut late = Sender::new(&c, url.clone(), &["whsec_old_7f3a"], skewed);
+    assert_eq!(late.deliver("evt_302", &event("evt_302", 2)).await, 1);
+    assert_eq!(
+        late.dlq[0].reason, "HTTP 400",
+        "a genuine event, dead at once"
+    );
 
     println!("\n==== 7. secret rotation with two active secrets ====");
     // step 1: receiver learns the new secret (accepts both); senders still use old

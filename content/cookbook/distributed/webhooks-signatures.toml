@@ -21,10 +21,16 @@ body = """
 What: a **sender** that signs and delivers events, and a **receiver** that must not trust the network.
 
 - Signature (Stripe style): header `Webhook-Signature: t=<unix ts>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Signing the timestamp **into** the MAC is what makes the replay window enforceable.
-- Receiver: verify over the **raw bytes** (not parsed-and-reserialized JSON), compare in **constant time**, reject a timestamp outside +/-300s (replay), **deduplicate** by event id (the sender is at-least-once), answer 2xx **fast** and process asynchronously from a queue, accept **two** active secrets so a secret can be **rotated** with no downtime.
-- Statuses: 400 for a bad/old signature (permanent: do not retry), 408/429/5xx => the sender retries.
+- Receiver: verify over the **raw bytes** (not parsed-and-reserialized JSON), compare without an early exit, reject a timestamp outside +/-300s (limits replay), **deduplicate** by event id (the sender is at-least-once), answer 2xx only after the event has been handed on, accept **two** active secrets so a secret can be **rotated**.
+- **Not for production**: SHA-256 and HMAC are hand-written here. `ct_eq` has no early exit in the source, but the compiler gives no timing guarantee. Use your provider's library, or the `hmac` crate's `verify_slice`.
+
+   The queue and the set of seen ids live in memory, so a crash loses both. A real receiver stores them durably **before** it answers 2xx.
+- Statuses: 408/425/429/5xx and transport errors => the sender retries, up to its attempt limit. Any other answer goes to the dead-letter list at once: a redirect, 409 (a known id with another body), and 400, also the 400 that a genuine delivery gets when the two clocks differ by more than the window.
+- Only the **first** `Webhook-Signature` header is read.
 - Sender: exponential backoff with jitter, an injectable clock/sleeper (no real sleeping: virtual time), a max attempt budget and a **dead-letter** queue that can be re-driven. A fresh signature is made for every attempt.
-- Attacks shown being rejected: modified body, replayed old timestamp, wrong secret, missing/garbled header, and the classic bug of verifying a re-serialized JSON value. Delivery is at-least-once; at-least-once + idempotent receiver = effectively-once processing.
+- Attacks shown being rejected: modified body, replayed old timestamp, wrong secret, missing/garbled header, and the classic bug of verifying a re-serialized JSON value.
+
+Retries can deliver an event twice, so the receiver must ignore repeats.
 """
 
 [[sections]]

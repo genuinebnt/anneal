@@ -1,0 +1,324 @@
+title = "A lock-free single-producer single-consumer"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 251
+kind = "lesson"
+level = "advanced"
+code = ["examples/concurrency/spsc_ring_buffer.rs", "examples/concurrency/cache_line_distance.rs"]
+code_spoils = ["/p/c3-spsc-ring", "/p/lc-design-circular-queue"]
+lede = "A fixed queue can pass items from one thread to another without a lock, if each side follows strict rules."
+summary = """
+An SPSC queue has one **producer** thread that puts items in and one **consumer** thread that takes them out. It is a fixed set of slots used in a circle.
+
+Neither side takes a lock or waits inside the queue. In return, you can have only one of each, you must decide what to do when it is full, and the code needs `unsafe`. Prefer a maintained library for real work.
+"""
+
+[[sections]]
+heading = "When do you want this queue?"
+body = """
+One thread reads sound from a device, and another saves it. The reader must not stall because the saver holds a lock. There is exactly one thread on each side.
+
+| Your need | A reasonable choice |
+|---|---|
+| Threads may sleep, and speed is not yet a problem | A [queue with a mutex and condition variables](/cookbook/p/mutex-condvar-channel) |
+| Several producers or consumers | A channel, or a queue built [for many threads](/cookbook/p/mpmc-bounded-queue) |
+| One of each, a fixed size, and calls that return at once | An SPSC ring, from a maintained crate such as [`rtrb`](https://docs.rs/rtrb/latest/rtrb/) |
+
+Measure against the simple queue first.
+"""
+
+[[sections]]
+heading = "Why isn't writing the item enough?"
+body = """
+The producer writes an item, then changes a number to say "it's there". Between threads, the compiler and the processor may reorder ordinary and weakly ordered work. The consumer could see the new number and still not see the item. In Rust, reading it without a proper order is a **data race**, which is undefined behaviour.
+
+An **atomic** is a value that threads may read and write at the same time. Each access names an [ordering](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html). Three matter here:
+
+| Ordering | What it gives you |
+|---|---|
+| `Relaxed` | The access is atomic. It orders nothing else |
+| `Release`, on a store | Earlier work can't move after it |
+| `Acquire`, on a load | Later work can't move before it |
+
+They work as a pair. Suppose an Acquire load reads the value that a Release store wrote. Then everything the writer did before the store **happens before** everything the reader does after the load.
+
+That is how a slot changes hands, in either direction. Finish with it, then store with Release. The other side loads with Acquire before touching it.
+"""
+
+[[sections]]
+heading = "How does the ring tell full from empty?"
+body = """
+At one shared position, is the ring empty or full?
+
+:::deeper The counters, wrapping and unread items (gives away "A wait-free SPSC ring buffer" and "Design Circular Queue")
+The example keeps two counters that only count up. `tail` counts pushes and `head` counts pops. The number of waiting items is `tail.wrapping_sub(head)`.
+
+| Waiting | Meaning |
+|---|---|
+| 0 | Empty |
+| The number of slots | Full |
+| Anything between | Both sides can work |
+
+So every slot can be used. Another design keeps positions that stay inside the ring. It must leave one slot free, or store a length or a flag.
+
+Counters of type `usize` eventually wrap to zero. `wrapping_sub` still gives the right distance, because the distance is small. The slot is `count & mask`. This stays in step across the wrap only if the number of slots is a **power of two**.
+
+With a tiny 8-bit counter and 3 slots, count 255 uses slot `255 % 3`, which is 0. The next count is 0, which uses slot 0 again. With two items waiting, one would overwrite the other.
+
+The example rounds the capacity up to a power of two. It uses `checked_next_power_of_two`, because the plain method returns 0 in release builds when the result doesn't fit.
+
+**Unread items.** The slots have type `MaybeUninit<T>`, which never drops its content by itself. When the second handle goes away, the shared block must drop exactly the items from `head` up to `tail`.
+
+Skipping this leaks them. Dropping any other slot is undefined behaviour. If one item's destructor panics, this code leaks the rest.
+
+**Which build catches a mistake?** I replaced the full test with `tail >= head + slots`. The checks failed in debug (`cargo run`) and in release (`--release`).
+
+With `tail == head + slots`, only the debug build failed, because the addition overflowed. In release it wraps, so that test then behaves like the correct one. Removing the final drops failed in both builds.
+:::
+"""
+
+[[sections]]
+heading = "Why does each access have its ordering?"
+body = """
+Each access needs its own reason.
+
+:::deeper The six atomic accesses, the safety rules and the code (gives away "A wait-free SPSC ring buffer" and "Design Circular Queue")
+| Side and access | Ordering | Exact reason |
+|---|---|---|
+| Producer loads `tail` | `Relaxed` | Only the producer stores it, so it already knows its latest value |
+| Producer loads `head` | `Acquire` | The consumer's read of the old item must happen before the slot is overwritten |
+| Producer stores `tail` | `Release` | The new item must be written before the consumer may see the count |
+| Consumer loads `head` | `Relaxed` | Only the consumer stores it |
+| Consumer loads `tail` | `Acquire` | The item's write must be visible before the slot is read |
+| Consumer stores `head` | `Release` | The item must be read out before the producer may reuse the slot |
+
+If a handle moves to another thread, the move must itself synchronise, as thread spawn and channels do. So the new owner still sees its own counter.
+
+Either side may see an **old** value of the other counter. An old `head` makes the queue look fuller than it is. An old `tail` makes it look emptier.
+
+Both errors make a call give up early. Neither lets it touch a slot it doesn't own.
+
+`SeqCst` isn't needed for these calls. That changes if you add sleeping and waking. This ordering table doesn't show that a wake-up can't be missed.
+
+Every `unsafe` line depends on four rules:
+
+1. The number waiting never exceeds the number of slots.
+2. Exactly the slots from `head` up to `tail` hold items.
+3. Each counter has one writer. `&mut self` allows one call at a time on each side.
+4. A slot changes sides only through a Release store that an Acquire load reads.
+
+`Shared<T>` is marked `Sync` by hand, with `T: Send`. Items move between threads, but two threads never use one item at once. `Send` follows automatically.
+
+```walkthrough
+file = "examples/concurrency/spsc_ring_buffer.rs"
+[[step]]
+title = "State the rules"
+lines = "30-51"
+text = "Padded counters, the four rules and the one hand-written `unsafe impl`."
+[[step]]
+title = "Drop what was never read"
+lines = "53-65"
+text = "`&mut self` means that no other handle is left. The loop visits each waiting item once."
+[[step]]
+title = "Round the capacity safely"
+lines = "75-92"
+text = "Both counters start at the same value. The tests start near `usize::MAX`."
+[[step]]
+title = "Push"
+lines = "98-113"
+text = "Check for room, write the slot, then publish it. A full queue gives the item back."
+[[step]]
+title = "Pop"
+lines = "116-131"
+text = "Check for an item, move it out, then hand the slot back."
+[[step]]
+title = "Compare with a plain queue"
+lines = "153-203"
+text = "Random calls must match a `VecDeque` with a limit, and every item must be dropped once."
+[[step]]
+title = "Cross two threads"
+lines = "205-238"
+text = "The consumer notes a wrong item and keeps reading. A panic inside the loop would leave the producer waiting for ever."
+```
+:::
+"""
+
+[[sections]]
+heading = "How do the types keep one producer and one consumer?"
+body = """
+The rules fail if two threads push at once. The example gives you a `Producer` and a `Consumer`.
+
+Neither can be cloned, and their main methods take `&mut self`. So the compiler rejects shared use by two threads. This stand-in has the same method shape:
+
+```compare
+takeaway = "Exclusive access turns the one-producer rule into a compile error. One thread may own the handle and push many times."
+[wrong]
+title = "Two threads push"
+code = '''
+use std::thread;
+
+struct Producer;
+impl Producer {
+    fn push(&mut self, _item: u32) {}
+}
+
+fn main() {
+    let mut producer = Producer;
+    thread::scope(|s| {
+        s.spawn(|| producer.push(1));
+        s.spawn(|| producer.push(2));
+    });
+}
+'''
+result = "`error[E0499]: cannot borrow `producer` as mutable more than once at a time`"
+[fixed]
+title = "One thread owns it"
+code = '''
+use std::thread;
+
+struct Producer;
+impl Producer {
+    fn push(&mut self, item: u32) {
+        println!("pushed {item}");
+    }
+}
+
+fn main() {
+    let mut producer = Producer;
+    thread::scope(|s| {
+        s.spawn(move || {
+            producer.push(1);
+            producer.push(2);
+        });
+    });
+}
+'''
+result = "It prints `pushed 1` and `pushed 2`."
+```
+
+With the real queue, calling `clone` on the producer gives `error[E0599]`. Sending a queue of `Rc<u32>` to another thread gives `error[E0277]`, because `Rc` isn't `Send`.
+
+"""
+
+[[sections]]
+heading = "How far apart should busy counters be?"
+body = """
+Processors move memory between cores in blocks called **cache lines**. If two cores keep writing different values in one line, they can slow each other down. This is **false sharing**. It changes speed, not correctness.
+
+This program has no queue or `unsafe`. Two threads each add to their own counter, at three distances.
+
+```walkthrough
+file = "examples/concurrency/cache_line_distance.rs"
+[[step]]
+title = "Fix the positions"
+lines = "16-18"
+text = "The row starts on a 128-byte boundary, so the distances are known."
+[[step]]
+title = "Two writers"
+lines = "20-35"
+text = "Each thread adds to its own counter. The scope waits for both."
+[[step]]
+title = "Time, but don't judge"
+lines = "37-59"
+text = "Counts and distances are checked. Times are only printed, as nine runs for each distance."
+```
+
+On one Apple silicon Mac, in three release runs, the median at 8 bytes was about 33 to 35 ms. At 64 and 128 bytes it was about 9 to 11 ms. So separation helped, but I saw **no clear gain from 128 over 64**.
+
+macOS reports 128-byte lines there, so this isn't a rule about lines. The ring uses 128. Crossbeam's [`CachePadded`](https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html) does the same on x86-64 and aarch64, and calls it a reasonable guess. I didn't measure how padding changes the ring's own speed.
+
+[False sharing](/cookbook/p/false-sharing) goes further.
+"""
+
+[[sections]]
+heading = "Can tests show that the unsafe code is right?"
+body = """
+Not by themselves. I made one ordering weaker at a time, which made four broken versions. I ran each release build 40 times on one Apple silicon Mac.
+
+Two versions never failed. One failed in 5 runs. Another failed in 38, and passed twice. All of them were wrong.
+
+[**Miri**](https://github.com/rust-lang/miri) is a tool that runs a program and checks for many kinds of undefined behaviour. It reported a data race in all four broken versions, with each of the three seeds I tried.
+
+The correct code passed Miri with 32 seeds, using fewer items. Miri needs a nightly toolchain.
+
+This is still not a proof. Miri checks only the runs that it explores, and its model of weak memory has limits. [Loom](https://github.com/tokio-rs/loom) explores thread orders in a different way. This example has no Loom test.
+
+The program also compares random calls with a simple queue and counts every drop. Some mistakes show only in a debug build, where integer overflow stops the program. So run both builds.
+
+```sh
+cargo run --example spsc_ring_buffer
+cargo run --release --example spsc_ring_buffer
+cargo +nightly miri run --example spsc_ring_buffer
+cargo run --release --example cache_line_distance
+```
+"""
+
+[[sections]]
+heading = "What does the example leave out?"
+body = """
+- **Waiting.** A tight retry loop burns processor time.
+- **Closing.** A consumer can't tell "empty for now" from "the producer has gone".
+- **More threads.** Not supported.
+- **Length.** It offers none.
+- **Speed.** It doesn't remember the other side's counter between calls. Mature libraries do more tuning.
+
+> [!WARNING]
+> If you add closing, `Arc::strong_count` alone isn't enough. It [loads with `Relaxed`](https://doc.rust-lang.org/src/alloc/sync.rs.html), so seeing "gone" need not show the other thread's last writes. A small Miri test missed such a write; an `Acquire` fence fixed it in 64 seeds.
+>
+> Your own `Release`/`Acquire` closed flag is safer than relying on `Arc`'s countdown. After seeing "gone", pop again until empty.
+
+"""
+
+[[connections]]
+kind = "before"
+title = "Atomics ordering use cases"
+link = "/cookbook/p/std-atomics-ordering-use-cases"
+why = "More examples of what each ordering is for."
+
+[[connections]]
+kind = "practise"
+title = "A wait-free SPSC ring buffer"
+link = "/p/c3-spsc-ring"
+level = "exact"
+why = "Build it yourself. This page's folds and full code give it away."
+
+[[connections]]
+kind = "practise"
+title = "Design Circular Queue"
+link = "/p/lc-design-circular-queue"
+level = "similar"
+why = "The full and empty question in one thread. The folds give away one answer."
+
+[[connections]]
+kind = "returns"
+title = "A ring buffer zoo"
+link = "/cookbook/p/ring-buffer-zoo"
+why = "Other uses of a circle of slots."
+
+[[connections]]
+kind = "returns"
+title = "Memory-ordering litmus tests"
+link = "/cookbook/p/memory-ordering-litmus"
+why = "Small programs that ask what two threads may see."
+
+[[sources]]
+title = "Mara Bos: Rust Atomics and Locks, memory ordering"
+url = "https://marabos.nl/atomics/memory-ordering.html"
+note = "Happens-before, Release and Acquire."
+
+[[sources]]
+title = "The Rustonomicon: atomics"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+note = "Why reordering happens and what Rust's orderings mean."
+
+[[sources]]
+title = "Miri"
+url = "https://github.com/rust-lang/miri"
+note = "What it detects, and what it cannot."
+
+[[sources]]
+title = "rtrb: source"
+url = "https://github.com/mgeier/rtrb/blob/main/src/lib.rs"
+note = "A maintained SPSC ring to compare with."

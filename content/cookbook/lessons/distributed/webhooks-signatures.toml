@@ -1,0 +1,319 @@
+title = "Webhooks end to end"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 519
+kind = "lesson"
+level = "advanced"
+code = ["examples/web/webhooks_signatures.rs", "examples/web/webhooks_inbox.rs"]
+code_spoils = ["/p/b5-fix-webhook-verify"]
+lede = "A signature shows that a holder of the secret signed some bytes, and your receiver must do the rest."
+summary = """
+A webhook is a request that another service sends to an address of yours. Sender and receiver share a secret, and the sender attaches an HMAC, a keyed hash of the message. Check it over the bytes as they arrived, with your provider's library.
+
+A signature doesn't stop repeats, hide the content or prove that the content is true. You still need HTTPS, a time limit, a record of event ids and care with secrets.
+"""
+
+[[sections]]
+heading = "Why can't you trust the request?"
+body = """
+Your shop learns about payments from a payment service. The service sends a `POST` to an address such as `/hooks/payments`, and your code marks the order as paid.
+
+Without a check, anyone who learns that address can claim that an order is paid.
+
+So both sides agree on a **secret**. The sender runs the message and the secret through **HMAC-SHA256** and puts the result, the **MAC**, in a header. You run the same calculation and compare.
+"""
+
+[[sections]]
+heading = "What does a matching signature prove?"
+body = """
+If the MAC matches, someone who knows the secret computed it over the bytes you checked. That assumes HMAC and SHA-256 hold up and the secret is hard to guess. Use a long random secret.
+
+The claim is narrow:
+
+| A match does not show | Why | What you need |
+|---|---|---|
+| That the request is new | A copy carries the same MAC | A time limit and a record of event ids |
+| Which holder signed it | You hold the same secret, so you could have made it | A public-key signature, if others must be convinced |
+| That the secret is still private | A thief's MAC is as good as the sender's | Rotation, and careful storage |
+| Anything about parts left out | Unsigned headers, the path or the method can be changed | Know exactly what your provider signs |
+| That it was meant for this endpoint | Two endpoints with one secret accept each other's messages | One secret per endpoint |
+| That the content is true or current | The sender may be wrong, and events may arrive out of order | Ask the sender's API when it matters |
+| That nobody read it | HMAC hides nothing | HTTPS |
+"""
+
+[[sections]]
+heading = "Why must you check the raw bytes?"
+body = """
+A MAC covers bytes, not meaning. A common mistake is to parse the body, turn it back into text and check that text. This program only shows that the bytes change.
+
+```compare
+takeaway = "Keep the body as bytes until the check has passed. Then parse those same bytes."
+[wrong]
+title = "Parse, then rebuild"
+code = '''
+use serde_json::Value;
+
+fn main() {
+    let received = r#"{"type": "paid",  "id": 7, "amount": 5.0e1}"#;
+    let value: Value = serde_json::from_str(received).unwrap();
+    let rebuilt = value.to_string();
+    println!("{rebuilt}");
+    println!("same bytes: {}", rebuilt == received);
+}
+'''
+result = 'It prints `{"amount":50.0,"id":7,"type":"paid"}` and `same bytes: false`. A MAC over the rebuilt text would reject this genuine message.'
+[fixed]
+title = "Bytes first"
+code = '''
+use serde_json::Value;
+
+fn main() {
+    let received: &[u8] = br#"{"type": "paid",  "id": 7, "amount": 5.0e1}"#;
+    // 1. check the signature over `received`, exactly these bytes
+    // 2. only after it passes, parse them
+    let value: Value = serde_json::from_slice(received).unwrap();
+    println!("id {}", value["id"]);
+}
+'''
+result = "It prints `id 7`. The comments mark where the check belongs: it reads the same bytes as the parser."
+```
+
+Rebuilding can hide differences. With `serde_json::Value`, `{"amount": 1, "amount": 1000}` becomes `{"amount":1000}`. Another parser might keep the first. Parse once.
+
+In axum, take the body as `Bytes`, which stops at 2 MB by default. You hash a body before you can reject it, so [set a smaller limit](/cookbook/p/axum-router-state).
+"""
+
+[[sections]]
+heading = "How should you compare the signatures?"
+body = """
+First choice: use your provider's official library. If you must write the check, follow the provider's specification, and compare with a maintained tool. One is the `hmac` crate's `verify_slice`.
+
+Don't compare MACs with `==`. A comparison may stop at the first difference, so its running time can depend on how much of a guess was right. A **constant-time** comparison aims to remove that clue.
+
+Treat that as an aim. Rust's [`black_box`](https://doc.rust-lang.org/std/hint/fn.black_box.html) is only best-effort and offers no security guarantee. The [`subtle`](https://docs.rs/subtle/latest/subtle/) crate also describes itself as best-effort.
+
+Tests of right and wrong answers don't measure time. [Constant-time code](/cookbook/p/constant-time-side-channels) looks closer.
+
+The example reads only the first `Webhook-Signature` header and ignores later ones.
+
+:::deeper The exact checks, with code (gives away "Fix: a webhook check that lets forgeries in")
+The example's header is `t=<seconds>,v1=<hex MAC>`, close to Stripe's. Other providers differ. It applies these rules:
+
+1. The MAC covers the text of `t`, a dot, then the raw body. An unsigned time could be changed by anyone.
+2. There is exactly one `t`, made of digits. Rust's `parse` alone also accepts `+17`.
+3. The whole MAC must match, so check the length first. The expected length is public.
+4. Any `v1` may match any current secret. An empty secret is skipped.
+5. The time may differ from your clock by at most 300 seconds, **in either direction**.
+
+It also limits the header to 1,024 bytes and four signatures. The signature is checked before the time.
+
+One tempting way to avoid an early return folds the length difference into one byte. It is wrong:
+
+```compare
+takeaway = "Shrinking a number can turn a difference into zero. This header check compares hex text, and header values cannot contain zero bytes. The function was still wrong."
+[wrong]
+title = "Length in one byte"
+code = '''
+fn same(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = (a.len() ^ b.len()) as u8; // keeps only the low 8 bits
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
+}
+
+fn main() {
+    let longer = [b"mac".as_slice(), &[0; 256]].concat();
+    println!("{}", same(b"mac", &longer));
+}
+'''
+result = "It prints `true` for inputs of 3 and 259 bytes."
+[fixed]
+title = "Reject another length"
+code = '''
+fn same(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false; // the expected length is public
+    }
+    a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+fn main() {
+    let longer = [b"mac".as_slice(), &[0; 256]].concat();
+    println!("{}", same(b"mac", &longer));
+}
+'''
+result = "It prints `false`. This shows the logic only. It gives no timing guarantee."
+```
+
+```walkthrough
+file = "examples/web/webhooks_signatures.rs"
+[[step]]
+title = "Compare without an early exit"
+lines = "301-309"
+text = "The length check comes first. The loop over the contents has no early return in the source."
+[[step]]
+title = "Read the header strictly"
+lines = "327-357"
+text = "Limit its size, collect the signatures, and refuse a second or non-numeric `t`."
+[[step]]
+title = "Check the MAC, then the time"
+lines = "358-378"
+text = "The signed bytes reuse the timestamp's text. `abs_diff` measures the window in both directions."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does a time limit stop?"
+body = """
+A **replay** is a genuine request sent again by someone who copied it. Its MAC still matches.
+
+Many schemes send a time with the request, and receivers reject times too far from their own clock. This helps only if the signature protects that time.
+
+Check the specification. Stripe signs it, and its libraries [allow 5 minutes by default](https://docs.stripe.com/webhooks). GitHub's `X-Hub-Signature-256` is a MAC of the body, so this kind of time check isn't available from it.
+
+A window doesn't stop copies. It only limits how long one is accepted, and every copy passes during that time.
+
+That time can exceed the tolerance. Say the tolerance is 300 seconds and the sender's clock is 300 seconds ahead of yours. The request passes at once, and copies keep passing for **600 seconds**.
+
+A large clock difference also rejects genuine messages.
+
+So record event ids as well. Don't size that record by the window. A sender may sign each retry again with a new time, and Stripe retries for up to three days.
+
+Keep signed ids as long as an event can come back, including manual resends.
+"""
+
+[[sections]]
+heading = "How do you change the secret without downtime?"
+body = """
+For a planned **rotation**, let both secrets work for a while:
+
+1. The receiver starts accepting the old and the new secret.
+2. The sender switches to the new one, or signs with both.
+3. After all old deliveries and retries are done, remove the old secret.
+
+Some providers run the overlap for you. Follow their order.
+
+A **leaked** secret is different. While you accept it, the thief can sign anything. Remove it quickly, and check what arrived.
+"""
+
+[[sections]]
+heading = "What must happen before you answer 200?"
+body = """
+A `2xx` tells the sender to stop retrying. First store the event durably. Do slow work later.
+
+If storing fails, answer with an error your sender retries. An answer can get lost, so [retries must do no harm](/cookbook/p/axum-idempotency).
+
+Both programs answer **409** to a known id with another body. If your provider changes bodies between retries, compare only stable fields.
+
+Two copies can arrive at once. Keep this rule: no copy gets `2xx` until a hand-off of that id has succeeded. The longer program holds one lock from "seen?" through the hand-off to the mark. In a database, save the id and the queued work in one transaction.
+
+Two splits break this. Unlock after asking, then lock again to hand off and mark, and both copies can pass the question. Or mark first, unlock, and undo on failure. The second copy then gets 200 while the first can still fail, so the event may be lost.
+
+A check catches only this split: ask, hand off unlocked, then mark. It needs the second thread to start within 300 ms. It doesn't catch the other two.
+
+This second program has no signatures. Its map stands for a database table.
+
+```walkthrough
+file = "examples/web/webhooks_inbox.rs"
+[[step]]
+title = "One row for each event id"
+lines = "18-27"
+text = "The table is what survives a crash. Four answers say what happened."
+[[step]]
+title = "Check and keep in one step"
+lines = "29-39"
+text = "A new id is stored before success is returned. A failed write leaves nothing. The same id with another body needs a person to look."
+[[step]]
+title = "Answering too early"
+lines = "41-60"
+text = "Here the event waits in memory after the 200. A crash removes it, and nobody will send it again."
+[[step]]
+title = "Break things on purpose"
+lines = "72-104"
+text = "A seeded sender loses replies and meets failed writes. The early answer also meets crashes."
+```
+
+With made-up failures, storing first lost none of 10,000 events. Answering first lost 2,393.
+
+One stored row doesn't make the work happen once.
+
+The longer receiver keeps ids and its queue **in memory**. Don't copy that part.
+"""
+
+[[sections]]
+heading = "What should the sender do?"
+body = """
+The longer program re-signs each attempt and waits longer, with random jitter. Time is simulated.
+
+It retries 408, 425, 429, 5xx and network errors, five tries in all. Then the event goes to a **dead-letter** list for a person.
+
+Other failures go there **at once**, including a redirect, 409 and 400. A clock difference beyond the window makes this receiver answer 400. So one wrong clock can send a genuine event to the list after a single try.
+
+Watch that list.
+
+This sender doesn't follow redirects. If customers choose that address, you also need rules for [what your program may fetch](/cookbook/p/fetch-policy). The example has none.
+"""
+
+[[sections]]
+heading = "How was the code checked?"
+body = """
+The hand-written HMAC is compared with Python's `hmac` module on 4,214 seeded inputs. It also damages a good header 4,000 times. Every version that passes must still contain the signed time and the correct MAC.
+
+I also put mistakes into the code one at a time, to see that the checks for them fail.
+
+This is not a security review, and nothing measures timing. There is no rate limit or secret store, and the SHA-256 is for study.
+
+```sh
+cargo run --release --example webhooks_signatures
+cargo run --release --example webhooks_inbox
+```
+"""
+
+[[connections]]
+kind = "before"
+title = "HMAC, HKDF and PBKDF2"
+link = "/cookbook/p/hmac-hkdf-pbkdf2"
+why = "How the keyed hash is built."
+
+[[connections]]
+kind = "practise"
+title = "Fix: a webhook check that lets forgeries in"
+link = "/p/b5-fix-webhook-verify"
+level = "exact"
+why = "Repair a verifier. This page's folded rules and full code give away nearly all of it."
+
+[[connections]]
+kind = "returns"
+title = "Polite collection"
+link = "/cookbook/p/polite-fetching"
+why = "When a client should try again, and how long it should wait."
+
+[[connections]]
+kind = "returns"
+title = "Controlling what a program may fetch"
+link = "/cookbook/p/fetch-policy"
+why = "Read this before your sender posts to addresses that others choose."
+
+[[sources]]
+title = "Stripe: webhooks"
+url = "https://docs.stripe.com/webhooks"
+note = "Raw body, signed timestamps, rotation, retries and duplicate events."
+
+[[sources]]
+title = "GitHub: validating webhook deliveries"
+url = "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries"
+note = "A scheme that signs the body, with test values."
+
+[[sources]]
+title = "Standard Webhooks specification"
+url = "https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md"
+note = "A shared format that also signs the message id and the time."
+
+[[sources]]
+title = "RFC 2104: HMAC"
+url = "https://datatracker.ietf.org/doc/html/rfc2104"
+note = "The definition of HMAC."

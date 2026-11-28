@@ -276,6 +276,9 @@ path = "examples/concurrency/actor_model.rs"
 name = "atomics_ordering"
 path = "examples/concurrency/atomics_ordering.rs"
 [[example]]
+name = "cache_line_distance"
+path = "examples/concurrency/cache_line_distance.rs"
+[[example]]
 name = "concurrent_counters_and_statistics"
 path = "examples/concurrency/concurrent_counters_and_statistics.rs"
 [[example]]
@@ -1457,6 +1460,9 @@ path = "examples/web/reverse_proxy_load_balancer.rs"
 [[example]]
 name = "security_pitfalls_secure_coding"
 path = "examples/web/security_pitfalls_secure_coding.rs"
+[[example]]
+name = "webhooks_inbox"
+path = "examples/web/webhooks_inbox.rs"
 [[example]]
 name = "webhooks_signatures"
 path = "examples/web/webhooks_signatures.rs"

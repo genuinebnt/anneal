@@ -12,17 +12,19 @@ code = ["examples/concurrency/spsc_ring_buffer.rs"]
 [[sections]]
 heading = "Where you would use it"
 body = """
-audio/real-time pipelines, logging hand-off, stage-to-stage pipelines, anything with exactly one writer and one reader. (unsafe part: also try `cargo +nightly miri run --example spsc_ring_buffer`, it is slow, so lower the item count first)
+audio/real-time pipelines, logging hand-off, stage-to-stage pipelines, anything with exactly one writer and one reader. (the code has `unsafe`: with Miri installed, also run `cargo +nightly miri run --example spsc_ring_buffer`; it uses fewer items there)
 """
 
 [[sections]]
 heading = "Design notes"
 body = """
-Design: a power-of-two slot array, so `index & mask` replaces `%`. `head` (next slot to read) and `tail` (next slot to write) are monotonically increasing counters (wrapping), never reduced; `tail - head` = length, which makes full vs empty unambiguous without wasting a slot.
+Design: a power-of-two slot array, so `index & mask` replaces `%`. `head` (next item to read) and `tail` (next item to write) are counters that only count up and wrap at `usize::MAX`; `tail - head` (wrapping) = length, which tells full from empty without wasting a slot.
 
-Each counter has **one** writer, so no CAS is needed, only load/store. push (producer): load own `tail` (Relaxed), load `head` (Acquire: pairs with consumer's Release, proves the slot was vacated), write the slot, then store `tail+1` (Release: publishes the slot contents to the consumer). pop  (consumer): load own `head` (Relaxed), load `tail` (Acquire: pairs with producer's Release, makes the slot contents visible), read the slot, then store `head+1` (Release: tells the producer the slot may be reused).
+Each counter has **one** writer, so no CAS is needed, only load/store. push (producer): load own `tail` (Relaxed), load `head` (Acquire: pairs with consumer's Release, so the consumer's read of the slot happens before our overwrite), write the slot, then store `tail+1` (Release: publishes the slot contents). pop  (consumer): load own `head` (Relaxed), load `tail` (Acquire: pairs with producer's Release, makes the slot contents visible), read the slot, then store `head+1` (Release: our read happens before the producer reuses the slot).
 
-`Producer` and `Consumer` are separate handle types that are **not** `Clone`, so "single producer / single consumer" is enforced by ownership: you cannot accidentally have two writers. Head and tail live on separate 64-byte cache lines (`#[repr(align(64))]`) to avoid false sharing, where two cores fight over one line although they touch different variables.
+`Producer` and `Consumer` are separate handle types that are **not** `Clone`, and `push` and `pop` take `&mut self`, so safe code cannot get two writers. Head and tail are 128-byte aligned, which keeps them apart on common cache line sizes (see `cache_line_distance` for a measurement).
+
+Checks: a differential test against `VecDeque` (also across counter wrap-around), two threads, and drop accounting. Passing tests do not prove the orderings: a weaker ordering can pass every normal run. Use Miri or loom as well.
 """
 
 [[sections]]

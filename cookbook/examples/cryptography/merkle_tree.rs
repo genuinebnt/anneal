@@ -3,26 +3,32 @@
 //! Use in: replica repair, tamper-evident logs, content-addressed storage.   Run: cargo run --release --example merkle_tree
 #![allow(dead_code)]
 //!
-//! WHAT: a Merkle tree hashes leaves, then hashes pairs of hashes up to one root. Equal roots mean equal data
-//! (up to hash collisions); a different root means "something differs", and the tree tells you WHERE.
+//! WHAT: a Merkle tree hashes leaves, then hashes pairs of hashes up to one root. Equal roots mean equal leaf
+//! lists (up to hash collisions); a different root means "something differs".
 //!
-//! HOW (design choices, following RFC 6962 "Certificate Transparency"):
+//! HOW (design choices, following the tree of RFC 6962 and RFC 9162, "Certificate Transparency"):
 //!  - Domain separation: leaf = H(0x00 || data), node = H(0x01 || left || right). Without it, the 64 bytes
 //!    `h(a)||h(b)` could be presented as a *leaf* and hash to the same value as the inner node (second-preimage
-//!    attack on the tree). `naive_forgery` below demonstrates this on a prefix-free tree.
-//!  - Odd node count: NO duplication of the last node (Bitcoin-style duplication makes [a,b,c] and [a,b,c,c]
-//!    share a root). Instead split n leaves at the largest power of two k < n: MTH(D) = H(1 || MTH(D[..k]) || MTH(D[k..])).
-//!    A lone leaf is simply promoted into a shallower position. This shape is also exactly what an append-only
-//!    "frontier" of perfect subtrees produces, so the incremental log and the batch tree agree (tested).
-//!  - Proof = sibling hashes bottom-up, each tagged with which side it sits on; verify re-folds to the root.
+//!    attack on the tree). `naive_forgery` below demonstrates this on a tree with no prefixes.
+//!  - Odd node count: NO duplication of the last node. Some designs pair a lone node with itself. Then [a,b,c]
+//!    and [a,b,c,c] share a root unless the leaf count is trusted too (`duplicate_pitfall`; Bitcoin's
+//!    CVE-2012-2459). This tree follows another rule: split n leaves at the largest power of
+//!    two k < n: MTH(D) = H(1 || MTH(D[..k]) || MTH(D[k..])). A lone node moves up unchanged. The incremental
+//!    log and the batch tree agree (tested).
+//!  - Inclusion proof = sibling hashes bottom-up. The verifier takes the leaf's index and the tree size, and works
+//!    out each side itself (RFC 9162, 2.1.3.2). The root and the size must come TOGETHER from a source you trust:
+//!    the root alone does not pin the size, and a proof can verify under a size that is not the real one.
 //!  - Anti-entropy: two replicas with the same leaf slots compare roots, then descend only into children whose
 //!    hashes differ: cost ~ O(k log n) hash comparisons for k differing leaves, instead of n.
+//!
+//! NOT HERE: consistency proofs (that a newer root extends an older one), signatures on roots, and any way to
+//! learn whether everyone was shown the same root. SHA-256 is hand-written for teaching.
 //!
 //! COMMON USES: Git and Mercurial-style content-addressed object graphs (hash-linked trees), Bitcoin block
 //! headers committing to transactions (SPV proofs), Certificate Transparency logs (RFC 6962), Dynamo-style
 //! anti-entropy and Cassandra's repair, which compare Merkle trees of key ranges to find divergent replicas,
 //! and content-addressed stores/packages that verify chunks against a trusted root.
-//! Read: https://www.rfc-editor.org/rfc/rfc6962 (section 2.1)
+//! Read: https://www.rfc-editor.org/rfc/rfc9162 (section 2.1), https://www.rfc-editor.org/rfc/rfc6962
 //! Read: https://csrc.nist.gov/pubs/fips/180-4/upd1/final (SHA-256 spec)
 //! Read: https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf
 use std::sync::OnceLock;
@@ -35,7 +41,7 @@ fn primes(count: usize) -> Vec<u128> {
     let mut v: Vec<u128> = Vec::new();
     let mut c = 2u128;
     while v.len() < count {
-        if v.iter().all(|p| c % p != 0) {
+        if v.iter().all(|p| !c.is_multiple_of(*p)) {
             v.push(c);
         }
         c += 1;
@@ -117,7 +123,7 @@ fn sha256(data: &[u8]) -> Hash {
         msg.push(0);
     }
     msg.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
-    for block in msg.chunks_exact(64) {
+    for block in msg.as_chunks::<64>().0 {
         compress(&mut state, block);
     }
     let mut out = [0u8; 32];
@@ -164,13 +170,6 @@ struct Tree {
     n: usize,
 }
 
-/// Which side the sibling sits on, so the verifier knows the concatenation order.
-#[derive(Clone, Debug)]
-struct Step {
-    sibling: Hash,
-    sibling_is_left: bool,
-}
-
 impl Tree {
     fn build(leaves: &[Vec<u8>]) -> Tree {
         let hashes: Vec<Hash> = leaves.iter().map(|d| leaf_hash(d)).collect();
@@ -209,40 +208,48 @@ impl Tree {
             self.nodes[self.root_idx()].hash
         }
     }
-    fn prove(&self, i: usize) -> Vec<Step> {
+    /// The sibling hashes from leaf `i` up to the root. No sides: the verifier derives them.
+    fn prove(&self, i: usize) -> Vec<Hash> {
         assert!(i < self.n);
-        let mut steps = Vec::new();
+        let mut path = Vec::new();
         let mut cur = self.root_idx();
         while let Some((l, r)) = self.nodes[cur].kids {
-            if i < self.nodes[r].lo {
-                steps.push(Step {
-                    sibling: self.nodes[r].hash,
-                    sibling_is_left: false,
-                });
-                cur = l;
-            } else {
-                steps.push(Step {
-                    sibling: self.nodes[l].hash,
-                    sibling_is_left: true,
-                });
-                cur = r;
-            }
+            let (next, sibling) = if i < self.nodes[r].lo { (l, r) } else { (r, l) };
+            path.push(self.nodes[sibling].hash);
+            cur = next;
         }
-        steps.reverse(); // verifier folds from the leaf upwards
-        steps
+        path.reverse(); // verifier folds from the leaf upwards
+        path
     }
 }
 
-fn verify(root: &Hash, leaf: &[u8], proof: &[Step]) -> bool {
-    let mut h = leaf_hash(leaf);
-    for s in proof {
-        h = if s.sibling_is_left {
-            node_hash(&s.sibling, &h)
-        } else {
-            node_hash(&h, &s.sibling)
-        };
+/// RFC 9162, section 2.1.3.2. `root` and `size` are what the verifier already trusts. `index`, `leaf` and
+/// `path` may come from anyone.
+fn verify_inclusion(root: &Hash, size: u64, index: u64, leaf: &[u8], path: &[Hash]) -> bool {
+    if index >= size {
+        return false;
     }
-    &h == root
+    let (mut node, mut last) = (index, size - 1);
+    let mut hash = leaf_hash(leaf);
+    for sibling in path {
+        if last == 0 {
+            return false; // the path is too long
+        }
+        if node & 1 == 1 || node == last {
+            hash = node_hash(sibling, &hash);
+            // the last node of a level may move up several levels with no sibling
+            while node & 1 == 0 && node != 0 {
+                node >>= 1;
+                last >>= 1;
+            }
+        } else {
+            hash = node_hash(&hash, sibling);
+        }
+        node >>= 1;
+        last >>= 1;
+    }
+    // `last == 0` means the path reached the top: a path that is too short fails here
+    last == 0 && hash == *root
 }
 
 // ---------------------------------------------------------------- append-only log (frontier)
@@ -320,6 +327,21 @@ impl Rng {
     fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
     }
+    fn hash(&mut self) -> Hash {
+        std::array::from_fn(|_| self.next() as u8)
+    }
+}
+
+/// The definition in RFC 9162, written as it reads. Slow and obvious: the oracle for `Tree`.
+fn oracle_root(d: &[Vec<u8>]) -> Hash {
+    match d.len() {
+        0 => sha256(b""),
+        1 => leaf_hash(&d[0]),
+        n => {
+            let k = split(n);
+            node_hash(&oracle_root(&d[..k]), &oracle_root(&d[k..]))
+        }
+    }
 }
 
 fn rand_leaves(rng: &mut Rng, n: usize) -> Vec<Vec<u8>> {
@@ -328,7 +350,7 @@ fn rand_leaves(rng: &mut Rng, n: usize) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Prefix-free tree (no 0x00/0x01 tags): shows why domain separation matters.
+/// A tree with no 0x00/0x01 prefixes: shows why domain separation matters.
 fn naive_root(leaves: &[Vec<u8>]) -> Hash {
     if leaves.len() == 1 {
         return sha256(&leaves[0]);
@@ -379,43 +401,177 @@ fn test_sha256() {
 }
 
 fn test_proofs(rng: &mut Rng) {
-    for n in 1..=40usize {
+    for n in 0..=70usize {
         let leaves = rand_leaves(rng, n);
         let t = Tree::build(&leaves);
         let root = t.root();
-        let depth = n.next_power_of_two().trailing_zeros() as usize;
+        assert_eq!(root, oracle_root(&leaves), "n={n}");
+        let size = n as u64;
+        let depth = n.max(1).next_power_of_two().trailing_zeros() as usize;
         for (i, leaf) in leaves.iter().enumerate() {
             let p = t.prove(i);
+            let index = i as u64;
             assert!(p.len() <= depth);
-            assert!(verify(&root, leaf, &p), "n={n} i={i}");
-            // Tamper: flip one bit of the leaf, of a sibling, or verify against another leaf.
+            assert!(
+                verify_inclusion(&root, size, index, leaf, &p),
+                "n={n} i={i}"
+            );
+            // another leaf, another position, another root
             let mut bad = leaf.clone();
             bad[0] ^= 1;
-            assert!(!verify(&root, &bad, &p));
-            if let Some(first) = p.first() {
+            assert!(!verify_inclusion(&root, size, index, &bad, &p));
+            for other in (0..size + 3).filter(|o| *o != index) {
+                assert!(
+                    !verify_inclusion(&root, size, other, leaf, &p),
+                    "n={n} i={i} as {other}"
+                );
+            }
+            let mut wrong_root = root;
+            wrong_root[0] ^= 1;
+            assert!(!verify_inclusion(&wrong_root, size, index, leaf, &p));
+            // a path that is changed, too short or too long
+            for at in 0..p.len() {
                 let mut q = p.clone();
-                q[0] = Step {
-                    sibling: first.sibling,
-                    sibling_is_left: !first.sibling_is_left,
-                };
-                assert!(!verify(&root, leaf, &q), "flipped direction must fail");
-                q[0].sibling_is_left = first.sibling_is_left;
-                q[0].sibling[3] ^= 0x10;
-                assert!(!verify(&root, leaf, &q));
+                q[at][3] ^= 0x10;
+                assert!(!verify_inclusion(&root, size, index, leaf, &q));
             }
-            if n > 1 {
-                assert!(!verify(&root, &leaves[(i + 1) % n], &p) || leaves[(i + 1) % n] == *leaf);
+            if !p.is_empty() {
+                assert!(!verify_inclusion(
+                    &root,
+                    size,
+                    index,
+                    leaf,
+                    &p[..p.len() - 1]
+                ));
             }
+            let mut long = p.clone();
+            long.push(rng.hash());
+            assert!(!verify_inclusion(&root, size, index, leaf, &long));
+            assert!(!verify_inclusion(&root, 0, index, leaf, &p));
         }
     }
-    // Duplicate-last-leaf ambiguity (Bitcoin CVE-2012-2459 style) does not exist here.
-    let abc: Vec<Vec<u8>> = vec![b"a".into(), b"b".into(), b"c".into()];
-    let mut abcc = abc.clone();
-    abcc.push(b"c".to_vec());
-    assert_ne!(Tree::build(&abc).root(), Tree::build(&abcc).root());
+    // leaf 1 of a 2-leaf tree, passed off as the only leaf of a 1-leaf tree with one step too many
+    let ab = Tree::build(&[b"a".into(), b"b".into()]);
+    assert!(!verify_inclusion(&ab.root(), 1, 0, b"b", &ab.prove(1)));
+    // hostile numbers and random paths: no panic, nothing accepted
+    let root = Tree::build(&rand_leaves(rng, 9)).root();
+    for round in 0..3_000 {
+        let size = [1, 2, 9, 1 << 63, u64::MAX, rng.next()][round % 6];
+        let index = [
+            0,
+            size - u64::from(size > 0),
+            u64::MAX,
+            rng.next() % size.max(1),
+        ][round % 4];
+        let len = rng.below(200);
+        let path: Vec<Hash> = (0..len).map(|_| rng.hash()).collect();
+        assert!(!verify_inclusion(&root, size, index, b"x", &path));
+    }
     println!(
-        "inclusion proofs verified for all leaves of trees of size 1..=40; tampering rejected"
+        "roots match the definition, sizes 0..=70; every honest proof verifies; changes are rejected"
     );
+}
+
+/// The root does not pin the size: so the size must be trusted too.
+fn size_is_not_in_the_root() {
+    let abc: Vec<Vec<u8>> = vec![b"a".into(), b"b".into(), b"c".into()];
+    let t = Tree::build(&abc);
+    let path = t.prove(0);
+    assert!(verify_inclusion(&t.root(), 3, 0, b"a", &path));
+    assert!(
+        verify_inclusion(&t.root(), 4, 0, b"a", &path),
+        "a false size gets through"
+    );
+    println!("a proof from a 3-leaf tree also passes with the claimed size 4");
+
+    // a false size can carry a false POSITION too: the last of 8 leaves passes as position 14 of 15
+    let eight: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i]).collect();
+    let t = Tree::build(&eight);
+    let path = t.prove(7);
+    assert!(verify_inclusion(&t.root(), 8, 7, &eight[7], &path));
+    assert!(verify_inclusion(&t.root(), 15, 14, &eight[7], &path));
+    assert!(!verify_inclusion(&t.root(), 8, 14, &eight[7], &path));
+    println!("with a false size 15, the leaf at position 7 passes as position 14");
+}
+
+/// What pairing a lone node with itself does to three leaves, written out by hand.
+fn duplicate_pitfall() {
+    let [a, b, c] = [b"a", b"b", b"c"].map(|x| leaf_hash(x));
+    let ab = node_hash(&a, &b);
+    // three leaves: c has no partner, so such a design pairs it with itself
+    let three = node_hash(&ab, &node_hash(&c, &c));
+    // four leaves, the last one really repeated: an ordinary full tree
+    let abcc: Vec<Vec<u8>> = vec![b"a".into(), b"b".into(), b"c".into(), b"c".into()];
+    assert_eq!(three, Tree::build(&abcc).root());
+    // this file's tree keeps the two lists apart
+    assert_ne!(Tree::build(&abcc[..3]).root(), Tree::build(&abcc).root());
+    println!("pairing a lone node with itself: [a,b,c] and [a,b,c,c] share a root");
+}
+
+/// Compare roots and proofs with the same two functions written in Python from the RFC, using `hashlib`:
+/// sizes 0..=64, random leaves of 0..80 bytes from the xorshift generator below.
+fn check_against_python() {
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut all = Vec::new();
+    for n in 0..=64 {
+        let leaves: Vec<Vec<u8>> = (0..n)
+            .map(|_| {
+                let len = rng.below(80);
+                (0..len).map(|_| (rng.next() >> 24) as u8).collect()
+            })
+            .collect();
+        let t = Tree::build(&leaves);
+        all.extend(t.root());
+        for i in 0..n {
+            all.extend(t.prove(i).into_iter().flatten());
+        }
+    }
+    assert_eq!(
+        hex(&sha256(&all)),
+        "85d3b2adef9d247770263c54a13f52b1ab819a5795dcc7ccfa82c808d3eb7e0d"
+    );
+}
+
+/// What a saved checkpoint (root and size) catches, and what it does not.
+fn test_tamper_evidence(rng: &mut Rng) {
+    let records = rand_leaves(rng, 20);
+    let (saved_root, saved_size) = (Tree::build(&records[..12]).root(), 12);
+    // true only if the first `saved_size` records are the ones the checkpoint was made from
+    let still_matches = |log: &[Vec<u8>]| {
+        log.len() >= saved_size && Tree::build(&log[..saved_size]).root() == saved_root
+    };
+    assert!(still_matches(&records));
+
+    let mut changed = records.clone();
+    changed[4][0] ^= 1;
+    assert!(!still_matches(&changed));
+    let mut removed = records.clone();
+    removed.remove(4);
+    assert!(!still_matches(&removed));
+    assert!(!still_matches(&records[..11]));
+
+    // whoever rewrites the log can also make a new root and proofs that agree with it
+    let forged = Tree::build(&changed[..12]);
+    assert!(verify_inclusion(
+        &forged.root(),
+        12,
+        4,
+        &changed[4],
+        &forged.prove(4)
+    ));
+    assert!(!verify_inclusion(
+        &saved_root,
+        12,
+        4,
+        &changed[4],
+        &forged.prove(4)
+    ));
+
+    // and nothing after the checkpoint is protected by it
+    let mut later = records.clone();
+    later[15][0] ^= 1;
+    assert!(still_matches(&later) && still_matches(&records[..12]));
+    println!("a saved root and size catch changes before the checkpoint, and none after it");
 }
 
 fn test_log(rng: &mut Rng) {
@@ -485,7 +641,11 @@ fn main() {
     let t = Tree::build(&[b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]);
     println!("root of [x,y,z] = {}", hex(&t.root()));
     naive_forgery();
+    duplicate_pitfall();
+    check_against_python();
     test_proofs(&mut rng);
+    size_is_not_in_the_root();
+    test_tamper_evidence(&mut rng);
     test_log(&mut rng);
     test_anti_entropy(&mut rng);
     println!("all Merkle checks passed");

@@ -1,0 +1,242 @@
+title = "Merkle tree"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Cryptography"
+chapter_order = 4
+order = 548
+kind = "lesson"
+level = "advanced"
+code = ["examples/cryptography/merkle_tree.rs"]
+lede = "One short hash can commit to a long list of records, and show that a record is in it without sending the rest."
+summary = """
+A Merkle tree hashes each record, then hashes pairs of hashes until one **root** is left.
+
+Keep a root and the list's size where a writer can't change them. You can then detect later changes to those records, or check one record with a few hashes. It doesn't stop changes. It also doesn't show who made the root, whether others saw the same one or whether a record is true.
+"""
+
+[[sections]]
+heading = "Why isn't one hash of the whole log enough?"
+body = """
+Your program keeps a log of payments. Later, someone asks whether an old line was changed. You could save a hash of the whole file and compare it.
+
+That detects a change, if the saved hash is safe. But to check one line against it, you need every other line. A Merkle tree lets you check one line with only a few extra hashes.
+"""
+
+[[sections]]
+heading = "How is the tree built?"
+body = """
+Each record becomes a **leaf hash**. Two neighbouring hashes are hashed together into a **node hash**. This repeats until one hash remains.
+
+```stepper
+caption = "Three records, a, b and c"
+[[frame]]
+title = "Hash each record"
+text = "A, B and C stand for the three leaf hashes."
+lanes = [ { name = "Level", items = ["A", "B", "C"] } ]
+[[frame]]
+title = "Combine one pair"
+text = "AB is the hash of A and B. C has no partner, so it moves up unchanged."
+lanes = [ { name = "Level", items = ["AB", "C"] } ]
+[[frame]]
+title = "Reach the root"
+text = "The root is the hash of AB and C. Their order matters."
+lanes = [ { name = "Level", items = ["root"] } ]
+```
+
+The code follows the tree in [RFC 9162](https://www.rfc-editor.org/rfc/rfc9162), the standard for public certificate logs. It describes the same shape top down. For `n` records, the left part takes the largest power of two below `n`.
+"""
+
+[[sections]]
+heading = "Why are leaves and nodes hashed differently?"
+body = """
+A node hash is the hash of two child hashes, 64 bytes in all. A record can be any bytes, including those same 64.
+
+Without a distinction, someone can present those bytes as a **single record**. A list with that one record then has the same root as the real two-record list. Nobody had to break the hash function.
+
+The fix is **domain separation**: put a different byte in front of each kind of input.
+
+| Hash | Input |
+|---|---|
+| Leaf | byte `0x00`, then the record |
+| Node | byte `0x01`, then the left hash, then the right hash |
+
+This protects the tree, not your record format. If you join the fields `ab` and `c` with nothing between them, you get the same bytes as `a` and `bc`. Use an encoding where each record has only one reading.
+
+```walkthrough
+file = "examples/cryptography/merkle_tree.rs"
+[[step]]
+title = "Two kinds of input"
+lines = "142-154"
+text = "The only difference is the first byte, and what follows it."
+[[step]]
+title = "The attack on a tree without it"
+lines = "353-379"
+text = "The 64 bytes pass as one record in the plain tree. With the prefixes, the roots differ."
+```
+"""
+
+[[sections]]
+heading = "What if a level has an odd number of hashes?"
+body = """
+Some designs pair the lone hash **with itself**. Then `[a, b, c]` and `[a, b, c, c]` have the **same root**. Two different lists look identical.
+
+If you must follow such a design, never accept its root alone. Keep the number of records with the root, from the same trusted source, and reject any other number. Check every position against it.
+
+Bitcoin's transaction tree has this flaw, known as CVE-2012-2459. A comment in [Bitcoin Core's source](https://github.com/bitcoin/bitcoin/blob/master/src/consensus/merkle.cpp) explains it and how that program defends against it.
+
+The RFC 9162 tree avoids the copy: a lone hash moves up unchanged. This page's code follows that rule. A course exercise or another library may require a different one, and then its roots differ.
+
+:::deeper The pitfall in code (touches the BusTub course challenge "Challenge: a Merkle tree", which uses the self-pairing rule)
+```walkthrough
+file = "examples/cryptography/merkle_tree.rs"
+[[step]]
+title = "Two lists, one root"
+lines = "497-509"
+text = "The first root is written out by hand. It equals the root of the four-record list. This file's own tree keeps the lists apart."
+```
+:::
+"""
+
+[[sections]]
+heading = "How does an inclusion proof work?"
+body = """
+You trust a root. Someone claims that record `b` is at position 1. They send the record and the **sibling hashes** on the way to the root. For three records, `b` needs A and then C.
+
+You hash `b`, combine it with A, then with C, and compare the result with your root. A proof grows with the tree's height. Doubling the number of records adds at most one hash.
+
+Sort the inputs by whom you believe:
+
+| Input | Where it must come from |
+|---|---|
+| Root and size | A source you trust, **together** |
+| Record, position and sibling hashes | Anyone. The check decides |
+
+The verifier also works out whether each sibling is on the left or right. It uses the position and size, so the proof doesn't say. It rejects positions outside the list and paths that are too long or too short.
+
+```walkthrough
+file = "examples/cryptography/merkle_tree.rs"
+[[step]]
+title = "Collect the siblings"
+lines = "211-223"
+text = "Walk down to the record, keep the other child each time, then reverse the list."
+[[step]]
+title = "Refuse an impossible position"
+lines = "226-233"
+text = "`node` is the position on the current level. `last` is the last position on that level."
+[[step]]
+title = "Climb one sibling at a time"
+lines = "234-250"
+text = "An odd position is a right child. A last node without a partner moves up before its next sibling."
+[[step]]
+title = "Finish at the root"
+lines = "251-253"
+text = "The path must be used up exactly at the top, and the hash must match."
+```
+"""
+
+[[sections]]
+heading = "Why must you trust the size too?"
+body = """
+You might expect a false size to break every proof. It doesn't. In the three-record tree, the proof for `a` also passes if you claim four records. The steps for position 0 look the same in both sizes.
+
+A false size can also make a **false position** pass. Take the proof for position 7, the last of eight records. If you claim 15 records, the same proof also passes as position 14. So a position means something only with a trusted size.
+
+So never take the size from the person who sends the proof. Take root and size as one pair, called a **tree head**. Certificate logs sign their tree heads, which shows who vouched for the pair. This code has no signatures.
+"""
+
+[[sections]]
+heading = "What does a saved tree head catch?"
+body = """
+Suppose you save the head when the log has 12 records. Keep it somewhere the log's writer can't change. Later, rebuild the root of the first 12 records. A different root means that those records no longer match.
+
+```walkthrough
+file = "examples/cryptography/merkle_tree.rs"
+[[step]]
+title = "Compare the old part"
+lines = "535-551"
+text = "A changed, removed or missing record among the first 12 is caught."
+[[step]]
+title = "A rewritten log agrees with itself"
+lines = "553-568"
+text = "A new root and its proofs pass. Only the saved root exposes the rewrite."
+[[step]]
+title = "Later records are open"
+lines = "570-575"
+text = "Record 15 changes, and the old head still matches."
+```
+
+This is **tamper-evident**, not tamper-proof. It shows a change only when somebody checks, using a head the attacker couldn't replace. It can't bring the old record back.
+"""
+
+[[sections]]
+heading = "What does it not prove?"
+body = """
+| Question | Why the tree can't answer | What can help |
+|---|---|---|
+| Does a newer head extend the old one? | An inclusion proof covers one record under one head | All records, or a **consistency proof** (RFC 9162, section 2.1.4). This code has none |
+| Who made this head? | Anyone can build a tree | A signature, checked with a key you already trust |
+| Did everyone see the same head? | A signer can give different people different histories | Comparing heads, or independent witnesses |
+| When was it made? | A root holds no trusted time | A trusted timestamp, or your own note of when you saw it |
+| Is the record true? | A false line hashes as well as a true one | Evidence from outside the log |
+| Is something absent, or listed only once? | An inclusion proof shows one occurrence | Reading all records, or another structure |
+| Is the data hidden? | A proof reveals neighbouring hashes, and guesses can be tested | Access control or encryption |
+
+[Tracking where evidence came from](/cookbook/p/evidence-log) covers what to record in the first place.
+"""
+
+[[sections]]
+heading = "What else is in the code?"
+body = """
+An append-only builder keeps only the roots of complete subtrees, so it doesn't need old records to compute the next root. It must still be trusted to hold the right ones.
+
+Two copies of the same record slots can also compare trees from the top. They descend only where hashes differ.
+
+In one run, 4,096 records with three differences took 67 comparisons. [Quorum replication](/cookbook/p/quorum-replication-dynamo) shows where copies need repair. This comparison needs equal sizes.
+"""
+
+[[sections]]
+heading = "How was it checked?"
+body = """
+For sizes 0 to 70, the root matches a simple version of the RFC's definition. For sizes 0 to 64, roots and proofs also match a Python version that uses `hashlib`.
+
+Every honest proof passes. Changed records, paths, roots and positions fail. So do 3,000 proofs made of random hashes. Removing a length or position check makes the program fail.
+
+Tests can't show that collisions are impossible. The whole design relies on SHA-256 resisting them. The code's SHA-256 is written for study, so use a maintained library in production.
+
+```sh
+cargo run --release --example merkle_tree
+```
+"""
+
+[[connections]]
+kind = "before"
+title = "HMAC, HKDF and PBKDF2"
+link = "/cookbook/p/hmac-hkdf-pbkdf2"
+why = "Includes SHA-256, and shows what a plain hash doesn't protect."
+
+[[connections]]
+kind = "returns"
+title = "Tracking where evidence came from"
+link = "/cookbook/p/evidence-log"
+why = "A log that corrects by adding records. A saved tree head can help check its history."
+
+[[connections]]
+kind = "returns"
+title = "Hash-based signatures"
+link = "/cookbook/p/hash-based-signatures"
+why = "One public root can stand for many one-time signing keys."
+
+[[sources]]
+title = "RFC 9162: Certificate Transparency version 2.0"
+url = "https://www.rfc-editor.org/rfc/rfc9162"
+note = "Section 2.1 defines the tree, inclusion proofs and consistency proofs."
+
+[[sources]]
+title = "Bitcoin Core: merkle.cpp"
+url = "https://github.com/bitcoin/bitcoin/blob/master/src/consensus/merkle.cpp"
+note = "The opening comment explains the copied-hash flaw with a drawing."
+
+[[sources]]
+title = "transparency.dev: verifiable data structures"
+url = "https://transparency.dev/verifiable-data-structures/"
+note = "How logs and their proofs are used."
