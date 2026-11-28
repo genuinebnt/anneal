@@ -1,0 +1,151 @@
+title = "A single-threaded readiness event loop with `mio`"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 534
+kind = "lesson"
+level = "advanced"
+code = ["examples/networking/mio_event_loop.rs"]
+lede = "One thread serves many connections by asking the operating system which sockets are ready."
+summary = """
+With non-blocking sockets and `mio`, one thread can serve thousands of connections. It sleeps in `Poll::poll` until the kernel reports ready sockets, then reads or writes only what will not block.
+
+mio's events are edge-triggered, so you read, write or accept until `WouldBlock`. Each connection keeps its own buffers, because data arrives in pieces. Tokio's I/O driver is this loop with wakers added.
+"""
+
+[[sections]]
+heading = "Why serve many sockets from one thread?"
+body = """
+A thread per connection is simple, but with ten thousand mostly idle connections, most threads just wait and cost memory.
+
+An event loop turns this around. Every socket is non-blocking, so a read with no data returns `WouldBlock` instead of waiting. One thread asks the kernel which sockets are ready, through epoll on Linux and kqueue on macOS. It handles those, then asks again.
+
+Each socket is registered with a `Token`, a number you choose. Events carry the token, so you can find the connection in your own table.
+
+The example serves a small line protocol: every line it receives comes back in capitals.
+"""
+
+[[sections]]
+heading = "What does edge-triggered mean for your code?"
+body = """
+After mio reports that a socket is readable, it promises another event only once a read has returned `WouldBlock`. If you read part of the data and stop, the rest may sit there with no new event to tell you.
+
+So every handler works until `WouldBlock`. The listener accepts until there are no more connections waiting. A connection reads until its socket is empty.
+
+```walkthrough
+file = "examples/networking/mio_event_loop.rs"
+[[step]]
+title = "Read until WouldBlock"
+lines = "98-125"
+text = "`Ok(0)` means the peer closed its side. `WouldBlock` means the socket is drained, and only then does the loop wait for the next event. `Interrupted` is retried."
+[[step]]
+title = "Lines arrive in pieces"
+lines = "128-142"
+text = "New bytes join the unfinished line in `rbuf`. Each complete line becomes a reply, and the rest stays for the next read. The search starts after the bytes already searched."
+[[step]]
+title = "Accept until WouldBlock"
+lines = "213-234"
+text = "A connection reset before `accept` is skipped. A failed `set_nodelay` on such a connection, which happens on macOS, is ignored."
+```
+
+mio may report events for sockets that are not really ready, so a `WouldBlock` right after an event is normal. Its error and close flags are hints too, so the loop lets the read itself report what happened.
+
+```walkthrough
+file = "examples/networking/mio_event_loop.rs"
+[[step]]
+title = "Hints decide nothing alone"
+lines = "144-151"
+text = "Any of the three hints leads to a read. Only a failed read or write marks the connection dead."
+[[step]]
+title = "A check with only an error hint"
+lines = "363-383"
+text = "A healthy connection gets an event that says only \\"error\\". It must still be read and answered. Closing on the hint alone fails this check."
+```
+"""
+
+[[sections]]
+heading = "What happens when the peer reads slowly?"
+body = """
+A `write` may take only part of the bytes, or none, if the kernel's send buffer is full. The connection keeps its output in `out`, with `wpos` marking how much has gone. The next writable event sends the rest.
+
+Asking for writable events all the time would be wasteful, because a socket with room is writable almost always. So the loop asks for them only while output is waiting.
+
+```walkthrough
+file = "examples/networking/mio_event_loop.rs"
+[[step]]
+title = "Write until WouldBlock"
+lines = "154-177"
+text = "A short write leaves the tail in `out`. Bytes already sent are removed once they are more than half the buffer."
+[[step]]
+title = "Close, or change what to wait for"
+lines = "235-261"
+text = "A connection closes after an error, or once the peer has closed and every reply is sent. Otherwise `WRITABLE` interest is turned on or off to match the queued output."
+```
+
+The bulk test sends about 22 MB of lines, and its reader starts late. The replies overflow the socket buffers, and the check `write_would_block > 0` confirms that the short-write path really ran.
+"""
+
+[[sections]]
+heading = "How does another thread stop the loop?"
+body = """
+The loop spends its time inside `poll`, so a changed variable would go unnoticed. Another thread calls `mio::Waker::wake()` instead, and the loop receives an event with the waker's token.
+
+Here that event starts a graceful shutdown. The listener is deregistered, open connections finish their replies, and the loop returns once none are left.
+"""
+
+[[sections]]
+heading = "How does it handle peers that misbehave?"
+body = """
+Both buffers have a limit. A peer that sends 256 KB without a newline is cut off once its unfinished line passes 64 KB. A peer that keeps sending but never reads its replies is cut off once 32 MB of replies wait for it. The test checks that a well-behaved client is still served after both.
+
+Some limits remain. A peer that keeps its socket readable is read until `WouldBlock` before anyone else gets a turn. Running out of file descriptors stops the server. A connection that stays open makes shutdown give up after 5 seconds.
+"""
+
+[[sections]]
+heading = "Where is this loop inside Tokio?"
+body = """
+Tokio's I/O driver runs this loop. A task's `read().await` tries a non-blocking read first. On `WouldBlock`, it marks the socket as not ready, leaves its waker and returns `Pending`. When `poll` reports the socket, the driver marks it ready and wakes the waiting tasks.
+
+An `async fn` that reads lines is the compiler's version of the `Conn` state machine above. [A miniature tokio](/cookbook/p/mini-async-runtime) builds such a reactor for its own tasks.
+"""
+
+[[connections]]
+kind = "before"
+title = "A length-prefixed TCP message server, built twice"
+link = "/cookbook/p/tcp-framed-server"
+why = "Why one read is not one message, with a thread per connection."
+
+[[connections]]
+kind = "returns"
+title = "Build a real executor"
+link = "/cookbook/p/waker-executor"
+why = "Wakers at the level of tasks, the other half of an async runtime."
+
+[[connections]]
+kind = "returns"
+title = "A miniature tokio"
+link = "/cookbook/p/mini-async-runtime"
+why = "This loop as the reactor of a runtime."
+
+[[connections]]
+kind = "practise"
+title = "Wait for news that is only told once"
+link = "/p/c11-wait-without-missing-it"
+level = "related"
+why = "Edge-triggered news seen from a task: how not to miss the one event you get."
+
+[[sources]]
+title = "mio documentation"
+url = "https://docs.rs/mio"
+note = "Its section on draining readiness and on spurious events."
+
+[[sources]]
+title = "Tokio tutorial: I/O"
+url = "https://tokio.rs/tokio/tutorial/io"
+note = "The same work done with Tokio's async sockets."
+
+[[sources]]
+title = "epoll(7)"
+url = "https://man7.org/linux/man-pages/man7/epoll.7.html"
+note = "Edge-triggered and level-triggered modes, from the Linux side."

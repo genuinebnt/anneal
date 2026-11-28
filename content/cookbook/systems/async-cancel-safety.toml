@@ -12,7 +12,7 @@ code = ["examples/async/async_cancel_safety.rs"]
 [[sections]]
 heading = "Where you would use it"
 body = """
-any loop with `select!`/`timeout` around a multi-step async operation (framing, handshakes, batching).
+any loop with `select!`/`timeout` around an operation that takes several steps (framing, handshakes, batching).
 """
 
 [[sections]]
@@ -24,11 +24,11 @@ every select!/timeout loop: do not lose half-read frames or half-built batches.
 [[sections]]
 heading = "Design notes"
 body = """
-When a `select!` branch loses, its future is DROPPED mid-way. If that future had already taken data out of a channel/socket but not yet returned it, the data is gone. `mpsc::Receiver::recv` is cancel-safe (nothing is consumed unless it returns).
+When a `select!` branch loses, its future is dropped part way. If that future had already taken data out of a channel or a socket, and not yet returned it, the data is gone. `mpsc::Receiver::recv` is cancel-safe: if it loses, it has taken nothing.
 
-A user-written `async fn` that does recv + recv is **not**: the first value lives only in the future's local variable. Fix: keep progress in state **owned by the caller** (outside the future) and only await cancel-safe primitives inside `select!`.
+An `async fn` that calls `recv` twice is not: the first value lives only in the future's local variable. The fix: keep progress in state the caller owns, outside the future, and race only cancel-safe calls in `select!`. The demo runs on Tokio's paused clock (one thread, and time that jumps to the next timer when every task waits; feature `test-util`).
 
-The demo runs on tokio's **paused** clock (one thread, virtual time that jumps to the next timer; feature `test-util`), so which side of each race wins is the same on every run, however loaded the machine is. Tokio documents the cancel-safety of every method: <https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety>
+So which side wins each race is the same on every run, however loaded the machine is. Tokio lists which of its methods are cancel-safe: <https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety>
 """
 
 [[sources]]

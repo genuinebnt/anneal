@@ -1,0 +1,265 @@
+title = "Cancellation safety"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 261
+kind = "lesson"
+level = "advanced"
+code = ["examples/async/async_cancel_safety.rs"]
+lede = "Why a `select!` loop can lose data without any error, and how to keep it."
+summary = """
+When `select!` or `timeout` drops a future, everything the future held is dropped too. A future is **cancel-safe** if dropping it before it finishes loses nothing. Tokio's `mpsc::Receiver::recv` is; an `async fn` that calls it twice is not, because the first value lives inside the future.
+
+Race only cancel-safe calls, and keep partial progress in variables that outlive the race. Tokio's documentation says which of its methods are cancel-safe.
+"""
+
+[[sections]]
+heading = "How can a heartbeat lose messages?"
+body = """
+Say a task reads values from a channel in pairs, and also does something every 50 ms, such as reporting that it is alive. A natural loop races "read a pair" against the heartbeat. Values arrive every 60 ms.
+
+Both programs below run on Tokio's paused clock, where time jumps to the next timer as soon as every task waits. So the result is the same on every run.
+
+```compare
+takeaway = "The channel and the timing are the same. The fixed loop races only `recv`, which takes nothing when it loses, and keeps the first value of a pair outside the race."
+[wrong]
+title = "Race a whole pair"
+code = '''
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+
+async fn read_pair(rx: &mut mpsc::Receiver<u32>) -> Option<(u32, u32)> {
+    let a = rx.recv().await?;
+    let b = rx.recv().await?;
+    Some((a, b))
+}
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel(8);
+    tokio::spawn(async move {
+        for i in 1..=4 {
+            tx.send(i).await.unwrap();
+            sleep(Duration::from_millis(60)).await;
+        }
+    });
+    let mut pairs = vec![];
+    loop {
+        tokio::select! {
+            r = read_pair(&mut rx) => match r {
+                Some(p) => pairs.push(p),
+                None => break,
+            },
+            _ = sleep(Duration::from_millis(50)) => {} // a heartbeat
+        }
+    }
+    println!("{pairs:?}");
+}
+'''
+result = "It prints `[]`. Four values were sent and no pair came out. There was no error and no panic."
+[fixed]
+title = "Race one value at a time"
+code = '''
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel(8);
+    tokio::spawn(async move {
+        for i in 1..=4 {
+            tx.send(i).await.unwrap();
+            sleep(Duration::from_millis(60)).await;
+        }
+    });
+    let mut pairs = vec![];
+    let mut first: Option<u32> = None; // outlives every select!
+    loop {
+        tokio::select! {
+            v = rx.recv() => match (v, first.take()) {
+                (Some(b), Some(a)) => pairs.push((a, b)),
+                (Some(a), None) => first = Some(a),
+                (None, _) => break,
+            },
+            _ = sleep(Duration::from_millis(50)) => {} // a heartbeat
+        }
+    }
+    println!("{pairs:?}");
+}
+'''
+result = "It prints `[(1, 2), (3, 4)]`."
+```
+
+The broken loop is not always this broken. With a real clock and a busy machine, two values can be waiting at once, and then a pair gets through. That makes the bug look random in production.
+"""
+
+[[sections]]
+heading = "Where did the values go?"
+body = """
+`read_pair` is a future like any other. Its local variable `a` lives inside that future between its two `.await`s. When the heartbeat wins, `select!` drops the future, and `a` goes with it. The value had already left the channel, so nobody can get it back.
+
+```stepper
+caption = "Each heartbeat drops a read_pair that holds one value"
+[[frame]]
+title = "0 ms: the first value arrives"
+text = "`read_pair` takes 1 from the channel and waits for a second value. The heartbeat is due at 50 ms."
+lanes = [ { name = "Channel", items = [] }, { name = "read_pair", items = ["a = 1"] }, { name = "Lost", items = [] } ]
+[[frame]]
+title = "50 ms: the heartbeat wins"
+text = "The next value is due at 60 ms, so the heartbeat finishes first. `select!` drops `read_pair`, and 1 is dropped with it."
+lanes = [ { name = "Channel", items = [] }, { name = "read_pair", items = ["dropped"] }, { name = "Lost", items = ["1"] } ]
+[[frame]]
+title = "60 ms: a new read_pair starts over"
+text = "The next turn of the loop makes a fresh `read_pair`. It takes 2 and waits again. The next heartbeat is due at 100 ms, before 3 arrives."
+lanes = [ { name = "Channel", items = [] }, { name = "read_pair", items = ["a = 2"] }, { name = "Lost", items = ["1"] } ]
+[[frame]]
+title = "The pattern repeats"
+text = "Every value is taken by a `read_pair` that is dropped before the next one comes. When the channel closes, `read_pair` returns `None` and the loop ends with no pairs."
+lanes = [ { name = "Channel", items = [] }, { name = "read_pair", items = ["None"] }, { name = "Lost", items = ["1", "2", "3", "4"] } ]
+```
+"""
+
+[[sections]]
+heading = "What does cancel-safe mean?"
+body = """
+A future is **cancel-safe** if you can drop it at any `.await` and lose nothing. Either it finished its work, or it left everything where it found it.
+
+`recv` is cancel-safe because taking a message and returning it happen in the same poll. If it returns `Pending`, nothing has been taken. `read_pair` is not, because it takes a value in one poll and returns it in a later one.
+
+Tokio documents this for each method. A few you will meet often:
+
+| Call | Dropped before it finishes |
+|---|---|
+| `mpsc::Receiver::recv`, `broadcast::Receiver::recv`, `watch::Receiver::changed` | loses nothing |
+| `AsyncReadExt::read` | loses nothing: bytes are only taken in the poll that returns them |
+| `AsyncReadExt::read_exact` | some bytes may already be in your buffer, and you can't tell how many |
+| `AsyncReadExt::read_to_end` | the bytes read so far stay in your `Vec`; only the count it would return is gone |
+| `AsyncWriteExt::write_all` | some of the data may already be written, and you can't tell how much |
+| `mpsc::Sender::send` | nothing was sent, but the value you passed in is dropped |
+| `Mutex::lock`, `Semaphore::acquire` | loses its place in the queue of waiters |
+
+A lost place in a queue is not lost data, but a loop that keeps restarting `lock()` can wait much longer than it should.
+"""
+
+[[sections]]
+heading = "How do you keep the progress?"
+body = """
+Ask of every `.await` inside a raced future: if the future were dropped right here, what would be gone? Then move that state somewhere the drop can't reach. There are three common ways.
+
+**Keep progress outside the future.** Race only a cancel-safe call, and put partial results in a variable owned by the loop. That is the fix above, and the example file does the same with a variable called `pending`.
+
+```walkthrough
+file = "examples/async/async_cancel_safety.rs"
+[[step]]
+title = "The future that holds a value"
+lines = "30-35"
+text = "Between its two `recv` calls, `a` lives only inside the `read_pair` future."
+[[step]]
+title = "The buggy loop"
+lines = "39-52"
+text = "Each turn makes a new `read_pair` and races it against a 50 ms heartbeat. Every heartbeat drops one value."
+[[step]]
+title = "Progress that outlives the race"
+lines = "55-73"
+text = "`pending` belongs to the loop, not to a future. A heartbeat now drops only a `recv` that had taken nothing."
+[[step]]
+title = "The checks"
+lines = "76-86"
+text = "The buggy loop must give no pairs, and the fixed one exactly two, with four heartbeats between them. Moving `pending` inside the loop makes the second check fail."
+```
+
+**Keep the same future alive.** Create the future once, pin it with `tokio::pin!`, and race `&mut fut` in every turn. Losing a race then drops only the borrow, and the future carries on where it was. [Tokio essentials](/cookbook/p/tokio-runtime-tasks-channels-timers) shows this with a batch reader.
+
+**Ask for room before you hand over a value.** `Sender::reserve` waits for a place in the queue without taking your value. The value moves only once the place is yours, with a call that does not wait.
+
+```rust
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel::<String>(1);
+    tx.send("first".to_string()).await.unwrap(); // the queue is now full
+
+    // send() gives up its value when it loses the race
+    let job = "second".to_string();
+    tokio::select! {
+        r = tx.send(job) => r.unwrap(),
+        _ = sleep(Duration::from_millis(10)) => println!("send lost the race; `job` was dropped with it"),
+    }
+
+    // reserve() waits for room first, and the value moves only once there is room
+    let job = "third".to_string();
+    tokio::select! {
+        permit = tx.reserve() => permit.unwrap().send(job),
+        _ = sleep(Duration::from_millis(10)) => println!("reserve lost the race; still holding {job:?}"),
+    }
+
+    drop(tx);
+    while let Some(v) = rx.recv().await {
+        println!("received {v}");
+    }
+}
+```
+
+Both races are lost, because the queue stays full. The program prints that `job` was dropped, then that it still holds `"third"`, then `received first`.
+"""
+
+[[sections]]
+heading = "How do you test for it?"
+body = """
+A bug like this needs a race to be lost at the wrong moment, so normal tests rarely catch it. Make the moment certain instead. On the paused clock, a heartbeat that is shorter than the gap between messages wins every race, as in the example.
+
+For your own futures, you can also poll one by hand, drop it after it returns `Pending`, and check that nothing went missing. [What a Future really is](/cookbook/p/futures-by-hand) shows how to poll a future without a runtime.
+"""
+
+[[connections]]
+kind = "before"
+title = "Cancellation with select!, and timeouts"
+link = "/cookbook/p/select-cancel"
+why = "What `select!` and `timeout` do to the futures that lose."
+
+[[connections]]
+kind = "returns"
+title = "Tokio essentials on a paused clock"
+link = "/cookbook/p/tokio-runtime-tasks-channels-timers"
+why = "The pinned-future fix, and the paused clock used here."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "Stopping workers without cutting a job in half."
+
+[[connections]]
+kind = "practise"
+title = "Fix: select! is eating bytes"
+link = "/p/c4-fix-cancel-safe-reader"
+level = "similar"
+why = "The same loss in a reader of framed bytes. This page uses messages, not bytes, and does not show that fix."
+
+[[connections]]
+kind = "practise"
+title = "A bounded channel for async tasks"
+link = "/p/c11-async-channel"
+level = "related"
+why = "Write the channel yourself, and decide what a dropped `send` or `recv` may lose."
+
+[[sources]]
+title = "tokio::select!: cancellation safety"
+url = "https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety"
+note = "Tokio's list of which methods are cancel-safe, and which are not."
+
+[[sources]]
+title = "tokio::sync::mpsc::Sender::reserve"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html#method.reserve"
+note = "Waiting for room without giving up the value."
+
+[[sources]]
+title = "Tokio tutorial: select"
+url = "https://tokio.rs/tokio/tutorial/select"
+note = "Resuming a pinned future across loop turns."

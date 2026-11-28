@@ -1,0 +1,269 @@
+title = "A miniature tokio"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 650
+kind = "lesson"
+level = "capstone"
+code = ["examples/capstones/mini_async_runtime.rs"]
+code_spoils = ["/rust/series/async-runtime"]
+lede = "An async runtime in one file: tasks, join handles, timers, worker threads that steal work, channels and a reactor on mio."
+summary = """
+This project rebuilds the moving parts of Tokio in one file of safe Rust. It has tasks that put themselves back in a queue, join handles, runtimes on one thread and on several, timers, channels, a semaphore and a reactor on `mio`. Read it to see where wake-ups get lost and why cancelling is dropping. It is a study program, smaller and slower than Tokio, and its full code solves the series that builds it.
+"""
+
+[[sections]]
+heading = "Should you read this before building your own?"
+body = """
+Probably not. The series [Build a small async runtime](/rust/series/async-runtime) builds this runtime step by step, and this file solves every step. The sections below explain what each part does without the code. Each fold that shows code names the exercises it gives away.
+
+If you have finished the series, read the folds to compare your choices with these.
+"""
+
+[[sections]]
+heading = "What is in it?"
+body = """
+Every `.await` in the end comes down to one move. A future that can't finish stores its waker somewhere and returns `Pending`. Later, whoever owns that somewhere calls `wake`. The runtime is mostly the somewheres: a timer queue, a reactor, a channel's waiting list, a join handle's slot.
+
+```text
+your futures ──spawn──▶ tasks ──────────▶ JoinHandle (the output, or how it failed)
+                          │
+                          │ a waker puts its task back in a queue
+                          ▼
+one thread:      one queue, run by block_on
+several threads: a queue per worker, one shared queue, and stealing
+                          ▲                         ▲
+     timer: deadlines in order; a driver      reactor: a thread in mio's
+     thread sleeps until the next one         Poll that wakes waiting tasks
+```
+
+| Part | What it does | Tokio's version |
+|---|---|---|
+| tasks and join handles | wrap a future, poll it when woken, report how it ended | `tokio::spawn`, `JoinHandle`, `abort` |
+| one-thread runtime | one queue, driven by `block_on` | the current-thread runtime |
+| several-thread runtime | crossbeam deques, idle workers sleep on a `Condvar` | the multi-thread runtime |
+| time | `sleep`, `timeout` and `interval`, with a clock a test can move | `tokio::time`, and `start_paused` |
+| sync | oneshot, bounded mpsc, `Notify`, `Semaphore`, `join2`, `join_all`, `select2` | `tokio::sync`, `join!`, `select!` |
+| reactor | non-blocking `TcpListener` and `TcpStream` on mio | Tokio's I/O driver |
+
+There is no `unsafe` in the file. Implementing `std::task::Wake` for an `Arc` of the task builds its waker, and boxing each future as `Pin<Box<...>>` avoids pin projections.
+"""
+
+[[sections]]
+heading = "How do you use it?"
+body = """
+The program's checks use it like Tokio. Here a runtime with two workers runs a future that times out, and then a race between two futures.
+
+```rust
+let rt = Runtime::new(2);
+let r = rt.block_on(async move {
+    timeout(Duration::from_millis(20), async move {
+        let _g = DropGuard(d);
+        sleep(Duration::from_secs(30)).await;
+        1
+    })
+    .await
+});
+assert_eq!(r, Err(Elapsed));
+assert_eq!(drops.load(SeqCst), 1, "dropping the timed-out future must run its destructors");
+```
+
+`select2` drops the loser at once, in the same way. In both cases the cancelled future never runs again, and its destructors run.
+
+Run everything with `cargo run --release --example mini_async_runtime`. It prints a table with one row per check and ends with `ALL CHECKS PASSED`.
+"""
+
+[[sections]]
+heading = "Where do wake-ups get lost?"
+body = """
+Most bugs in a runtime are races between "is there anything for me?" and "wake me when there is". Each part of this file has its own version of that race. The folds show how the code closes each one.
+
+:::deeper Tasks, join handles and abort (gives away capstone steps 1 and 2, and the parts "Queue a job once, and lose no request" and "Say how a future ended, after it has cleaned up")
+A task has a small state in one atomic: idle, scheduled, running, notified or complete. A wake that arrives while the task is being polled is recorded, and the poller queues the task again afterwards. Only the thread that moves a task from idle to scheduled may queue it, so two workers never poll one future at once.
+
+Every wake writes the state, even when the task is already queued. A wake that only read it would publish nothing, and the next poll could miss what the waker had stored without a lock.
+
+When a task ends, its future is destroyed first, and only then does the join handle hear of it. A panic from the future's destructor is caught too.
+
+```walkthrough
+file = "examples/capstones/mini_async_runtime.rs"
+[[step]]
+title = "The state machine"
+lines = "169-256"
+text = "`notify` moves idle to scheduled, and running to notified. `run` polls once, then goes back to idle or queues the task again."
+[[step]]
+title = "How a task ends"
+lines = "304-346"
+text = "The harness catches panics, drops the future, and only then fills the join handle's slot."
+[[step]]
+title = "The join handle"
+lines = "359-390"
+text = "It keeps a weak reference to the task, so a task nobody can wake is still freed."
+```
+:::
+
+:::deeper The runtimes and their workers (gives away capstone steps 3, 5 and 6, and the parts "The current one, on this thread", "Run jobs that create more jobs" and "Go to sleep without missing work")
+A thread-local value says which runtime is current, so `spawn` works without a handle. The multi-thread runtime gives each worker its own deque, plus one shared queue. An idle worker steals from the others.
+
+Idle workers sleep without a timeout. While a worker moves a batch of tasks between queues, the tasks are in neither, so another worker can look, find nothing and sleep. A worker that takes a task and still sees queued work therefore wakes one more.
+
+Each runtime keeps a list of its live tasks through weak references. Dropping it refuses new work, stops the threads after the polls in progress, and then destroys every remaining future.
+
+```walkthrough
+file = "examples/capstones/mini_async_runtime.rs"
+[[step]]
+title = "The current runtime"
+lines = "423-460"
+text = "`enter` returns a guard that restores what was current before."
+[[step]]
+title = "One thread"
+lines = "500-644"
+text = "A `VecDeque` of tasks, and a `block_on` that runs them until its own future is done."
+[[step]]
+title = "Finding work"
+lines = "649-760"
+text = "The worker's own deque first, then the shared queue, then stealing from the others."
+[[step]]
+title = "A worker's life"
+lines = "762-797"
+text = "Run what it finds; sleep when there is nothing; wake another worker if work is left behind."
+[[step]]
+title = "Shutting down"
+lines = "799-917"
+text = "Drop refuses new tasks, joins the threads, then destroys the futures that never finished."
+```
+:::
+
+:::deeper Time (gives away capstone step 4 and much of the part "One thread that rings every alarm")
+Deadlines sit in a `BTreeMap` keyed by time and a sequence number, so a dropped `sleep` can leave the timer at once. A driver thread sleeps until the next deadline. With the manual clock, moving the clock forward wakes what is due.
+
+```walkthrough
+file = "examples/capstones/mini_async_runtime.rs"
+[[step]]
+title = "Two clocks"
+lines = "922-945"
+text = "A real one, and one the test moves."
+[[step]]
+title = "The timer and its driver"
+lines = "946-1054"
+text = "Register, cancel, and wake everything that is due."
+[[step]]
+title = "Sleep, timeout and interval"
+lines = "1056-1182"
+text = "A `Sleep` stores its waker in the timer; dropping it removes its entry."
+```
+:::
+
+:::deeper Channels and combinators (gives away "A oneshot channel whose receiver is a Future", "Wait for several things inside one task", "A bounded channel for async tasks" and "Permits and signals for async tasks")
+```walkthrough
+file = "examples/capstones/mini_async_runtime.rs"
+[[step]]
+title = "oneshot"
+lines = "1202-1269"
+text = "One value, one waker slot, and a wake after the lock is released."
+[[step]]
+title = "Bounded mpsc"
+lines = "1271-1392"
+text = "Waiting senders and the receiver keep their wakers in the channel's state."
+[[step]]
+title = "Semaphore and Notify"
+lines = "1394-1463"
+text = "Simpler than Tokio's: both wake every waiter, and `Notify` keeps a single flag."
+[[step]]
+title = "join2, join_all and select2"
+lines = "1465-1567"
+text = "One future polls several children; `select2` drops the loser before it returns."
+```
+:::
+
+:::deeper The reactor (gives away capstone step 7 and the part "Wait for news that is only told once")
+mio reports readiness once per change, so the reactor counts changes in an epoch and wakes the waiting tasks. A task always tries the operation first. Only on `WouldBlock` does it leave a waker, and then it checks the epoch again, in case news arrived in between. Each waiting operation has its own entry, so two `accept` calls can wait at once.
+
+```walkthrough
+file = "examples/capstones/mini_async_runtime.rs"
+[[step]]
+title = "Waiting operations"
+lines = "1574-1635"
+text = "One entry per waiting future, removed when that future is dropped."
+[[step]]
+title = "The reactor thread"
+lines = "1636-1708"
+text = "It sits in mio's `Poll`, bumps the epoch of each source that has news, and wakes its waiters."
+[[step]]
+title = "Try, register, check again"
+lines = "1722-1741"
+text = "The pattern every socket call goes through."
+```
+:::
+"""
+
+[[sections]]
+heading = "How is it checked?"
+body = """
+Running the example runs every check, two dozen in all. Some drive the schedule themselves, through a waker or a test hook, so they need no luck. Two tasks wait on one listener, or a thousand sleeps are dropped before they fire.
+
+Others are larger. 100,000 tiny tasks must each run exactly once, and an echo server serves 20 clients. The same programs also run on Tokio and on this runtime, and their results must agree.
+
+Time limits in the checks only turn a hang into a failure. At the end, the program checks that no task and no thread is left alive.
+
+Two checks are about memory order, and they can only fail on a model of weak memory. Under Miri they are the only checks that run: `MIRIFLAGS=-Zmiri-seed=0 cargo +nightly miri run --example mini_async_runtime`. A normal run does not test the orderings, and a few Miri seeds are not a proof.
+"""
+
+[[sections]]
+heading = "What does it leave out?"
+body = """
+It is smaller than Tokio in ways that matter for real programs.
+
+- `Notify` keeps one flag, so two `notify_one` calls made before a waiter runs release only one waiter. Tokio's keeps a permit and picks a waiter for each call.
+- `Semaphore` and `mpsc` wake every waiter when room appears, and they are not fair.
+- Timers sit in a `BTreeMap`, not in Tokio's timer wheel.
+- A runtime must not be dropped from one of its own tasks, and a socket used after its runtime is gone gets no more events.
+- `select2` and `timeout` drop the loser, so they are only as safe as the futures you give them. A half-finished write may already have sent part of its data.
+"""
+
+[[connections]]
+kind = "before"
+title = "Build a real executor"
+link = "/cookbook/p/waker-executor"
+why = "Tasks and wakers in 60 lines, before the full runtime."
+
+[[connections]]
+kind = "before"
+title = "A single-threaded readiness event loop with mio"
+link = "/cookbook/p/mio-event-loop"
+why = "The loop that the reactor here is built on."
+
+[[connections]]
+kind = "before"
+title = "Cancellation safety"
+link = "/cookbook/p/async-cancel-safety"
+why = "What `select2` and `timeout` can lose."
+
+[[connections]]
+kind = "practise"
+title = "Build a small async runtime"
+link = "/rust/series/async-runtime"
+level = "exact"
+why = "The series that builds this runtime. The folds and the full code give it away."
+
+[[connections]]
+kind = "returns"
+title = "Tokio essentials on a paused clock"
+link = "/cookbook/p/tokio-runtime-tasks-channels-timers"
+why = "The real thing, used the way this file imitates."
+
+[[sources]]
+title = "Making the Tokio scheduler 10x faster"
+url = "https://tokio.rs/blog/2019-10-scheduler"
+note = "Why Tokio uses a queue per worker, stealing and a task state machine."
+
+[[sources]]
+title = "smol"
+url = "https://github.com/smol-rs/smol"
+note = "A small runtime built from separate crates, good to read next."
+
+[[sources]]
+title = "Asynchronous Programming in Rust"
+url = "https://rust-lang.github.io/async-book/"
+note = "Futures, wakers and executors from the start."

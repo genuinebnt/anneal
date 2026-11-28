@@ -3,36 +3,33 @@
 //! Use in: understanding tokio/async internals, custom high-connection-count servers, proxies, game/realtime servers.   Run: cargo run --release --example mio_event_loop
 #![allow(dead_code)]
 //!
-//! WHAT: one thread serves many sockets. All sockets are NONBLOCKING; the thread sleeps in `Poll::poll`
-//! (epoll on Linux, kqueue on macOS/BSD) until the kernel reports READINESS events, then does only the work
-//! that cannot block. Registration associates each source with a `Token` (your index into a table).
+//! One thread serves many sockets. Every socket is non-blocking. The thread sleeps in `Poll::poll` (epoll on Linux,
+//! kqueue on macOS and BSD) until the kernel reports that a socket is ready, then does only the work that cannot block.
+//! Each registered source gets a `Token`, the key into your own table of connections.
 //!
-//! EDGE-TRIGGERED: mio reports a *transition* to ready, once. If you read only part of what is available you
-//! will not be told again, so on a readable event you must read until `WouldBlock`, and on the listener you
-//! must `accept` until `WouldBlock`. Same for writes: write until `WouldBlock`, then ask for `WRITABLE`
-//! interest and resume when the next writable edge arrives.
+//! Edge-triggered: after an event, mio promises another one only once the operation has returned `WouldBlock`. So on a
+//! readable event, read until `WouldBlock`, and on the listener, accept until `WouldBlock`. Writes work the same way:
+//! write until `WouldBlock`, then ask for `WRITABLE` interest and carry on at the next writable event.
 //!
-//! PER-CONNECTION STATE MACHINE: `rbuf` holds an incomplete trailing line (TCP delivers arbitrary fragments);
-//! `out` + `wpos` is the write queue (a partial `write` leaves a tail to resume later). WRITABLE interest is
-//! toggled on only while `out` is non-empty: a socket that is always writable would otherwise wake us pointlessly.
-//! Half-close (peer EOF) is remembered; we flush all pending output before closing, so no complete line goes unanswered (text after
-//! the last newline gets no reply).
+//! Each connection is a small state machine. `rbuf` holds an unfinished line (TCP delivers bytes in any pieces). `out`
+//! and `wpos` are the write queue: a short `write` leaves a tail to send later. `WRITABLE` interest is on only while
+//! `out` holds unsent bytes, because a socket is nearly always writable and would wake the loop for nothing.
+//! When the peer closes its side, the server sends everything still queued before it closes, so every complete line
+//! gets its reply (text after the last newline gets none).
 //!
-//! HOSTILE PEERS: both buffers are bounded, so a peer that never sends a newline, or sends and never reads, is disconnected. A
-//! connection that was reset before `accept` must not stop the server (on macOS, setting an option on it fails).
-//! LIMITS: one peer that keeps its socket readable is read until `WouldBlock` before others get a turn; running out of file
-//! descriptors stops the server; a connection that stays open makes shutdown give up after 5 seconds with an error.
+//! Hostile peers: both buffers are bounded, so a peer that never sends a newline, or sends and never reads, is
+//! disconnected. A connection reset before `accept` must not stop the server (on macOS, setting an option on it fails).
+//! Limits: one peer that keeps its socket readable is read until `WouldBlock` before the others get a turn. Running
+//! out of file descriptors stops the server. A connection that stays open makes shutdown give up after 5 seconds.
 //!
-//! `mio::Waker`: other threads cannot interrupt `poll` by touching your data, so they `wake()`, which makes the
-//! loop return an event with the waker's token (eventfd on Linux, a user event on kqueue). Here it requests
-//! graceful shutdown: stop accepting, drain the open connections, then exit.
+//! `mio::Waker`: another thread can't interrupt `poll` by changing your data, so it calls `wake()`. The loop then gets
+//! an event with the waker's token (an eventfd on Linux, a user event on kqueue). Here it asks for a graceful
+//! shutdown: stop accepting, finish the open connections, then return.
 //!
-//! HOW THIS IS TOKIO: tokio's I/O driver is this loop. `tokio::net::TcpStream` registers with a mio `Poll` and
-//! keeps a ScheduledIo per source holding the readiness bits and the wakers of tasks waiting on it. A task that
-//! does `read().await` tries a nonblocking read; on `WouldBlock` it clears readiness and parks its `Waker`.
-//! When the driver's `poll` returns the token, it sets readiness and wakes those tasks, which the scheduler
-//! re-polls. `async fn` is the compiler-generated version of the per-connection state machine written by hand
-//! below, and `Waker` is the same idea at the task level. Writing this once makes `await` less magical.
+//! In Tokio: the I/O driver is this loop. Each registered socket has a `ScheduledIo` with its readiness bits and the
+//! wakers of the tasks waiting on it. A task's `read().await` tries a non-blocking read. On `WouldBlock`, it clears
+//! the readiness and leaves its waker. When `poll` reports the token, the driver sets the readiness and wakes those
+//! tasks. An `async fn` is the compiler-made version of the per-connection state machine written by hand below.
 //!
 //! COMMON USES: the reactor under tokio and other Rust async runtimes; Redis-like single-threaded servers;
 //! nginx-style worker loops (one event loop per core); libuv (Node.js) uses the same model.
@@ -73,7 +70,26 @@ struct Conn {
     writable_interest: bool,
 }
 
+/// What an event says about a connection. mio calls error and close readiness hints, so they decide nothing alone.
+#[derive(Clone, Copy)]
+struct Hints {
+    readable: bool,
+    read_closed: bool,
+    error: bool,
+}
+
 impl Conn {
+    fn new(stream: TcpStream) -> Conn {
+        Conn {
+            stream,
+            rbuf: vec![],
+            out: vec![],
+            wpos: 0,
+            peer_closed: false,
+            writable_interest: false,
+        }
+    }
+
     fn pending(&self) -> bool {
         self.wpos < self.out.len()
     }
@@ -123,6 +139,15 @@ impl Conn {
             seen = start;
         }
         self.rbuf.drain(..start);
+    }
+
+    /// Handles one event; returns true if the connection is dead. The read itself reports errors and the end of input.
+    fn on_event(&mut self, hints: Hints, st: &mut Stats) -> bool {
+        if (hints.readable || hints.read_closed || hints.error) && self.on_readable(st).is_err() {
+            return true;
+        }
+        // always try to flush: covers new output (read) and the WRITABLE edge
+        self.flush(st).is_err()
     }
 
     /// Write until everything is sent or the kernel buffer is full (WouldBlock).
@@ -197,17 +222,7 @@ fn run_server(mut poll: Poll, mut listener: TcpListener) -> io::Result<Stats> {
                             let t = Token(next);
                             next += 1;
                             poll.registry().register(&mut s, t, Interest::READABLE)?;
-                            conns.insert(
-                                t,
-                                Conn {
-                                    stream: s,
-                                    rbuf: vec![],
-                                    out: vec![],
-                                    wpos: 0,
-                                    peer_closed: false,
-                                    writable_interest: false,
-                                },
-                            );
+                            conns.insert(t, Conn::new(s));
                             st.accepted += 1;
                             st.max_open = st.max_open.max(conns.len());
                         }
@@ -221,14 +236,12 @@ fn run_server(mut poll: Poll, mut listener: TcpListener) -> io::Result<Stats> {
                     let Some(c) = conns.get_mut(&tok) else {
                         continue;
                     };
-                    let mut dead = ev.is_error();
-                    if !dead && (ev.is_readable() || ev.is_read_closed()) {
-                        dead = c.on_readable(&mut st).is_err();
-                    }
-                    if !dead {
-                        // always try to flush: covers new output (read) and the WRITABLE edge
-                        dead = c.flush(&mut st).is_err();
-                    }
+                    let hints = Hints {
+                        readable: ev.is_readable(),
+                        read_closed: ev.is_read_closed(),
+                        error: ev.is_error(),
+                    };
+                    let dead = c.on_event(hints, &mut st);
                     // close only after the peer is done AND everything has been sent
                     if dead || (c.peer_closed && !c.pending()) {
                         poll.registry().deregister(&mut c.stream)?;
@@ -347,6 +360,28 @@ fn reset(s: std::net::TcpStream) {
     assert_eq!(rc, 0, "setsockopt(SO_LINGER)");
 }
 
+/// An error hint on a healthy connection must not close it: the connection is read, and the reply goes out.
+fn error_hint_is_only_a_hint() -> io::Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let mut peer = client(listener.local_addr()?);
+    let (server_side, _) = listener.accept()?;
+    peer.write_all(b"hello\n")?;
+    server_side.peek(&mut [0u8; 1])?; // blocks until the line has arrived
+    server_side.set_nonblocking(true)?;
+    let mut conn = Conn::new(TcpStream::from_std(server_side));
+    let mut st = Stats::default();
+    let hint = Hints {
+        readable: false,
+        read_closed: false,
+        error: true,
+    };
+    assert!(!conn.on_event(hint, &mut st), "a hint alone closed a healthy connection");
+    let mut line = String::new();
+    BufReader::new(peer).read_line(&mut line)?;
+    assert_eq!((line.as_str(), st.lines), ("HELLO\n", 1));
+    Ok(())
+}
+
 fn timed_out(e: &io::Error) -> bool {
     matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
 }
@@ -440,6 +475,7 @@ fn main() -> io::Result<()> {
         "the partial-write path was exercised"
     );
     hostile_peers()?;
+    error_hint_is_only_a_hint()?;
     println!("all mio event-loop assertions passed");
     Ok(())
 }

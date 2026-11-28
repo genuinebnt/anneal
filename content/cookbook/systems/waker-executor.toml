@@ -24,13 +24,17 @@ understanding tokio internals; custom executors for embedded/real-time/test harn
 [[sections]]
 heading = "Design notes"
 body = """
-Pieces: (1) `Task` = a boxed future + a handle to the queue; (2) `impl Wake for Task` so `waker.wake()` re-queues the task; (3) the executor loop pulls **ready** tasks and polls them; a task that returns Pending is parked until its waker fires; (4) a `Timer` future stores the latest waker and a helper thread calls it when time is up.
+A `Task` holds a boxed future and a sender for the ready queue. `impl Wake for Task` makes `waker.wake()` put the task back in the queue. The executor takes ready tasks from the queue and polls them.
 
-Nothing busy-waits: the executor blocks on `recv()` when nothing is ready (compare futures_by_hand, which polls in a loop). This is the executor from the Async Book <https://rust-lang.github.io/async-book/02_execution/04_executor.html> extended to count polls. Real runtimes add multi-threading, timer wheels, IO reactors (mio/epoll), work stealing.
+A task that returns `Pending` waits outside the queue until its waker is called. A `Timer` future stores the latest waker, and a helper thread calls it when the time is up. Nothing busy-waits: the executor blocks on `recv()` when nothing is ready (compare `futures_by_hand`, which polls in a loop).
 
-One change from the book matters: the ready queue is **unbounded**. With a bounded one, a `wake` or a `spawn` made by the executor thread while the queue is full waits for the executor itself, for ever.
+This is the executor from the Async Book, extended to count polls: <https://rust-lang.github.io/async-book/02_execution/04_executor.html> One change from the book matters: the ready queue is unbounded.
 
-**Limits**: waking a task twice queues it twice (harmless, one wasted visit); every `Timer` starts a thread; a panic in one task stops `run`; `run` returns once no task is queued and no waker is left, so a stored waker that is never used keeps it waiting.
+With a bounded one, a `wake` or a `spawn` made on the executor's own thread while the queue is full would wait for the executor, which is that same thread, for ever.
+
+**Limits.** Waking a task twice queues it twice (one wasted visit). Every `Timer` starts a thread. A panic in a task stops `run`.
+
+`run` returns only when every sender is gone, so a waker that is stored and never used keeps it waiting. Real runtimes add more threads, timer wheels, an I/O reactor (mio over epoll or kqueue) and work stealing.
 """
 
 [[sources]]

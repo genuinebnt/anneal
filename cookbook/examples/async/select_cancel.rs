@@ -1,15 +1,15 @@
 //! RECIPE 13 (async): cancellation with `select!`, and timeouts.
 //! LEVEL: intermediate
-//! Use in: cancellation and timeout stages.   Run: cargo run --example select_cancel
+//! Use in: stopping work on a signal, giving up after a time limit.   Run: cargo run --example select_cancel
 //! COMMON USES: request timeouts, shutdown signals, racing a cache against a database: select!/timeout drop the loser.
 //!
-//! Pattern: race the real work against a cancel signal. When one branch wins, `select!` drops the other branches' futures: a
-//! dropped future is never polled again, so its work stops at the `.await` where it was waiting. What it had done up to there
-//! stays done. A branch built from a reference (`&mut cancel_rx`) drops only the reference, so the same future can be waited
-//! on again in the next turn of a loop. A future is "cancel-safe" if dropping it before it finishes loses nothing:
-//! `mpsc::Receiver::recv` is; `read_exact` and `write_all` are not. `timeout` is the same idea with a clock.
-//! LIMITS: cancellation only happens when a future yields; a future that blocks or loops without awaiting cannot be timed
-//! out. Dropping a `JoinHandle` does not cancel a spawned task (`abort` does).
+//! Race the real work against a cancel signal. When one branch of `select!` wins, the other branches' futures are
+//! dropped. A dropped future is never polled again, so its work stops at the `.await` where it was waiting. What it did
+//! before that stays done.
+//! A branch written as `&mut cancel_rx` drops only the reference, so the same future can be waited on again in the next
+//! turn of a loop. `timeout` is the same race with a clock.
+//! Limits: a future is cancelled only where it waits. Code that blocks the thread, or loops without an `.await`, cannot be
+//! timed out. Dropping a `JoinHandle` does not cancel a spawned task (`abort` does).
 //! Tokio docs: https://tokio.rs/tokio/tutorial/select
 #![allow(dead_code)]
 use std::time::Duration;

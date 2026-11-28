@@ -4,11 +4,11 @@
 //! COMMON USES: debugging stuck async tasks, writing executors/combinators, understanding cancellation.
 #![allow(dead_code)]
 //!
-//! A `Future` is just a state machine with one method: `poll(self: Pin<&mut Self>, cx) -> Poll<Output>`.
-//!   Ready(v)  : finished.            Pending : not yet; the future MUST arrange to be woken (via `cx.waker()`).
-//! `async fn` and `async {}` compile into such state machines. Nothing runs until something polls them, and
-//! `.await` is "poll the inner future; if Pending, return Pending myself". An executor (tokio) calls `poll`
-//! whenever a waker says a task may be ready. Dropping a future cancels it at its last `.await`.
+//! A `Future` is a state machine with one method: `poll(self: Pin<&mut Self>, cx) -> Poll<Output>`.
+//! `Ready(v)` means finished. `Pending` means not yet, and then the future must arrange to be woken through `cx.waker()`.
+//! `async fn` and `async {}` compile into such state machines. Nothing runs until something polls them. `.await` means
+//! "poll the inner future; if it is Pending, return Pending myself". An executor such as Tokio polls a task again when
+//! its waker says it may be ready. Dropping a future cancels it at the `.await` where it is waiting.
 //! Read: https://rust-lang.github.io/async-book/ and Jon Gjengset's "Crust of Rust: async/await" (YouTube).
 use std::future::Future;
 use std::pin::{Pin, pin};

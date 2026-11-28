@@ -16,31 +16,27 @@ body = """
 """
 
 [[sections]]
-heading = "What it is"
-body = """
-one thread serves many sockets. All sockets are **nonblocking**; the thread sleeps in `Poll::poll` (epoll on Linux, kqueue on macOS/BSD) until the kernel reports **readiness** events, then does only the work that cannot block. Registration associates each source with a `Token` (your index into a table).
-"""
-
-[[sections]]
 heading = "Design notes"
 body = """
-**Edge-triggered**: mio reports a &#42;transition&#42; to ready, once. If you read only part of what is available you will not be told again, so on a readable event you must read until `WouldBlock`, and on the listener you must `accept` until `WouldBlock`.
+One thread serves many sockets. Every socket is non-blocking. The thread sleeps in `Poll::poll` (epoll on Linux, kqueue on macOS and BSD) until the kernel reports that a socket is ready, then does only the work that cannot block.
 
-Same for writes: write until `WouldBlock`, then ask for `WRITABLE` interest and resume when the next writable edge arrives.
+Each registered source gets a `Token`, the key into your own table of connections.
 
-**Per-connection state machine**: `rbuf` holds an incomplete trailing line (TCP delivers arbitrary fragments); `out` + `wpos` is the write queue (a partial `write` leaves a tail to resume later). **Writable** interest is toggled on only while `out` is non-empty: a socket that is always writable would otherwise wake us pointlessly.
+Edge-triggered: after an event, mio promises another one only once the operation has returned `WouldBlock`. So on a readable event, read until `WouldBlock`, and on the listener, accept until `WouldBlock`. Writes work the same way: write until `WouldBlock`, then ask for `WRITABLE` interest and carry on at the next writable event.
 
-Half-close (peer EOF) is remembered; we flush all pending output before closing, so no complete line goes unanswered (text after the last newline gets no reply).
+Each connection is a small state machine. `rbuf` holds an unfinished line (TCP delivers bytes in any pieces). `out` and `wpos` are the write queue: a short `write` leaves a tail to send later.
 
-**Hostile peers**: both buffers are bounded, so a peer that never sends a newline, or sends and never reads, is disconnected. A connection that was reset before `accept` must not stop the server (on macOS, setting an option on it fails).
+`WRITABLE` interest is on only while `out` holds unsent bytes, because a socket is nearly always writable and would wake the loop for nothing. When the peer closes its side, the server sends everything still queued before it closes, so every complete line gets its reply (text after the last newline gets none).
 
-**Limits**: one peer that keeps its socket readable is read until `WouldBlock` before others get a turn; running out of file descriptors stops the server; a connection that stays open makes shutdown give up after 5 seconds with an error.
+Hostile peers: both buffers are bounded, so a peer that never sends a newline, or sends and never reads, is disconnected. A connection reset before `accept` must not stop the server (on macOS, setting an option on it fails).
 
-`mio::Waker`: other threads cannot interrupt `poll` by touching your data, so they `wake()`, which makes the loop return an event with the waker's token (eventfd on Linux, a user event on kqueue). Here it requests graceful shutdown: stop accepting, drain the open connections, then exit.
+**Limits.** One peer that keeps its socket readable is read until `WouldBlock` before the others get a turn. Running out of file descriptors stops the server. A connection that stays open makes shutdown give up after 5 seconds.
 
-**How this is TOKIO**: tokio's I/O driver is this loop. `tokio::net::TcpStream` registers with a mio `Poll` and keeps a ScheduledIo per source holding the readiness bits and the wakers of tasks waiting on it. A task that does `read().await` tries a nonblocking read; on `WouldBlock` it clears readiness and parks its `Waker`.
+`mio::Waker`: another thread can't interrupt `poll` by changing your data, so it calls `wake()`. The loop then gets an event with the waker's token (an eventfd on Linux, a user event on kqueue). Here it asks for a graceful shutdown: stop accepting, finish the open connections, then return.
 
-When the driver's `poll` returns the token, it sets readiness and wakes those tasks, which the scheduler re-polls. `async fn` is the compiler-generated version of the per-connection state machine written by hand below, and `Waker` is the same idea at the task level. Writing this once makes `await` less magical.
+In Tokio: the I/O driver is this loop. Each registered socket has a `ScheduledIo` with its readiness bits and the wakers of the tasks waiting on it. A task's `read().await` tries a non-blocking read.
+
+On `WouldBlock`, it clears the readiness and leaves its waker. When `poll` reports the token, the driver sets the readiness and wakes those tasks. An `async fn` is the compiler-made version of the per-connection state machine written by hand below.
 """
 
 [[sections]]

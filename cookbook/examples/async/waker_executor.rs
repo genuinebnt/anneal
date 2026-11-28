@@ -4,16 +4,18 @@
 //! COMMON USES: understanding tokio internals; custom executors for embedded/real-time/test harnesses.
 #![allow(dead_code)]
 //!
-//! Pieces: (1) `Task` = a boxed future + a handle to the queue; (2) `impl Wake for Task` so `waker.wake()` re-queues the task;
-//! (3) the executor loop pulls READY tasks and polls them; a task that returns Pending is parked until its waker fires;
-//! (4) a `Timer` future stores the latest waker and a helper thread calls it when time is up.
-//! Nothing busy-waits: the executor blocks on `recv()` when nothing is ready (compare futures_by_hand, which polls in a loop).
-//! This is the executor from the Async Book https://rust-lang.github.io/async-book/02_execution/04_executor.html extended to
-//! count polls. Real runtimes add multi-threading, timer wheels, IO reactors (mio/epoll), work stealing.
-//! One change from the book matters: the ready queue is UNBOUNDED. With a bounded one, a `wake` or a `spawn` made by the executor
-//! thread while the queue is full waits for the executor itself, for ever.
-//! LIMITS: waking a task twice queues it twice (harmless, one wasted visit); every `Timer` starts a thread; a panic in one task
-//! stops `run`; `run` returns once no task is queued and no waker is left, so a stored waker that is never used keeps it waiting.
+//! A `Task` holds a boxed future and a sender for the ready queue. `impl Wake for Task` makes `waker.wake()` put the task
+//! back in the queue. The executor takes ready tasks from the queue and polls them. A task that returns `Pending` waits
+//! outside the queue until its waker is called. A `Timer` future stores the latest waker, and a helper thread calls it
+//! when the time is up.
+//! Nothing busy-waits: the executor blocks on `recv()` when nothing is ready (compare `futures_by_hand`, which polls in a
+//! loop). This is the executor from the Async Book, extended to count polls:
+//! https://rust-lang.github.io/async-book/02_execution/04_executor.html
+//! One change from the book matters: the ready queue is unbounded. With a bounded one, a `wake` or a `spawn` made on the
+//! executor's own thread while the queue is full would wait for the executor, which is that same thread, for ever.
+//! Limits: waking a task twice queues it twice (one wasted visit). Every `Timer` starts a thread. A panic in a task stops
+//! `run`. `run` returns only when every sender is gone, so a waker that is stored and never used keeps it waiting.
+//! Real runtimes add more threads, timer wheels, an I/O reactor (mio over epoll or kqueue) and work stealing.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -94,9 +96,13 @@ impl Timer {
         let shared = state.clone();
         thread::spawn(move || {
             thread::sleep(d);
-            let mut s = shared.lock().unwrap();
-            s.done = true;
-            if let Some(w) = s.waker.take() {
+            let waker = {
+                let mut s = shared.lock().unwrap();
+                s.done = true;
+                s.waker.take()
+            };
+            // Wake after unlocking. A waker may run code that polls this timer, and that poll takes the same lock.
+            if let Some(w) = waker {
                 w.wake(); // tell the executor this task can make progress
             }
         });
@@ -110,7 +116,7 @@ impl Future for Timer {
         if s.done {
             Poll::Ready(())
         } else {
-            s.waker = Some(cx.waker().clone()); // ALWAYS store the latest waker: the task may have moved
+            s.waker = Some(cx.waker().clone()); // always store the latest waker: the task may be polled with a new one
             Poll::Pending
         }
     }
@@ -151,6 +157,7 @@ fn main() {
     assert!(POLLS.load(Ordering::Relaxed) <= 9);
 
     queue_never_blocks();
+    timer_wakes_after_unlocking();
     // waking after the executor is gone does nothing
     let (executor, spawner) = new_executor();
     let late = Waker::from(Arc::new(Task {
@@ -163,7 +170,7 @@ fn main() {
 
 /// Many more tasks than any small queue holds, all spawned before `run`, each waking itself once while being polled.
 fn queue_never_blocks() {
-    const TASKS: usize = 5000;
+    const TASKS: usize = if cfg!(miri) { 300 } else { 5000 }; // Miri interprets, and is far slower
     let (done_tx, done_rx) = channel();
     thread::spawn(move || {
         let (executor, spawner) = new_executor();
@@ -190,4 +197,31 @@ fn queue_never_blocks() {
     });
     // the time limit only turns a deadlock into a failure
     assert_eq!(done_rx.recv_timeout(Duration::from_secs(30)), Ok(TASKS));
+}
+
+/// The timer thread must call the waker with the timer's lock released. This waker looks at the lock when it is called.
+fn timer_wakes_after_unlocking() {
+    struct LockCheck {
+        state: Arc<Mutex<TimerState>>,
+        free: Sender<bool>,
+    }
+    impl Wake for LockCheck {
+        fn wake(self: Arc<Self>) {
+            let _ = self.free.send(self.state.try_lock().is_ok());
+        }
+    }
+    // The check needs a poll that returns Pending: retry with a longer timer if the thread was quicker than the poll.
+    for ms in [20, 200, 2000] {
+        let mut timer = Timer::new(Duration::from_millis(ms));
+        let (tx, rx) = channel();
+        let waker = Waker::from(Arc::new(LockCheck {
+            state: timer.state.clone(),
+            free: tx,
+        }));
+        if Pin::new(&mut timer).poll(&mut Context::from_waker(&waker)).is_pending() {
+            assert_eq!(rx.recv(), Ok(true), "the waker was called while the timer's lock was held");
+            return;
+        }
+    }
+    panic!("every timer fired before its first poll");
 }

@@ -1,0 +1,161 @@
+title = "Build a real executor"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 266
+kind = "lesson"
+level = "advanced"
+code = ["examples/async/waker_executor.rs"]
+code_spoils = ["/p/c5-mini-executor", "/p/c5-block-on"]
+lede = "An executor that sleeps until a waker says a task can make progress, with a timer future that wakes it from another thread."
+summary = """
+An executor runs many futures on one thread. It keeps a queue of tasks that are ready to be polled, and each task's **waker** puts that task back in the queue. When nothing is ready, the executor sleeps instead of spinning.
+
+This page builds one in about 60 lines, after the Async Book, plus a timer future that a helper thread wakes.
+"""
+
+[[sections]]
+heading = "What does an executor need?"
+body = """
+The `block_on` in [What a Future really is](/cookbook/p/futures-by-hand) polls one future in a loop, wasting a CPU core while it waits. A real executor has three parts:
+
+1. A **task**: a boxed future, and a way back into the queue.
+2. A **ready queue**: tasks that are worth polling now.
+3. A **waker** for each task. When something the task waits for happens, calling the waker puts the task back in the queue.
+
+A task that returns `Pending` is in no queue until its waker is called. When the queue is empty, the executor blocks on it, so waiting tasks use no CPU.
+
+Here four tasks wait on timers, and one of them waits twice.
+
+```rust
+let (executor, spawner) = new_executor();
+for (name, ms) in [("slow", 90), ("fast", 30), ("mid", 60)] {
+    let finished = finished.clone();
+    spawner.spawn(async move {
+        Timer::new(Duration::from_millis(ms)).await;
+        finished.lock().unwrap().push(name);
+    });
+}
+drop(spawner); // no more spawning: run() ends when the last task completes
+executor.run();
+```
+
+The example checks that all four finish with at most 9 polls: one per task to start, and one more after each timer.
+"""
+
+[[sections]]
+heading = "How does a future get woken from another thread?"
+body = """
+`Timer` starts a thread that sleeps, marks the timer done and calls the stored waker. When polled, the timer checks whether it is done. If not, it stores the waker from this poll and returns `Pending`.
+
+```rust
+fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    let mut s = self.state.lock().unwrap();
+    if s.done {
+        Poll::Ready(())
+    } else {
+        s.waker = Some(cx.waker().clone()); // always store the latest waker
+        Poll::Pending
+    }
+}
+```
+
+Two details matter. First, it stores the waker of the **latest** poll. The `Future` documentation asks for this: only the most recent waker is sure to reach the task. A combinator, for example, may pass a different waker each time.
+
+Second, the checking and the storing happen under one lock. Otherwise the thread could mark the timer done between the check and the store, and nobody would ever wake the task.
+
+The thread calls the waker after unlocking. Here `wake` only sends on a channel, but a waker may run any code, even code that polls this timer and takes the same lock. The example checks that the lock is free when its waker is called.
+"""
+
+[[sections]]
+heading = "How do the tasks and the queue fit together?"
+body = """
+A task holds its future in a `Mutex<Option<...>>`, so the executor can take the future out, poll it, and put it back if it is still pending. Its waker is the task itself: `impl Wake for Task` sends the task down the ready queue.
+
+:::deeper The task, its waker and the run loop (gives away much of "A task executor with spawn, join handles and wakers")
+```walkthrough
+file = "examples/async/waker_executor.rs"
+[[step]]
+title = "A task"
+lines = "30-33"
+text = "The future, boxed and pinned, and a sender for the ready queue."
+[[step]]
+title = "Waking means queueing"
+lines = "35-41"
+text = "`wake` sends a clone of the task. If the executor is gone, the send fails, and there is nobody to tell."
+[[step]]
+title = "Spawn"
+lines = "56-63"
+text = "A new task goes straight into the queue, so its first poll comes soon."
+[[step]]
+title = "The run loop"
+lines = "66-80"
+text = "Take a ready task, build a waker from it, poll. A pending future goes back into the task's slot; a finished one is dropped. `recv` blocks while every task waits."
+```
+:::
+"""
+
+[[sections]]
+heading = "Why is the ready queue unbounded?"
+body = """
+The Async Book uses a bounded queue; this version does not, to avoid a deadlock. A task that wakes itself, or spawns another, sends on the queue from the executor's own thread. If the queue is full, that send waits for the executor, which is the thread that is waiting.
+
+The example spawns 5,000 tasks on the executor's thread before `run`, and each wakes itself once while it is polled. With a queue that holds 100, the spawning alone hangs, and the check fails after its time limit.
+"""
+
+[[sections]]
+heading = "What are its limits?"
+body = """
+It is a teaching executor, and it shows where real ones do more work.
+
+| Limit | What happens | What Tokio does |
+|---|---|---|
+| a task woken twice | it is queued twice, and the second visit is wasted | a task's state says whether it is already queued |
+| each `Timer` | starts a thread | one timer wheel, checked by the runtime |
+| a panic in a task | stops `run` for every task | the panic is caught and reported through the `JoinHandle` |
+| a waker that is stored and never called | `run` never returns, because the task can still be woken | tasks are tracked, and dropping the runtime drops them |
+| results | none; a task returns `()` | `spawn` returns a `JoinHandle` with the output |
+"""
+
+[[connections]]
+kind = "before"
+title = "What a Future really is"
+link = "/cookbook/p/futures-by-hand"
+why = "Polling by hand, with a waker that does nothing."
+
+[[connections]]
+kind = "returns"
+title = "A miniature tokio"
+link = "/cookbook/p/mini-async-runtime"
+why = "The same parts grown into a runtime with join handles, timers, worker threads and a reactor."
+
+[[connections]]
+kind = "returns"
+title = "A single-threaded readiness event loop with mio"
+link = "/cookbook/p/mio-event-loop"
+why = "Where the wake-ups for sockets come from."
+
+[[connections]]
+kind = "practise"
+title = "A task executor with spawn, join handles and wakers"
+link = "/p/c5-mini-executor"
+level = "similar"
+why = "Add join handles, sleep on a Condvar, and finish only when every task has. The fold and the full code give away much of it."
+
+[[connections]]
+kind = "practise"
+title = "block_on: run a future with a hand-made Waker"
+link = "/p/c5-block-on"
+level = "related"
+why = "One future, one thread, and a waker that wakes the thread. The full code gives away much of it."
+
+[[sources]]
+title = "Async Book: build an executor"
+url = "https://rust-lang.github.io/async-book/02_execution/04_executor.html"
+note = "The executor this one is based on, with its bounded queue."
+
+[[sources]]
+title = "std::task::Wake"
+url = "https://doc.rust-lang.org/std/task/trait.Wake.html"
+note = "How an `Arc` of your own type becomes a `Waker`."

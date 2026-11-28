@@ -1,0 +1,325 @@
+title = "Tokio essentials on a paused clock"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 130
+kind = "lesson"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/tokio_runtime_tasks_channels_timers.rs"]
+code_spoils = ["/p/c4-drain-with-deadline"]
+lede = "The Tokio tools you reach for most often, each checked by a test that runs on simulated time."
+summary = """
+Tokio gives you tasks (`spawn`, `JoinSet`), ways to wait for several things (`join!`, `select!`, `timeout`), timers, channels and async locks. This page shows what each is for. It also shows the usual mistakes: blocking the runtime thread, holding a `std` lock across `.await`, and losing work to a dropped future. Every claim is tested on Tokio's **paused clock**, where sleeping costs no real time and elapsed times are exact.
+"""
+
+[[sections]]
+heading = "Why test async code on a paused clock?"
+body = """
+Tests that sleep are slow, and tests that measure time are flaky. A check like "this took about 3 seconds" fails on a busy machine.
+
+Tokio can freeze its clock instead. Build a current-thread runtime with `start_paused(true)`; this needs Tokio's `test-util` feature. Time then moves only when every task is waiting. When they all are, Tokio jumps straight to the next timer.
+
+```rust
+let paused = || {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+};
+```
+
+Now a test can check elapsed times exactly. Two sleeps in a row add up. `join!` runs them at the same time, so it takes as long as the longer one.
+
+```rust
+let t = Instant::now();
+sleep(secs(3)).await;
+sleep(secs(2)).await;
+assert_eq!(t.elapsed(), secs(5));
+let t = Instant::now();
+tokio::join!(sleep(secs(3)), sleep(secs(2)));
+assert_eq!(t.elapsed(), secs(3));
+```
+
+Hours of simulated waiting finish at once. In a test, `#[tokio::test(start_paused = true)]` does the same.
+
+The paused clock does not pause the real one. Code that blocks a thread, or reads `std::time::Instant`, still sees real time. That is why the example file runs its blocking section on an ordinary runtime.
+"""
+
+[[sections]]
+heading = "Which tool do you need?"
+body = """
+Start from what you want to happen.
+
+| You want to | Use |
+|---|---|
+| run many tasks, and collect results as they finish | `JoinSet`; dropping it aborts the tasks |
+| wait for a fixed few futures in one task | `join!`, or `try_join!` to stop at the first error |
+| take whichever finishes first | `select!`; the others are dropped |
+| give up after a while | `timeout(d, fut)` |
+| pass work to another task | bounded `mpsc`; a full queue makes the sender wait |
+| send one reply back | `oneshot` |
+| give every subscriber every message | `broadcast` |
+| share only the latest value | `watch`, for settings or a "shutting down" flag |
+| limit how many run at once | `Semaphore` |
+| run a blocking or CPU-heavy call | `spawn_blocking` |
+| stop many tasks together | `CancellationToken` from tokio-util, then wait for the tasks |
+"""
+
+[[sections]]
+heading = "What does spawning change?"
+body = """
+A future does nothing until something polls it. Creating `async { ... }` runs none of its code. `tokio::spawn` hands the future to the runtime, which runs it even if nobody awaits the handle.
+
+A `JoinSet` holds many spawned tasks. `join_next` returns their results in the order they finish, not the order you spawned them.
+
+```rust
+let mut set = JoinSet::new();
+for d in [30u64, 10, 20] {
+    set.spawn(async move {
+        sleep(secs(d)).await;
+        d
+    });
+}
+let mut order = vec![];
+while let Some(r) = set.join_next().await {
+    order.push(r.unwrap());
+}
+assert_eq!(order, [10, 20, 30]);
+```
+
+A panic stays inside its task, and you get it back as a `JoinError` where `is_panic()` is true. Calling `abort()` on a handle cancels the task at its next `.await`.
+
+Watch the difference between the two kinds of drop. Dropping a `JoinHandle` detaches the task, which keeps running. Dropping a `JoinSet` aborts every task in it. The example spawns one of each and checks that only the detached one finished.
+"""
+
+[[sections]]
+heading = "How does an interval behave when you fall behind?"
+body = """
+`interval(period)` ticks on a fixed grid. The first tick is immediate. If each turn of your loop does 3 seconds of work on a 10-second interval, the ticks still come at 0, 10, 20 and 30. A loop that sleeps 10 seconds after its work would drift to 0, 13, 26 and 39.
+
+When the work takes longer than a period, ticks are missed. `MissedTickBehavior` decides what happens next. In the example, a 10-second interval ticks at 0, then the task is busy for 25 seconds.
+
+| Behaviour | Next three ticks | Use it when |
+|---|---|---|
+| `Burst` (the default) | 25, 25, 30 | every tick must happen, even late |
+| `Delay` | 25, 35, 45 | you want a full period between ticks |
+| `Skip` | 25, 30, 40 | you want to stay on the grid and drop what was missed |
+"""
+
+[[sections]]
+heading = "Which channel fits?"
+body = """
+Most programs need only `mpsc` and `oneshot`. A bounded `mpsc` channel slows a fast sender down to the receiver's pace; [Bounded channels](/cookbook/p/bounded-channel) explains this backpressure. A request can carry a `oneshot` sender for its reply. That makes a task that owns some state and answers questions about it, often called an actor.
+
+`broadcast` keeps a fixed number of recent messages for its subscribers. A subscriber that falls behind does not block the others. It gets an error that says how many messages it missed, then carries on from the oldest one still kept.
+
+```rust
+let (btx, mut fast) = broadcast::channel(2);
+let mut slow = btx.subscribe();
+for i in 0..4 {
+    btx.send(i).unwrap();
+    assert_eq!(fast.recv().await.unwrap(), i);
+}
+assert_eq!(slow.recv().await, Err(broadcast::error::RecvError::Lagged(2)));
+assert_eq!((slow.recv().await, slow.recv().await), (Ok(2), Ok(3)));
+```
+
+`watch` keeps only the latest value. A receiver that looks after two changes sees the second one only.
+"""
+
+[[sections]]
+heading = "Why not hold a std Mutex across .await?"
+body = """
+A `std::sync::Mutex` guard blocks the thread of anyone else who wants the lock. If you hold it across an `.await`, your task may pause while holding it, and the waiting thread may be the one your task needs to run on.
+
+`tokio::spawn` catches the mistake, because a spawned future must be `Send` and a `std` guard is not.
+
+```compare
+takeaway = "Keep the guard's life between two awaits. If you truly must hold a lock while you wait, use `tokio::sync::Mutex`, whose `lock().await` pauses only the waiting task."
+[wrong]
+title = "The guard lives across a sleep"
+code = '''
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    let hits = Arc::new(Mutex::new(0));
+    let h = hits.clone();
+    tokio::spawn(async move {
+        let mut guard = h.lock().unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        *guard += 1;
+    })
+    .await
+    .unwrap();
+    println!("hits: {}", hits.lock().unwrap());
+}
+'''
+result = "It does not compile: `error: future cannot be sent between threads safely`, with the note `future is not Send as this value is used across an await`."
+[fixed]
+title = "The guard ends before any await"
+code = '''
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    let hits = Arc::new(Mutex::new(0));
+    let h = hits.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        *h.lock().unwrap() += 1; // the guard ends with this statement
+    })
+    .await
+    .unwrap();
+    println!("hits: {}", hits.lock().unwrap());
+}
+'''
+result = "It prints `hits: 1`."
+```
+
+`join!`, `select!` and `block_on` do not require `Send`, so there the mistake compiles. Two futures in one task share one thread. If the first pauses while holding the guard and the second calls `lock()`, the thread blocks, and nobody is left to run the first future.
+
+The example shows this safely: its second future uses `try_lock` and gets `WouldBlock` where `lock()` would hang. Clippy's `await_holding_lock` lint warns about the pattern.
+"""
+
+[[sections]]
+heading = "What if a call blocks?"
+body = """
+A runtime thread runs one task at a time and switches only at an `.await`. A call that blocks, such as `std::thread::sleep`, a slow file read or a long computation, stops every other task on that thread.
+
+The example measures this with a heartbeat task that counts its turns. During a 20 ms `std::thread::sleep` on a one-thread runtime, the count does not move at all. The same work inside `spawn_blocking` runs on a separate thread, and the heartbeat keeps counting.
+
+Alice Ryhl's article in the sources explains how long is too long between two `.await`s.
+"""
+
+[[sections]]
+heading = "How do you stop workers without losing jobs?"
+body = """
+Shutting down a pool of workers has two parts. Stop taking new work, then finish what was already accepted. The order matters: a queue that still accepts work after the last worker checked it loses those jobs.
+
+The example does this with a `CancellationToken`, a bounded queue and three workers. Its checks include a producer that never stops on its own, and one that has reserved a place in the queue but fills it late.
+
+:::deeper The workers and the drain (gives away much of "Shut down without losing work")
+Each worker waits on the token and the queue together. When the token fires, it closes the queue and then drains it.
+
+```walkthrough
+file = "crates/cb-crate-tour/examples/tokio_runtime_tasks_channels_timers.rs"
+[[step]]
+title = "Three workers share one receiver"
+lines = "575-583"
+text = "The receiver sits behind an async `Mutex`, so one worker at a time takes a job. Each worker gets a child of the root token."
+[[step]]
+title = "Look at the token first"
+lines = "586-600"
+text = "`biased;` polls the branches in the order written, so the cancel branch comes first. With the queue branch first, a producer that keeps the queue full would keep the worker from ever reaching the token; the check below then fails."
+[[step]]
+title = "Close, then drain"
+lines = "592-597"
+text = "`close` refuses new sends at once; `recv` then returns what was accepted, including places already reserved, and `None` at the end."
+[[step]]
+title = "The job runs outside select!"
+lines = "601-604"
+text = "A job is never raced, so shutting down never cuts one in half."
+[[step]]
+title = "A producer that never stops"
+lines = "611-629"
+text = "The producer sends until the queue is closed under it. Every job it got into the queue must run."
+[[step]]
+title = "A late reserved place"
+lines = "633-654"
+text = "A place reserved before the token fires is filled 30 s later. Shutdown waits for it, so the time limit around it matters."
+```
+:::
+
+[Graceful shutdown](/cookbook/p/graceful-shutdown) explains the same ideas without Tokio's tools.
+"""
+
+[[sections]]
+heading = "What does select! drop?"
+body = """
+`select!` and `timeout` cancel the futures that lose by dropping them. That is safe only if a dropped future loses nothing. Receiving from an `mpsc` channel is safe; a function that collects three messages before returning is not, because the first two live inside it.
+
+The example shows the loss, then one fix. Create the future once, pin it, and race `&mut fut` in each turn of the loop, so losing a race no longer drops it.
+
+```rust
+let batch = {
+    let fut = read_batch(&mut rx);
+    tokio::pin!(fut);
+    let mut heartbeats = 0;
+    loop {
+        tokio::select! {
+            b = &mut fut => break b,
+            _ = sleep(SEC) => {
+                heartbeats += 1;
+                if heartbeats == 5 { tx.send(3).await.unwrap(); }
+            }
+        }
+    }
+};
+assert_eq!(batch, [1, 2, 3]);
+```
+
+[Cancellation safety](/cookbook/p/async-cancel-safety) covers the other fixes.
+"""
+
+[[connections]]
+kind = "before"
+title = "What a Future really is"
+link = "/cookbook/p/futures-by-hand"
+why = "What `.await` and polling mean, before the runtime does it for you."
+
+[[connections]]
+kind = "returns"
+title = "Cancellation with select!, and timeouts"
+link = "/cookbook/p/select-cancel"
+why = "What happens to the branches that lose."
+
+[[connections]]
+kind = "returns"
+title = "Cancellation safety"
+link = "/cookbook/p/async-cancel-safety"
+why = "Which futures lose data when dropped, and how to keep it."
+
+[[connections]]
+kind = "returns"
+title = "Bounded channels and backpressure"
+link = "/cookbook/p/bounded-channel"
+why = "Why a full queue makes the sender wait."
+
+[[connections]]
+kind = "practise"
+title = "Shut down without losing work"
+link = "/p/c4-drain-with-deadline"
+level = "similar"
+why = "A worker that drains its queue within a deadline. The fold and the full code give away much of it."
+
+[[connections]]
+kind = "practise"
+title = "At most N in flight"
+link = "/p/c4-bounded-fan-out"
+level = "related"
+why = "Limit how many tasks run at once, and cancel the rest on the first error."
+
+[[sources]]
+title = "Tokio tutorial"
+url = "https://tokio.rs/tokio/tutorial"
+note = "Tasks, channels, select and I/O, step by step."
+
+[[sources]]
+title = "Tokio API documentation"
+url = "https://docs.rs/tokio/1/tokio/"
+note = "Each type's guarantees, including cancel safety."
+
+[[sources]]
+title = "CancellationToken"
+url = "https://docs.rs/tokio-util/0.7/tokio_util/sync/struct.CancellationToken.html"
+note = "Child tokens, and waiting for cancellation."
+
+[[sources]]
+title = "Async: What is blocking? (Alice Ryhl)"
+url = "https://ryhl.io/blog/async-what-is-blocking/"
+note = "How long code may run between two awaits, and what to do with longer work."

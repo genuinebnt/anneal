@@ -1,0 +1,102 @@
+title = "What a Future really is"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 265
+kind = "lesson"
+level = "advanced"
+code = ["examples/async/futures_by_hand.rs"]
+lede = "A future is a state machine that does nothing until someone polls it, shown here with a ten-line executor."
+summary = """
+A `Future` has one method, `poll`. It returns `Ready(value)` when the work is done, or `Pending` when it must wait, and then it must arrange to be woken. `async fn` compiles into such a state machine, and its body runs only when polled. This page polls futures by hand with a tiny `block_on`, so you can see laziness, suspension and cancellation without a runtime.
+"""
+
+[[sections]]
+heading = "What is a future?"
+body = """
+A future is a value that will produce a result later. Its trait has one method:
+
+```rust
+fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+```
+
+`Poll::Ready(v)` means the future has finished with `v`. `Poll::Pending` means it can't finish yet. Before it returns `Pending`, the future must make sure someone will call the waker in `cx` when it is worth polling again. Without that, a real executor never comes back to it.
+
+`CountDown` in the example returns `Pending` a set number of times, and wakes itself each time.
+
+```walkthrough
+file = "examples/async/futures_by_hand.rs"
+[[step]]
+title = "A future written by hand"
+lines = "17-34"
+text = "Each poll counts itself. While `left` is above zero, it asks to be polled again with `wake_by_ref` and returns `Pending`."
+[[step]]
+title = "The smallest executor"
+lines = "36-45"
+text = "`pin!` fixes the future in place on the stack. The loop polls until `Ready`, with a waker that does nothing."
+```
+"""
+
+[[sections]]
+heading = "What does async fn turn into?"
+body = """
+The compiler turns an `async fn` into a future. Calling the function only builds that future; none of its body runs. The example prints "body has NOT run" before the body's own message appears.
+
+`.await` means: poll the inner future, and if it is `Pending`, return `Pending` too. The outer future remembers where it stopped, so the next poll continues from there. `pipeline` stops twice inside `CountDown` this way.
+
+The future is an ordinary value with a fixed size. `size_of_val` reports 12 bytes for `add(1, 2)`, and nothing is put on the heap. To keep different futures in one list, box them as `Pin<Box<dyn Future<Output = u32>>>`, as the example does.
+"""
+
+[[sections]]
+heading = "Why does this block_on spin?"
+body = """
+Its waker is `Waker::noop()`, which does nothing when called. So the loop can't know when polling again is worth it, and it polls without a pause. That burns a CPU core while a future waits for a timer or a socket.
+
+A real executor puts the thread to sleep when a future returns `Pending`, and its waker wakes the thread up. [Build a real executor](/cookbook/p/waker-executor) shows one that blocks on a queue.
+"""
+
+[[sections]]
+heading = "What does dropping a future do?"
+body = """
+Dropping a future cancels it. It stops at the `.await` where it was waiting, the code after that point never runs, and destructors run for everything it held.
+
+```walkthrough
+file = "examples/async/futures_by_hand.rs"
+[[step]]
+title = "Poll once, then drop"
+lines = "82-91"
+text = "The first poll stops inside `CountDown`, which needs five more polls. After `drop`, \\"never printed\\" is indeed never printed."
+```
+
+This is how `select!` and `timeout` cancel work. [Cancellation with select!](/cookbook/p/select-cancel) picks the story up there.
+"""
+
+[[connections]]
+kind = "returns"
+title = "Build a real executor"
+link = "/cookbook/p/waker-executor"
+why = "Tasks and wakers, with an executor that sleeps instead of spinning."
+
+[[connections]]
+kind = "returns"
+title = "Cancellation with select!, and timeouts"
+link = "/cookbook/p/select-cancel"
+why = "Dropping futures on purpose."
+
+[[connections]]
+kind = "practise"
+title = "block_on: run a future with a hand-made Waker"
+link = "/p/c5-block-on"
+level = "related"
+why = "Write the `block_on` that sleeps between polls. This page's version spins, so it does not pass."
+
+[[sources]]
+title = "Asynchronous Programming in Rust"
+url = "https://rust-lang.github.io/async-book/"
+note = "The official async book: futures, wakers and executors."
+
+[[sources]]
+title = "std::future::Future"
+url = "https://doc.rust-lang.org/std/future/trait.Future.html"
+note = "The trait, and the rules a `poll` must follow."

@@ -1,0 +1,267 @@
+title = "Cancellation with `select!`, and timeouts"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 267
+kind = "lesson"
+level = "intermediate"
+code = ["examples/async/select_cancel.rs"]
+lede = "How to stop async work that is no longer wanted, and what stopping really does to it."
+summary = """
+`tokio::select!` waits for several futures and continues with the first one to finish. It **drops** the others, and in async Rust dropping a future is how you cancel it. The dropped future stops at the `.await` where it was waiting, and its destructors run.
+
+`timeout` is the same race against a clock. The catch is that only waiting code can be stopped: a future that blocks the thread runs to the end.
+"""
+
+[[sections]]
+heading = "How do you stop work you no longer want?"
+body = """
+Say a worker processes a job in steps, and an operator asks it to stop. A thread would need a flag that it checks between steps. An async task has a simpler tool: wait for the next step and for the stop signal at the same time, and react to whichever comes first.
+
+That is what `tokio::select!` does. Each branch names a future and the code to run if that future finishes first. Here the worker races a 10 ms step against a `oneshot` channel that carries the stop signal.
+
+```rust
+loop {
+    tokio::select! {
+        _ = &mut cancel_rx => return steps,      // told to stop
+        _ = sleep(Duration::from_millis(10)) => steps += 1,
+    }
+}
+```
+
+When one branch finishes, `select!` runs its code and drops the futures of the other branches. If the stop signal arrives first, the unfinished sleep is dropped. If the sleep finishes first, the next turn of the loop starts a new sleep.
+"""
+
+[[sections]]
+heading = "What happens to the future that loses?"
+body = """
+A future does nothing on its own. It runs only while someone polls it, and between polls it waits at an `.await`. Dropping it means nobody will ever poll it again. So its work stops at the `.await` where it was waiting, and Rust runs the destructors of everything it held.
+
+Work it did before that point stays done. Nothing is rolled back.
+
+```rust
+let work = async {
+    println!("step 1 done");
+    sleep(Duration::from_secs(10)).await;
+    println!("step 2 done");
+};
+let result = timeout(Duration::from_secs(1), work).await;
+println!("{result:?}");
+```
+
+This prints `step 1 done`, then `Err(Elapsed(()))`. Step 2 never runs. If step 1 had written half a record to a file, that half would still be there.
+
+The example file proves the drop with a guard that reports from its destructor. The timed-out future holds the guard, so the guard's message arrives exactly when the future is dropped.
+
+```walkthrough
+file = "examples/async/select_cancel.rs"
+[[step]]
+title = "A guard that says when it goes"
+lines = "19-27"
+text = "`OnDrop` sends one message on a `oneshot` channel from its `Drop`. Nothing else ever sends on it."
+[[step]]
+title = "A future that never finishes"
+lines = "54-59"
+text = "The async block moves the guard inside, then waits for ever on `pending()`."
+[[step]]
+title = "The clock wins"
+lines = "60-63"
+text = "`timeout` gives `Err` after 20 ms. By the time it returns, the guard's message is already waiting: the loser was dropped, not left running."
+```
+"""
+
+[[sections]]
+heading = "Why does the loop borrow the cancel signal?"
+body = """
+The stop signal must survive many turns of the loop. A sleep is cheap to start again, but a channel receiver is not something you can rebuild. If a branch takes the receiver by value, the first turn moves it into `select!`, and the second turn has nothing left.
+
+The compiler catches this. Both programs run on Tokio's paused clock: when every task is waiting, time jumps to the next timer, so the result is exact.
+
+```compare
+takeaway = "A branch that borrows a future (`&mut cancel_rx`) drops only the borrow when it loses. The receiver lives on, and the next turn waits on the same one."
+[wrong]
+title = "The receiver moves into select!"
+code = '''
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio::time::sleep;
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(25)).await;
+        let _ = cancel_tx.send(());
+    });
+    let mut steps = 0;
+    loop {
+        tokio::select! {
+            _ = cancel_rx => break,
+            _ = sleep(Duration::from_millis(10)) => steps += 1,
+        }
+    }
+    println!("stopped after {steps} steps");
+}
+'''
+result = "It does not compile: `error[E0382]: use of moved value: cancel_rx`, with the note `value moved here, in previous iteration of loop`."
+[fixed]
+title = "The loop borrows it"
+code = '''
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio::time::sleep;
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(25)).await;
+        let _ = cancel_tx.send(());
+    });
+    let mut steps = 0;
+    loop {
+        tokio::select! {
+            _ = &mut cancel_rx => break,
+            _ = sleep(Duration::from_millis(10)) => steps += 1,
+        }
+    }
+    println!("stopped after {steps} steps");
+}
+'''
+result = "It prints `stopped after 2 steps`: steps end at 10 and 20 ms, and the signal at 25 ms wins against the third."
+```
+
+Borrowing works for any future that is `Unpin`, as a `oneshot` receiver is. For other futures, pin them first with `tokio::pin!` and then borrow.
+
+In the example file, the worker reports each step on a second channel. The main task waits for the third report before it sends the signal, so the test never depends on how fast the machine is.
+
+```walkthrough
+file = "examples/async/select_cancel.rs"
+[[step]]
+title = "Race each step against the signal"
+lines = "31-47"
+text = "The worker loops over `select!`. The cancel branch returns the step count; the sleep branch counts a step and reports it."
+[[step]]
+title = "Cancel after the third step"
+lines = "48-52"
+text = "The main task waits for the report of step 3, sends the signal and joins the worker. The worker may finish one more step first, so the check is `>= 3`."
+```
+"""
+
+[[sections]]
+heading = "Which branch does select! try first?"
+body = """
+By default `select!` polls its branches in a random order each time. This keeps one busy branch from starving the others. Write `biased;` as the first line inside the macro to poll them in the order written.
+
+Use `biased;` when one branch must win a tie, such as a stop signal that should beat queued work. The price is that an early branch that is always ready keeps the later ones waiting.
+"""
+
+[[sections]]
+heading = "What can't be cancelled this way?"
+body = """
+Cancellation happens only at an `.await`. A future that blocks the thread, or computes for a long time without awaiting, never gives `select!` or `timeout` a chance to drop it.
+
+`timeout` polls the inner future first, and checks the clock only after the inner future returns `Pending`. A future that blocks for 200 ms in its first poll therefore finishes, and `timeout` reports success.
+
+```compare
+takeaway = "A time limit only works on code that waits with `.await`. Move blocking calls to `tokio::task::spawn_blocking`, so the async code has something to wait on. Both programs use the paused clock, so neither result depends on the machine's speed."
+[wrong]
+title = "The future blocks"
+code = '''
+use std::time::Duration;
+use tokio::time::timeout;
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let result = timeout(Duration::from_millis(10), async {
+        std::thread::sleep(Duration::from_millis(200)); // blocks the thread, never yields
+        "finished"
+    })
+    .await;
+    println!("{result:?}");
+}
+'''
+result = "It prints `Ok(\\"finished\\")`. The 10 ms limit was never checked while it mattered."
+[fixed]
+title = "The future waits"
+code = '''
+use std::time::Duration;
+use tokio::time::timeout;
+
+#[tokio::main(flavor = "current_thread", start_paused = true)]
+async fn main() {
+    let result = timeout(Duration::from_millis(10), async {
+        tokio::time::sleep(Duration::from_millis(200)).await; // waits, and lets go of the thread
+        "finished"
+    })
+    .await;
+    println!("{result:?}");
+}
+'''
+result = "It prints `Err(Elapsed(()))`. The sleep was dropped when the limit passed."
+```
+
+Spawned tasks are another case. Dropping a `JoinHandle` does not stop its task; the task keeps running on its own. Call `abort()` on the handle to cancel it, and it stops at its next `.await`.
+"""
+
+[[sections]]
+heading = "When is dropping a future not enough?"
+body = """
+Dropping stops the work, but anything the future held is gone with it. If a losing branch had already taken a message from a channel and was waiting for a second one, the first message is lost.
+
+Futures that lose nothing when dropped are called **cancel-safe**. Tokio's `mpsc::Receiver::recv` is one: if it loses the race, no message was taken. `AsyncReadExt::read_exact` is not: it may already have put some bytes in your buffer, and the count of them lives only inside it. The next page, [Cancellation safety](/cookbook/p/async-cancel-safety), shows how data goes missing and how to keep it.
+"""
+
+[[connections]]
+kind = "before"
+title = "What a Future really is"
+link = "/cookbook/p/futures-by-hand"
+why = "Polling, `Pending` and dropping, without a runtime in the way."
+
+[[connections]]
+kind = "returns"
+title = "Cancellation safety"
+link = "/cookbook/p/async-cancel-safety"
+why = "What a dropped branch can lose, and how to keep it."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "A stop signal that lets workers finish what they started."
+
+[[connections]]
+kind = "returns"
+title = "Tokio essentials on a paused clock"
+link = "/cookbook/p/tokio-runtime-tasks-channels-timers"
+why = "More of Tokio's tools for waiting, all tested on a clock that jumps."
+
+[[connections]]
+kind = "practise"
+title = "Wait for several things inside one task"
+link = "/p/c11-join-and-select"
+level = "related"
+why = "Build `select` yourself, and decide when each child is dropped."
+
+[[connections]]
+kind = "practise"
+title = "Run one piece of work and say how it ended"
+link = "/p/b21-one-piece-of-work"
+level = "related"
+why = "A time limit, a cancel signal and a panic, all for one piece of work."
+
+[[sources]]
+title = "Tokio tutorial: select"
+url = "https://tokio.rs/tokio/tutorial/select"
+note = "How `select!` works, with its rules for borrowing and pinning futures."
+
+[[sources]]
+title = "tokio::select! reference"
+url = "https://docs.rs/tokio/latest/tokio/macro.select.html"
+note = "The full syntax, `biased;`, and the list of cancel-safe methods."
+
+[[sources]]
+title = "tokio::time::timeout"
+url = "https://docs.rs/tokio/latest/tokio/time/fn.timeout.html"
+note = "Its note on futures that finish without yielding."

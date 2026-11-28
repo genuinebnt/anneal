@@ -1,0 +1,220 @@
+title = "Atomics ordering use cases (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Threads, synchronisation and time"
+chapter_order = 7
+order = 97
+kind = "lesson"
+level = "advanced"
+code = ["examples/std_tour/std_atomics_ordering_use_cases.rs"]
+code_spoils = ["/p/c3-atomic-stats", "/p/c3-spinlock", "/p/c3-once-cell", "/p/m3-claim-without-a-lock", "/p/m4-cap-work-in-flight"]
+lede = "The atomic types sorted by what you use them for, with the memory ordering each use needs and why."
+summary = """
+An atomic operation can't be torn or interleaved with another on the same value. Its **ordering** says what else becomes visible with it. Counters and ids need only `Relaxed`, and publishing data behind a flag needs `Release` and `Acquire`.
+
+You rarely need `SeqCst`. If you are unsure, use a `Mutex`, and remember that a passing test does not prove an ordering is strong enough.
+"""
+
+[[sections]]
+heading = "Which operation and ordering does each job need?"
+body = """
+Find your job in the left column.
+
+| Job | Operation, then ordering |
+|---|---|
+| count events | `fetch_add(1, …)`. `Relaxed`, if you read the total after joining the threads |
+| unique ids | `fetch_add(1, …)`. `Relaxed`; it wraps on overflow |
+| high or low water mark | `fetch_max`, `fetch_min`. `Relaxed` |
+| publish data behind a flag | write the data, then `store(true, …)`; the reader loads, then reads. `Release` on the store, `Acquire` on the load |
+| stop flag | `store`, `load`. `Relaxed` if it carries no data, else `Release` and `Acquire` |
+| only one caller wins | `swap(true, …)` or `compare_exchange(false, true, …)`. `AcqRel`, and `Acquire` on failure |
+| other changes, such as "add unless full" | `try_update` (may refuse) or `update`. The closure can run more than once |
+| bits | `fetch_or` to set, `fetch_and(!mask)` to clear, `fetch_xor` to flip. Depends on what the bits guard |
+| each of two threads writes its flag, then reads the other's | `store`, `load`. `SeqCst` on all four |
+
+`try_update` and `update` are new in Rust 1.95. `fetch_update` is the older name for `try_update`, and the standard library marks it deprecated from 1.99.
+"""
+
+[[sections]]
+heading = "What do the orderings promise?"
+body = """
+`Relaxed` promises only that the operation itself is indivisible. Two threads that both `fetch_add(1, Relaxed)` never lose an increment. But a reader may see other memory in any state.
+
+`Release` on a write and `Acquire` on a read that sees that write form a pair. Everything the writer did before its `Release` is visible to the reader after its `Acquire`. This is how a lock hands its data from one holder to the next.
+
+`SeqCst` adds one global order of all `SeqCst` operations, which every thread agrees on. You need it rarely. The classic case is two threads that each write their own flag and then read the other's.
+
+```rust
+let a = s.spawn(|| {
+    x.store(true, SeqCst);
+    y.load(SeqCst)
+});
+let b = s.spawn(|| {
+    y.store(true, SeqCst);
+    x.load(SeqCst)
+});
+```
+
+With `SeqCst` on all four, at least one thread must see the other's flag. With `Release` and `Acquire`, both may read `false`, because an ordering pair never orders a store before a later load of a different variable.
+"""
+
+[[sections]]
+heading = "What goes wrong even with atomics?"
+body = """
+Atomic loads and stores do not make a sequence of steps atomic. Reading a value and then storing a new one is two operations, and another thread can act between them. The example writes this interleaving out by hand, so it happens every time.
+
+```rust
+let c = AtomicU64::new(0);
+let (a_read, b_read) = (c.load(SeqCst), c.load(SeqCst));
+c.store(a_read + 1, SeqCst);
+c.store(b_read + 1, SeqCst);
+assert_eq!(c.load(SeqCst), 1, "two increments, one lost, even with SeqCst everywhere");
+```
+
+The fix is one read-modify-write call: `fetch_add`, or `update` with a closure.
+
+Three more facts catch people:
+
+- Several atomics are never one snapshot: a reader can see a new count with an old sum.
+- `fetch_add` and `fetch_sub` wrap around, even in debug builds, where ordinary arithmetic would panic.
+- Some orderings are not allowed. `load` with `Release` panics, `store` with `Acquire` panics, and a failed `compare_exchange` can't use `Release`. The compiler rejects these when the ordering is written as a constant.
+"""
+
+[[sections]]
+heading = "How does one fence cover several stores?"
+body = """
+A fence is an ordering without its own variable. A `Release` fence before a `Relaxed` store of a flag acts as if the store were `Release`. The reader pairs it with an `Acquire` fence after it has seen the flag. One fence can then cover several earlier writes.
+
+```rust
+s.spawn(|| {
+    data[0].store(1, Relaxed);
+    data[1].store(2, Relaxed);
+    fence(Release);
+    ready.store(true, Relaxed);
+});
+s.spawn(|| {
+    let mut tries = 0;
+    while !ready.load(Relaxed) {
+        backoff(&mut tries);
+    }
+    fence(Acquire);
+    assert_eq!((data[0].load(Relaxed), data[1].load(Relaxed)), (1, 2));
+});
+```
+
+`compiler_fence` is different. It only stops the compiler from moving accesses, which matters for code such as signal handlers on the same thread. It does not order anything between threads.
+"""
+
+[[sections]]
+heading = "What else is in the example?"
+body = """
+The full code builds small structures from atomics, each with the argument for its orderings next to it. Several of them are the answers to exercises, so they are folded.
+
+:::deeper Counters, a gauge and a write-once cell (gives away "Lock-free statistics counters", "A thread-safe write-once cell", "Cap the work in flight" and "Hand out space that nobody else has")
+```walkthrough
+file = "examples/std_tour/std_atomics_ordering_use_cases.rs"
+[[step]]
+title = "Statistics with Relaxed"
+lines = "182-196"
+text = "Count, sum, maximum and minimum are four separate atomics. The minimum is kept as `!v` under `fetch_max`, so the default 0 means no sample yet."
+[[step]]
+title = "A gauge with a limit"
+lines = "234-252"
+text = "The check and the increment are one `try_update`, so two threads can't both take the last place. Dropping the permit gives the place back."
+[[step]]
+title = "A cell written once"
+lines = "298-330"
+text = "Winning the `0 -> 1` exchange gives the right to write. The `Release` store of 2 publishes the value to readers that load 2 with `Acquire`."
+```
+:::
+
+:::deeper Two locks and a stack (gives away much of "A spinlock with a guard")
+```walkthrough
+file = "examples/std_tour/std_atomics_ordering_use_cases.rs"
+[[step]]
+title = "A spinlock"
+lines = "400-453"
+text = "`Acquire` when taking the lock pairs with `Release` when the guard is dropped. While waiting, it reads with a plain load, which does not keep taking the cache line away from the holder."
+[[step]]
+title = "A ticket lock"
+lines = "455-476"
+text = "Each caller takes a ticket and waits until it is served, so threads get the lock in arrival order. A guard moves the queue on even if the closure panics."
+[[step]]
+title = "A stack you push to and empty at once"
+lines = "520-591"
+text = "Pushes use `compare_exchange_weak`; `take_all` swaps the whole list out. There is no single pop, because popping safely needs memory reclamation and protection against ABA."
+```
+:::
+"""
+
+[[sections]]
+heading = "What do the tests prove?"
+body = """
+The assertions check exact totals and invariants on one run and one machine. A weaker ordering can pass every normal run, especially on x86, where the hardware orders more than Rust promises. The orderings rest on the happens-before argument written next to each one.
+
+Miri, Rust's interpreter for checking undefined behaviour, models weak memory and different thread schedules. Run it on nightly with `cargo +nightly miri run --example std_atomics_ordering_use_cases`; the example lowers its loop counts there.
+
+The stack's address-reuse case needs `MIRIFLAGS="-Zmiri-address-reuse-rate=1.0 -Zmiri-address-reuse-cross-thread-rate=0 -Zmiri-compare-exchange-weak-failure-rate=0"`. Without the last flag, that check can pass even with the bug put back.
+
+Miri samples some schedules; it does not try them all. A model checker such as loom explores more, and was not run here.
+"""
+
+[[connections]]
+kind = "returns"
+title = "A wait-free SPSC ring buffer"
+link = "/cookbook/p/spsc-ring-buffer"
+why = "Acquire and release on two counters, each with one writer."
+
+[[connections]]
+kind = "returns"
+title = "Concurrent counters and statistics"
+link = "/cookbook/p/concurrent-counters-and-statistics"
+why = "Counting from many threads, and what it costs."
+
+[[connections]]
+kind = "practise"
+title = "A spinlock with a guard"
+link = "/p/c3-spinlock"
+level = "exact"
+why = "The fold and the full code give it away."
+
+[[connections]]
+kind = "practise"
+title = "Lock-free statistics counters"
+link = "/p/c3-atomic-stats"
+level = "similar"
+why = "Add saturation and a snapshot. The fold and the full code give away much of it."
+
+[[connections]]
+kind = "practise"
+title = "A thread-safe write-once cell"
+link = "/p/c3-once-cell"
+level = "similar"
+why = "Add waiting and recovery from a panic. The fold gives away the core."
+
+[[connections]]
+kind = "practise"
+title = "Cap the work in flight"
+link = "/p/m4-cap-work-in-flight"
+level = "similar"
+why = "A gauge with a limit that can change. The fold shows the method."
+
+[[sources]]
+title = "std::sync::atomic"
+url = "https://doc.rust-lang.org/std/sync/atomic/index.html"
+note = "The types, their operations and which targets have them."
+
+[[sources]]
+title = "Rust Atomics and Locks, chapter 3: memory ordering (Mara Bos)"
+url = "https://marabos.nl/atomics/memory-ordering.html"
+note = "Happens-before, explained with diagrams. The best place to learn this."
+
+[[sources]]
+title = "The Rustonomicon: atomics"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+note = "Why compilers and CPUs reorder, and what Rust's orderings mean."
+
+[[sources]]
+title = "std::sync::atomic::fence"
+url = "https://doc.rust-lang.org/std/sync/atomic/fn.fence.html"
+note = "How fences pair with atomic operations."
